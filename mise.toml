@@ -11,3 +11,73 @@ clang-format = "23.1.4"
 cmake = "4.4"
 ninja = "1.13"
 shellcheck = "0.11"
+
+[tasks.build]
+description = "Configure and build the debug tree"
+run = ["cmake --preset dev", "cmake --build --preset dev"]
+
+[tasks.test]
+description = "Run the unit tests"
+depends = ["build"]
+run = "ctest --preset dev"
+
+[tasks.fmt]
+description = "Format the C sources"
+run = "git ls-files -z '*.c' '*.h' ':!gen' | xargs -0 clang-format -i"
+
+[tasks."fmt:check"]
+description = "Check the formatting of the C sources"
+run = "git ls-files -z '*.c' '*.h' ':!gen' | xargs -0 clang-format --dry-run -Werror"
+
+[tasks.gen]
+description = "Regenerate gen/ from proto/"
+run = "buf generate"
+
+[tasks."gen:check"]
+description = "Check that gen/ matches proto/"
+run = '''
+buf generate
+if [ -n "$(git status --porcelain -- gen)" ]; then
+    git status --short -- gen
+    echo "gen/ is out of date; run: mise run gen" >&2
+    exit 1
+fi
+'''
+
+[tasks."lint:proto"]
+description = "Lint the schema and check it for breaking changes"
+run = [
+    "buf lint",
+    "buf breaking --against \"${FILETRACE_BREAKING_AGAINST:-.git#ref=origin/master}\"",
+]
+
+[tasks."lint:shell"]
+description = "Lint the shell scripts"
+run = "git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning"
+
+[tasks."lint:commits"]
+description = "Check the commit subjects on this branch"
+run = "tools/lint/commits.sh"
+
+[tasks.lint]
+description = "Run every linter"
+depends = ["fmt:check", "gen:check", "lint:proto", "lint:shell", "lint:commits"]
+
+[tasks.ci]
+description = "Run what continuous integration runs on every change"
+depends = ["lint", "test"]
+
+[tasks.linux]
+description = "Run a command in the Linux development container"
+run = "tools/dev/linux.sh"
+
+[tasks."test:linux"]
+description = "Build and run the unit and integration tests in the Linux container"
+run = "tools/dev/linux.sh sh -c 'cmake --preset dev && cmake --build --preset dev && ctest --preset dev'"
+
+[tasks."test:vm"]
+description = "Run the integration tests on the 6.1 and 6.12 kernels under QEMU"
+run = [
+    "tools/dev/vm.sh 6.1 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'",
+    "tools/dev/vm.sh 6.12 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'",
+]
