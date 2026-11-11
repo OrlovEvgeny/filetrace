@@ -16,9 +16,12 @@ installed()
         sed -n 's/^ii  *//p'
 }
 
-# A channel without a release is refused before apt is given its repository.
+# A channel without a release is refused before apt is given its repository,
+# also when a published version is asked for.
 expect_exit 1 sh $installer --channel lts
+expect_exit 1 sh $installer --channel lts --version 0.0.0.1
 expect_no_file /etc/apt/sources.list.d/filetrace.sources
+expect_no_file /etc/apt/keyrings/filetrace.asc
 
 sh $installer --version 0.0.0.1
 expect_file /etc/apt/sources.list.d/filetrace.sources
@@ -54,6 +57,8 @@ sh $installer --uninstall
 mkdir /tmp/hashed
 cp -R /pkg/bucket/. /tmp/hashed/
 rm /tmp/hashed/apt/dists/stable/main/binary-*/Packages*
+# Nor does a mirror of the repository need the files the archive method reads.
+rm -r /tmp/hashed/channels /tmp/hashed/versions /tmp/hashed/dist
 expect_exit 0 env FILETRACE_REPO_URL=file:///tmp/hashed sh $installer --no-start
 expect_eq 'the version installed by checksum alone' "$FT_VERSION" "$(installed)"
 

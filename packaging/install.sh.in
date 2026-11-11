@@ -75,12 +75,34 @@ package_manager()
     echo none
 }
 
+# no_channel <url>: stops because the channel has nothing at the address it was read from.
+no_channel()
+{
+    die "cannot read $1: the $channel channel has no release yet, or the site cannot be reached"
+}
+
 # The newest version of the channel, unless one was asked for.
 resolve_version()
 {
-    [ -n "$version" ] || version=$(cat "$work/channel")
+    if [ -z "$version" ]; then
+        fetch "$repo_url/channels/$channel" "$work/channel" ||
+            no_channel "$repo_url/channels/$channel"
+        version=$(cat "$work/channel")
+    fi
     fetch "$repo_url/versions/$version" "$work/tag" || die "version $version is not published"
     tag=$(cat "$work/tag")
+}
+
+# The index the package manager reads first for this channel.
+package_index()
+{
+    machine=$(uname -m)
+    [ "$machine" != arm64 ] || machine=aarch64
+    case $manager in
+    apt-get) echo "$repo_url/apt/dists/$channel/InRelease" ;;
+    dnf | yum | zypper) echo "$repo_url/rpm/$channel/$machine/repodata/repomd.xml" ;;
+    apk) echo "$repo_url/apk/$channel/$machine/APKINDEX.tar.gz" ;;
+    esac
 }
 
 install_package()
@@ -329,13 +351,6 @@ main()
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
 
-    # A channel is published with its first release. One that is missing is
-    # refused here, before a repository is configured for it.
-    if [ "$action" = install ] &&
-        ! fetch "$repo_url/channels/$channel" "$work/channel" 2>/dev/null; then
-        die "the $channel channel of $repo_url has no release, or the site cannot be reached"
-    fi
-
     if [ "$action" = uninstall ]; then
         ft_bindir=$prefix/bin
         if package_installed; then
@@ -361,6 +376,11 @@ main()
     if [ "$method" = tarball ]; then
         ft_bindir=$prefix/bin
         [ "$action" = uninstall ] || resolve_version
+    elif [ "$action" = install ]; then
+        # A channel gets its repository with its first release. One that has
+        # none is refused here, before the package manager is pointed at it.
+        index=$(package_index)
+        fetch "$index" "$work/index" || no_channel "$index"
     fi
 
     if [ "$dry_run" -eq 1 ]; then
