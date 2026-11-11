@@ -229,7 +229,7 @@ jobs:
         if: env.TAPPED == 'true' && needs.plan.outputs.latest == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.repository_owner }}/homebrew-tap
+          repository: ${{ github.repository_owner }}/homebrew-filetrace
           ssh-key: ${{ secrets.HOMEBREW_TAP_KEY }}
           path: tap
           # The key reaches the tap alone and is needed for the push below.

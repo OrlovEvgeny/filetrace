@@ -30,7 +30,7 @@ done
 
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 owner=${repo%/*}
-tap=$owner/homebrew-tap
+tap=$owner/homebrew-filetrace
 
 echo "This changes the settings of $repo${keys:+, stores its release secrets and adds a deploy key to $tap}."
 if [ "$assume_yes" -eq 0 ]; then
@@ -147,6 +147,6 @@ say "the release workflow can push to $tap"
 if ! gh api --silent "repos/$tap/commits?per_page=1" 2>/dev/null; then
     gh api --silent -X PUT "repos/$tap/contents/README.md" \
         -f message='docs: describe the tap' \
-        -f content="$(printf '# Homebrew tap\n\n    brew install %s/tap/filetrace\n' "$owner" | base64)"
+        -f content="$(printf '# Homebrew tap\n\n    brew install %s/filetrace/filetrace\n' "$owner" | base64)"
     say "$tap has its first commit"
 fi

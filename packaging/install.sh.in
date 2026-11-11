@@ -393,7 +393,7 @@ main()
     fi
 
     if [ "$os" != linux ]; then
-        ft_say "installed $ft_bindir/filetrace; 'brew install orlovevgeny/tap/filetrace' keeps it up to date"
+        ft_say "installed $ft_bindir/filetrace; 'brew install orlovevgeny/filetrace/filetrace' keeps it up to date"
         exit 0
     fi
 
