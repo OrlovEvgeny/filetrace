@@ -698,12 +698,12 @@ Desktop VM, in nanoseconds per call:
 
 | Agent | minimal | standard |
 |---|---:|---:|
-| Resident memory | 5 MB | 11 MB |
+| Resident memory | 6 MB | 12 MB |
 | CPU with no workload | 0.10% | 0.10% |
 | Events lost | 0 | 0 |
 
-These are measurements of one machine, with run-to-run noise of several
-percent (the `sendfile` rows differ by less than that); they are not
+These are measurements of one machine with the exporters off, with run-to-run
+noise of several percent (the `sendfile` rows differ by less than that); they are not
 guarantees. The CPU figure is the mean of twenty one-second samples that
 ranged from 0.05% to 0.19%, in a VM whose own services keep sending. The kprobe figures come from forcing that set on a kernel that
 does not need it; kprobes on the kernels that do may cost more. In addition
