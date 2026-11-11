@@ -21,6 +21,11 @@ set_tests_properties(unit PROPERTIES TIMEOUT 60)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(ft_workload integration/workload.c)
     target_link_libraries(ft_workload PRIVATE ft_build)
+    # A dynamic loader reads the C library just before the workload sends, and
+    # on x86-64 it reads enough for the agent to count it as the source.
+    if(NOT FILETRACE_STATIC AND NOT FILETRACE_SANITIZE)
+        target_link_options(ft_workload PRIVATE -static)
+    endif()
     foreach(probes auto kprobe)
         add_test(NAME integration-${probes}
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/run.sh $<TARGET_FILE_DIR:filetrace>
