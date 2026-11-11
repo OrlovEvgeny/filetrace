@@ -39,6 +39,70 @@ kernel can attach them and through kprobes where it cannot, as on arm64 before
 on and reports which of the two is in use and what the kernel accepted. Other
 kernels and x86-64 are expected to work through CO-RE but are untested.
 
+## Install
+
+On Linux, the installer sets up the package repository that fits the system
+(apt, dnf, yum, zypper or apk) and installs the `filetrace` package, so
+upgrades arrive with the system's own. Where none of them is present it
+unpacks the release archive under `/usr/local`.
+
+```sh
+curl -fsSL https://orlovevgeny.github.io/filetrace/install.sh | sudo sh
+```
+
+Append `-s -- --help` to `sh` for the options: a version, the `lts` channel,
+`--no-start`, `--uninstall`.
+
+The package holds the two programs, linked statically so that one build runs
+on any distribution; the configuration file `/etc/filetrace/config.toml`, which
+an upgrade never overwrites; and the `filetrace-agent` service for systemd,
+OpenRC or SysV init. An upgrade restarts a running agent, because the command
+and the agent speak one protocol version.
+
+| Channel | How |
+|---|---|
+| Homebrew, on macOS 15 or later and on Linux | `brew install orlovevgeny/tap/filetrace`; the programs only, without a service |
+| Debian, Ubuntu | `apt`, from `https://orlovevgeny.github.io/filetrace/apt` |
+| Fedora, RHEL and derivatives, openSUSE | `dnf`, `yum` or `zypper`, from `https://orlovevgeny.github.io/filetrace/rpm` |
+| Alpine | `apk`, from `https://orlovevgeny.github.io/filetrace/apk` |
+| Anything else | the archives of a [release](https://github.com/OrlovEvgeny/filetrace/releases) |
+
+To set a repository up by hand:
+
+```sh
+# apt
+curl -fsSL https://orlovevgeny.github.io/filetrace/gpg.key | sudo tee /etc/apt/keyrings/filetrace.asc >/dev/null
+printf 'Types: deb\nURIs: https://orlovevgeny.github.io/filetrace/apt\nSuites: stable\nComponents: main\nSigned-By: /etc/apt/keyrings/filetrace.asc\n' |
+    sudo tee /etc/apt/sources.list.d/filetrace.sources >/dev/null
+sudo apt update && sudo apt install filetrace
+
+# dnf
+printf '[filetrace]\nname=Filetrace\nbaseurl=https://orlovevgeny.github.io/filetrace/rpm/stable/$basearch\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=https://orlovevgeny.github.io/filetrace/gpg.key\n' |
+    sudo tee /etc/yum.repos.d/filetrace.repo >/dev/null
+sudo dnf install filetrace && sudo systemctl enable --now filetrace-agent
+
+# apk
+wget -O /etc/apk/keys/filetrace.rsa.pub https://orlovevgeny.github.io/filetrace/apk/filetrace.rsa.pub
+echo https://orlovevgeny.github.io/filetrace/apk/stable >>/etc/apk/repositories
+apk add filetrace && rc-update add filetrace-agent default && rc-service filetrace-agent start
+```
+
+Each distribution's own rule decides whether installing starts the service:
+the deb package enables and starts it, the rpm and apk packages leave both to
+the administrator, and the installer script starts it unless `--no-start` is
+given. With the agent running as root, the commands that query it need `sudo`.
+SELinux in enforcing mode is untested.
+
+A version reads year.month.patch.build: `26.11.1.80` is the first release of
+the line cut in November 2026, 80 commits after the release before it. The
+`stable` channel carries every release; `lts` carries the lines that keep
+receiving patches. Every release lists its SHA-256 checksums and carries a
+build attestation:
+
+```sh
+gh attestation verify filetrace-26.11.1.80-linux-amd64.tar.gz --repo OrlovEvgeny/filetrace
+```
+
 ## Try it
 
 On any machine with Docker, including macOS:
@@ -73,7 +137,23 @@ sudo build/filetrace doctor
 ```
 
 `-DFILETRACE_SANITIZE=ON` builds with AddressSanitizer and
-UndefinedBehaviorSanitizer.
+UndefinedBehaviorSanitizer. `-DFILETRACE_STATIC=ON` links the three libraries
+into the programs; on Linux the result is fully static.
+
+[mise](https://mise.jdx.dev) pins the other tools and names the routine
+commands, which are the ones continuous integration runs. `mise tasks` lists
+them all:
+
+```sh
+mise install
+mise run build        # debug build, warnings are errors
+mise run test         # unit tests
+mise run test:linux   # unit and integration tests in the Linux container
+mise run lint         # formatting, schema, shell scripts, workflows, commit subjects
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) describes the workflow and
+[RELEASING.md](RELEASING.md) how a release is made.
 
 ## Two programs
 
@@ -676,6 +756,23 @@ tools/dev/vm.sh 6.1 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload
 Debian's 6.1 and 6.12 arm64 kernels are included; the first has no BPF
 trampolines and exercises the kprobe set as shipped.
 
+`release-version` checks how a version is derived from the release tags, on
+repositories it creates for the purpose.
+
+The packages have their own tests, which need Docker and run apart from
+ctest:
+
+```sh
+mise run dist           # static binaries, built in an Alpine container
+mise run package        # tarballs, deb, rpm and apk
+mise run test:package
+```
+
+They install, upgrade and remove each kind of package in containers that boot
+systemd or run OpenRC, with the agent collecting under its service manager,
+and run the installer against package repositories signed with throwaway
+keys.
+
 ## Overhead
 
 `benchmarks/run.sh` times the traced system calls with and without the agent.
@@ -722,7 +819,12 @@ cmd/             filetrace: commands and output views
 exporters/, ui/  JSON, CSV, Prometheus and OTLP writers, tables, terminal, live view
 rpc/             gRPC client and server over nghttp2
 proto/, gen/     the API schema, and the C code Buf generates for it and for OTLP
-tests/           unit tests and kernel integration tests
+tests/           unit tests, kernel integration tests, and package tests that install
+                 in containers
 benchmarks/      system call overhead benchmark
+packaging/       default configuration, service definitions, maintainer scripts,
+                 the installer and the package description
 tools/dev/       Linux development container, demo, and QEMU harness for other kernels
+tools/dist/      static release builds and packaging
+tools/release/   version derivation, release notes, download site, Homebrew formula
 ```
