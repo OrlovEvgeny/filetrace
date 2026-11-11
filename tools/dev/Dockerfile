@@ -18,6 +18,7 @@ RUN apt-get update \
         ninja-build \
         pkgconf \
         procps \
+        python3 \
         zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
 
