@@ -6,8 +6,7 @@ set -eu
 
 unit=filetrace-agent
 installer=/pkg/new/install.sh
-export FILETRACE_REPO_URL=file:///pkg/site
-export FILETRACE_RELEASE_URL=file:///pkg/releases
+export FILETRACE_REPO_URL=file:///pkg/bucket
 
 installed()
 {
@@ -28,7 +27,7 @@ expect_running 'after upgrade'
 checks=$((checks + 1))
 [ "$(agent_pid)" != "$first" ] || fail 'the upgrade did not restart the agent'
 expect_version
-expect_exit 0 rpm -K "$(rpm -q filetrace --qf '/pkg/releases/v%{VERSION}-stable/filetrace-%{VERSION}-%{RELEASE}.%{ARCH}.rpm')"
+expect_exit 0 rpm -K "$(rpm -q filetrace --qf '/pkg/bucket/dist/v%{VERSION}-stable/filetrace-%{VERSION}-%{RELEASE}.%{ARCH}.rpm')"
 
 sh $installer --uninstall
 expect_exit 1 rpm -q filetrace

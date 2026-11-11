@@ -54,8 +54,9 @@ FILETRACE_VERSION=0.0.0.1 tools/dist/package.sh "$work/older" >/dev/null
 cp "$work"/older/filetrace_*_"$deb_arch".deb "$work"/older/filetrace-*."$rpm_arch".rpm \
     "$work"/older/filetrace_*_"$rpm_arch".apk "$work/old/"
 
-# Both versions published the way a release is: signed with throwaway keys,
-# laid out as release assets, and indexed into a download site.
+# Both versions and a candidate published the way a release is: signed with
+# throwaway keys, laid out as release assets, indexed into a download site,
+# and uploaded to a directory that stands in for the bucket.
 checksums()
 {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -67,14 +68,23 @@ checksums()
 tools/release/keys.sh "$work/keys" >/dev/null
 export FILETRACE_GPG_KEY_FILE="$work/keys/gpg.key"
 export FILETRACE_APK_KEY_FILE="$work/keys/filetrace.rsa"
-for published in "$version" 0.0.0.1; do
-    FILETRACE_VERSION=$published tools/dist/package.sh "$work/signed-$published" >/dev/null
-    release=$work/releases/v$published-stable
+for published in "$version-stable" 0.0.0.1-stable 0.0.0.2-prestable; do
+    FILETRACE_VERSION=${published%-*} tools/dist/package.sh "$work/signed-$published" >/dev/null
+    release=$work/releases/v$published
     mkdir -p "$release"
     find "$work/signed-$published" -maxdepth 1 -type f -exec cp {} "$release/" \;
     (cd "$release" && checksums ./*.tar.gz ./*.deb ./*.rpm ./*.apk | sed 's|  \./|  |' >SHA256SUMS)
 done
 tools/release/site.sh "$work/releases" "$work/site"
+# rclone check compares the files of both sides; a bucket has no empty directories.
+if ! {
+    FILETRACE_SITE_REMOTE="$root/$work/bucket" tools/release/deploy.sh "$work/site" &&
+        rclone check "$work/site" "$root/$work/bucket"
+} 2>"$work/deploy.log"; then
+    cat "$work/deploy.log" >&2
+    echo "run.sh: the bucket does not hold the site" >&2
+    exit 1
+fi
 
 containers=
 cleanup()

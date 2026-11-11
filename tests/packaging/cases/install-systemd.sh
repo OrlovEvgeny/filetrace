@@ -7,13 +7,14 @@ set -eu
 unit=filetrace-agent
 installer=/pkg/new/install.sh
 method='--method tarball'
-export FILETRACE_REPO_URL=file:///pkg/site
-export FILETRACE_RELEASE_URL=file:///pkg/releases
+export FILETRACE_REPO_URL=file:///pkg/bucket
 
 expect_exit 0 sh $installer $method --dry-run
 expect_no_file /usr/local/bin/filetrace
 expect_exit 1 env FILETRACE_REPO_URL=file:///nonexistent sh $installer --method package
 expect_exit 1 sh $installer $method --version 0.0.0.0
+# A candidate is not a version the installer offers.
+expect_exit 1 sh $installer $method --version 0.0.0.2
 expect_exit 1 sh $installer --no-such-option
 
 sh $installer $method
@@ -49,7 +50,7 @@ sh $installer --uninstall
 
 # An archive that does not match the published checksum is not installed.
 mkdir -p /tmp/releases
-cp -R /pkg/releases/. /tmp/releases/
+cp -R /pkg/bucket/dist/. /tmp/releases/
 sed -i 's/^[0-9a-f]\{8\}/00000000/' /tmp/releases/*/SHA256SUMS
 expect_exit 1 env FILETRACE_RELEASE_URL=file:///tmp/releases sh $installer $method
 expect_no_file /usr/local/bin/filetrace

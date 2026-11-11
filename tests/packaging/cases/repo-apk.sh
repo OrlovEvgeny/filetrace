@@ -6,8 +6,7 @@ set -eu
 
 service=filetrace-agent
 installer=/pkg/new/install.sh
-export FILETRACE_REPO_URL=file:///pkg/site
-export FILETRACE_RELEASE_URL=file:///pkg/releases
+export FILETRACE_REPO_URL=file:///pkg/bucket
 mkdir -p /run/openrc
 touch /run/openrc/softlevel
 
@@ -18,7 +17,7 @@ installed()
 
 sh $installer --version 0.0.0.1
 expect_file /etc/apk/keys/filetrace.rsa.pub
-expect_exit 0 grep -qxF file:///pkg/site/apk/stable /etc/apk/repositories
+expect_exit 0 grep -qxF file:///pkg/bucket/apk/stable /etc/apk/repositories
 expect_eq 'the version asked for' 0.0.0.1 "$(installed)"
 checks=$((checks + 1))
 rc-update show default | grep -q $service || fail 'the service is not in the default runlevel'
@@ -37,6 +36,6 @@ sh $installer --uninstall
 expect_eq 'the package after removal' '' "$(installed)"
 expect_no_file /etc/apk/keys/filetrace.rsa.pub
 checks=$((checks + 1))
-! grep -q /pkg/site /etc/apk/repositories || fail 'the repository is still configured'
+! grep -q /pkg/bucket /etc/apk/repositories || fail 'the repository is still configured'
 
 summary repo-apk

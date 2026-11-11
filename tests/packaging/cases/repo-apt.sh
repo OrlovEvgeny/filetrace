@@ -6,8 +6,7 @@ set -eu
 
 unit=filetrace-agent
 installer=/pkg/new/install.sh
-export FILETRACE_REPO_URL=file:///pkg/site
-export FILETRACE_RELEASE_URL=file:///pkg/releases
+export FILETRACE_REPO_URL=file:///pkg/bucket
 
 # Empty unless the package is fully installed; a removed package keeps its
 # configuration and its version in dpkg's records.
@@ -34,6 +33,10 @@ expect_version
 # apt alone keeps the host current from here on.
 expect_exit 0 apt-get install -y --only-upgrade filetrace
 
+# A candidate can be downloaded, but no repository offers it.
+expect_file /pkg/bucket/dist/v0.0.0.2-prestable/SHA256SUMS
+expect_exit 100 apt-get install -y filetrace=0.0.0.2
+
 sh $installer --uninstall
 expect_eq 'the package after removal' '' "$(installed)"
 expect_no_file /etc/apt/sources.list.d/filetrace.sources
@@ -42,10 +45,19 @@ expect_no_file /etc/apt/keyrings/filetrace.asc
 sh $installer --no-start
 expect_eq 'the newest version again' "$FT_VERSION" "$(installed)"
 
-# A repository signed by another key is refused.
+# apt asks for an index by its checksum, so the named copies are not needed.
+sh $installer --uninstall
+mkdir /tmp/hashed
+cp -R /pkg/bucket/. /tmp/hashed/
+rm /tmp/hashed/apt/dists/stable/main/binary-*/Packages*
+expect_exit 0 env FILETRACE_REPO_URL=file:///tmp/hashed sh $installer --no-start
+expect_eq 'the version installed by checksum alone' "$FT_VERSION" "$(installed)"
+
+# A repository signed by another key is refused. apt has no lists of this
+# address yet; with older ones it would warn and install from those.
 sh $installer --uninstall
 mkdir /tmp/site
-cp -R /pkg/site/. /tmp/site/
+cp -R /pkg/bucket/. /tmp/site/
 sed -i 's/Filetrace/Tampered/' /tmp/site/apt/dists/stable/InRelease
 expect_exit 100 env FILETRACE_REPO_URL=file:///tmp/site sh $installer
 expect_eq 'the package after a refused install' '' "$(installed)"

@@ -7,8 +7,7 @@ set -eu
 service=filetrace-agent
 installer=/pkg/new/install.sh
 method='--method tarball'
-export FILETRACE_REPO_URL=file:///pkg/site
-export FILETRACE_RELEASE_URL=file:///pkg/releases
+export FILETRACE_REPO_URL=file:///pkg/bucket
 mkdir -p /run/openrc
 touch /run/openrc/softlevel
 
