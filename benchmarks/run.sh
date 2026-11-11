@@ -1,11 +1,12 @@
 #!/bin/sh
-# usage: run.sh <directory with filetrace and filetraced> <syscalls benchmark binary>
+# usage: run.sh <directory with filetrace and filetraced> <syscalls benchmark binary> [probes]
 # Needs the same privileges as the daemon. Build with CMAKE_BUILD_TYPE=Release.
 
 set -eu
 
 bin=$1
 bench=$2
+probes=${3:-auto}
 work=$(mktemp -d /tmp/filetrace-bench-XXXXXX)
 sock=$work/daemon.sock
 daemon=
@@ -22,7 +23,7 @@ json_number() {
 run_mode() {
     mode=$1
     if [ "$mode" != off ]; then
-        "$bin/filetraced" --socket "$sock" --mode "$mode" --log-level error &
+        "$bin/filetraced" --socket "$sock" --mode "$mode" --probes "$probes" --log-level error &
         daemon=$!
         while [ ! -S "$sock" ]; do
             sleep 0.1
@@ -33,6 +34,7 @@ run_mode() {
 
     if [ "$mode" != off ]; then
         stats=$(ft stats --format json)
+        printf '%s' "$stats" | sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' >"$work/backend.txt"
         echo "rss_bytes $(json_number "$stats" memory_bytes)" >>"$work/$mode.txt"
         echo "dropped $(json_number "$stats" dropped)" >>"$work/$mode.txt"
 
@@ -55,6 +57,7 @@ for mode in off minimal standard; do
 done
 
 echo "kernel:  $(uname -sr) $(uname -m), $(nproc) CPUs"
+echo "backend: $(cat "$work/backend.txt")"
 echo
 printf '%-18s %10s %18s %18s\n' "ns per call" "no agent" "minimal" "standard"
 for test in send_1k pread_4k read_send_16k sendfile_64k; do
