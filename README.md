@@ -15,15 +15,15 @@ FILE                        PID   PROCESS  REMOTE              SENT     CONFIDEN
 
 | Platform | Collection | Status |
 |---|---|---|
-| Linux 6.1 or later | eBPF through libbpf and CO-RE | Run and tested on Linux 7.0, arm64 |
+| Linux 6.1 or later | eBPF through libbpf and CO-RE | Tested on Linux 6.1, 6.12 and 7.0, arm64 |
 | macOS | none | The CLI builds and reports diagnostics; collection needs an Endpoint Security system extension |
 | FreeBSD | none | Collection needs a DTrace backend |
 
-The probes rely on BPF trampolines (fentry/fexit), which arm64 kernels provide
-from 6.4. They have been exercised on one kernel only; other kernels in range
-are expected to work through CO-RE but are untested. `filetrace doctor` loads
-and attaches every probe on the machine it runs on and reports what the kernel
-accepted.
+Kernel functions are traced through BPF trampolines (fentry/fexit) where the
+kernel can attach them and through kprobes where it cannot, as on arm64 before
+6.4. `filetrace doctor` loads and attaches every probe on the machine it runs
+on and reports which of the two is in use and what the kernel accepted. Other
+kernels and x86-64 are expected to work through CO-RE but are untested.
 
 ## Try it
 
@@ -109,7 +109,7 @@ on the wire and not what the remote end acknowledged.
 
 ## How it works
 
-Ten BPF programs attach to tracepoints and kernel functions:
+BPF programs attach to tracepoints and kernel functions:
 
 | Probe | Records |
 |---|---|
@@ -118,11 +118,13 @@ Ten BPF programs attach to tracepoints and kernel functions:
 | `inet_sendmsg`, `inet_recvmsg` and the IPv6 pair | Bytes per socket, process and remote endpoint |
 | `do_splice_direct` | `sendfile`: file and socket in the same kernel operation |
 | `vfs_read` | Which regular file each thread read last, and how much |
+| `__destroy_inode` | The end of a deleted file, after which its inode number can name another |
 
 The probes see the kernel's own file and socket objects, so nothing is keyed
 on file descriptor numbers and descriptor reuse cannot misattribute a
-transfer. A file is identified by device, inode and generation; its path is
-read from the kernel when the file is first seen and is only a label.
+transfer. A file is identified by device and inode; its path is read from the
+kernel when the file is first seen and is only a label. A file that is given
+the inode number of a deleted one is a separate file with its own path.
 
 High-frequency data never becomes one event per call. Byte counts accumulate
 in a kernel hash map keyed by socket, process and file; the daemon swaps that
@@ -138,8 +140,37 @@ All state is in memory and bounded: every table has a fixed capacity and
 forgets its least recently updated entry. History starts when the daemon
 starts.
 
+### Without BPF trampolines
+
+The table above needs the return value of each traced function. Where the
+kernel cannot attach trampolines, the usual substitute is a return probe, and
+it does not hold up here: a return probe keeps one of a small pool of
+instances for as long as the call blocks (as many as there are CPUs on a
+kernel without full preemption), so a few threads waiting in `recv` are
+enough for every other return to go unseen.
+
+The kprobe set therefore probes function entries only and reads the results
+from counters the kernel keeps anyway:
+
+| Probe | Records |
+|---|---|
+| `tcp_sendmsg`, `tcp_cleanup_rbuf` | TCP bytes, as the advance of the socket's send and receive sequence numbers |
+| `inet_sock_set_state` | Connection start, and the last bytes before the FIN, which takes a sequence number itself |
+| `ip_send_skb`, `ip6_send_skb`, `skb_consume_udp` | UDP datagrams, each with its length and its peer |
+| `do_splice_direct` | `sendfile`: the file, capped by what is left of it, claims the bytes the socket takes next |
+| `vfs_read` | Which file each thread reads; the size comes from the task's I/O accounting |
+| `inet_sock_destruct`, `__destroy_inode` | The end of a socket and of a deleted file |
+
+Sequence numbers cannot miss a call: whatever was sent since the socket was
+last looked at is the difference. `--probes kprobe` selects this set on any
+kernel.
+
 ## Limits
 
+- With the kprobe set: the bytes of the last send on a connection are counted
+  when the socket is next used or closed; kernel TLS sockets count encrypted
+  bytes; raw and ICMP sockets are not counted; file reads need a kernel built
+  with `CONFIG_TASK_XACCT`.
 - A file read by one thread and sent by another, or passed through a pipe, is
   not associated with the send.
 - Files read with `readv`, io_uring or through a memory mapping are not seen
@@ -157,8 +188,8 @@ starts.
 
 Not included in this build: a configuration file, persistent history,
 Prometheus and OpenTelemetry exporters, the `inspect`, `events`, `record`,
-`replay`, `monitor`, `config` and `integrations` commands, kprobe fallbacks
-for kernels without BPF trampolines, and packet-level counters.
+`replay`, `monitor`, `config` and `integrations` commands, and packet-level
+counters.
 
 ## Tests
 
@@ -168,25 +199,45 @@ ctest --test-dir build --output-on-failure
 
 `unit` covers formatting, the bounded tables, the correlation state, the IPC
 round trip with a scripted backend, and every output format; it runs on Linux
-and macOS. `integration` needs root and a supporting kernel, and is skipped
-otherwise: it starts the daemon, generates real transfers (sendfile over IPv4
-and IPv6, read+send, UDP, descriptor reuse across 25 files, rename and unlink
-during a transfer) and asserts on exact byte counts and confidence levels.
+and macOS. `integration-auto` and `integration-kprobe` need root and a
+supporting kernel, and are skipped otherwise. They start the daemon with the
+probe set the kernel prefers and with the kprobe set, generate real transfers
+(sendfile over IPv4 and IPv6, read+send, UDP, descriptor reuse across 25
+files, rename and unlink during a transfer, a half-closed exchange with
+peeked and awaited replies, sends and sendfiles accepted only in part) and
+assert on exact byte counts and confidence levels.
 
 From macOS, `tools/dev/linux.sh <command>` runs a command in the Linux
-container with the source tree mounted at `/src`.
+container with the source tree mounted at `/src`. To test against another
+kernel, `tools/dev/vm.sh <version> <command>` boots it under QEMU inside a
+container, with the build as its root filesystem:
+
+```sh
+tools/dev/vm.sh 6.1 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'
+```
+
+Debian's 6.1 and 6.12 arm64 kernels are included; the first has no BPF
+trampolines and exercises the kprobe set as shipped.
 
 ## Overhead
 
 `benchmarks/run.sh` times the traced system calls with and without the daemon.
-One run on Linux 7.0.14, arm64, 12 CPUs, inside the Docker Desktop VM:
+One run of each probe set on Linux 7.0.14, arm64, 12 CPUs, inside the Docker
+Desktop VM, in nanoseconds per call:
 
-| ns per call | no agent | minimal | standard |
+| Trampolines | no agent | minimal | standard |
 |---|---:|---:|---:|
-| `send`, 1 KB over loopback TCP | 1420 | 1570 | 1564 |
-| `pread`, 4 KB from the page cache | 241 | 241 | 307 |
-| `pread` + `send`, 16 KB | 2554 | 2650 | 2842 |
-| `sendfile`, 64 KB | 2613 | 2622 | 2517 |
+| `send`, 1 KB over loopback TCP | 1448 | 1571 | 1580 |
+| `pread`, 4 KB from the page cache | 242 | 241 | 304 |
+| `pread` + `send`, 16 KB | 2547 | 2670 | 2786 |
+| `sendfile`, 64 KB | 2592 | 2446 | 2333 |
+
+| Kprobes | no agent | minimal | standard |
+|---|---:|---:|---:|
+| `send`, 1 KB over loopback TCP | 1491 | 1594 | 1549 |
+| `pread`, 4 KB from the page cache | 240 | 241 | 384 |
+| `pread` + `send`, 16 KB | 2552 | 2744 | 2981 |
+| `sendfile`, 64 KB | 2900 | 2367 | 2263 |
 
 | Daemon | minimal | standard |
 |---|---:|---:|
@@ -195,8 +246,11 @@ One run on Linux 7.0.14, arm64, 12 CPUs, inside the Docker Desktop VM:
 | Events lost | 0 | 0 |
 
 These are measurements of one machine, with run-to-run noise of several
-percent; they are not guarantees. In addition to the daemon's memory, the
-kernel holds the BPF maps: roughly 10 MB at the default sizes.
+percent (the `sendfile` rows differ by less than that); they are not
+guarantees. The kprobe figures come from forcing that set on a kernel that
+does not need it; kprobes on the kernels that do may cost more. In addition
+to the daemon's memory, the kernel holds the BPF maps: roughly 10 MB at the
+default sizes, and about 8 MB more for the kprobe set's socket table.
 
 ## Layout
 
@@ -208,5 +262,5 @@ cmd/             filetrace: commands and output views
 exporters/, ui/  JSON and CSV writers, tables, terminal, live dashboard
 tests/           unit tests and kernel integration tests
 benchmarks/      system call overhead benchmark
-tools/dev/       Linux development container and demo
+tools/dev/       Linux development container, demo, and QEMU harness for other kernels
 ```
