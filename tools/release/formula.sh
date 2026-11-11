@@ -20,6 +20,12 @@ archive()
     printf '      url "%s/%s"\n      sha256 "%s"\n' "$base" "$name" "$sum"
 }
 
+# A failure inside the here-document below would not stop the script.
+darwin_arm64=$(archive darwin-arm64)
+darwin_amd64=$(archive darwin-amd64)
+linux_arm64=$(archive linux-arm64)
+linux_amd64=$(archive linux-amd64)
+
 cat <<FORMULA
 class Filetrace < Formula
   desc "See which files a machine sends over the network, and where they go"
@@ -31,19 +37,19 @@ class Filetrace < Formula
     depends_on macos: :sequoia
 
     on_arm do
-$(archive darwin-arm64)
+$darwin_arm64
     end
     on_intel do
-$(archive darwin-amd64)
+$darwin_amd64
     end
   end
 
   on_linux do
     on_arm do
-$(archive linux-arm64)
+$linux_arm64
     end
     on_intel do
-$(archive linux-amd64)
+$linux_amd64
     end
   end
 
