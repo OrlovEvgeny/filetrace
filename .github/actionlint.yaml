@@ -3,3 +3,4 @@ paths:
     ignore:
       # actionlint does not know the self-repository form of `uses` yet.
       - 'specifying action "\$/.+" in invalid format'
+      - 'reusable workflow call "\$/.+" at "uses" is not following the format'
