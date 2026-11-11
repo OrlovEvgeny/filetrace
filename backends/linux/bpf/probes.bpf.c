@@ -325,6 +325,8 @@ static __always_inline struct ft_bpf_agg_val *agg_slot(void *map, const struct f
         count(FT_BPF_CNT_AGG_FULL);
         return NULL;
     }
+    if (!err)
+        count(FT_BPF_CNT_AGG_INSERTS);
     return bpf_map_lookup_elem(map, key);
 }
 

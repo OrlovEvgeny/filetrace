@@ -538,30 +538,39 @@ static void drain_counters(struct ft_backend *b)
         emit_transfer(b, &b->transfers[i]);
 }
 
-static void report_losses(struct ft_backend *b, uint64_t now_ns)
+static void read_counters(struct ft_backend *b, uint64_t totals[FT_BPF_CNT_MAX])
 {
-    static const enum ft_loss_kind kinds[FT_BPF_CNT_MAX] = {
-        [FT_BPF_CNT_RING_FULL] = FT_LOSS_EVENT_QUEUE,
-        [FT_BPF_CNT_AGG_FULL] = FT_LOSS_AGGREGATION,
-        [FT_BPF_CNT_SOCK_UNIDENTIFIED] = FT_LOSS_SOCKET_IDENT,
-    };
-
     for (__u32 idx = 0; idx < FT_BPF_CNT_MAX; idx++) {
+        totals[idx] = b->counters[idx];
         if (bpf_map_lookup_elem(b->counters_fd, &idx, b->cpu_values) != 0)
             continue;
-        uint64_t total = 0;
+        totals[idx] = 0;
         for (int cpu = 0; cpu < b->ncpus; cpu++)
-            total += b->cpu_values[cpu];
+            totals[idx] += b->cpu_values[cpu];
+    }
+}
 
-        uint64_t delta = total - b->counters[idx];
-        b->counters[idx] = total;
-        if (delta == 0 || idx == FT_BPF_CNT_PATH_BUSY)
+static void report_losses(struct ft_backend *b, const uint64_t totals[FT_BPF_CNT_MAX],
+                          uint64_t now_ns)
+{
+    static const struct {
+        enum ft_bpf_counter counter;
+        enum ft_loss_kind kind;
+    } losses[] = {
+        {FT_BPF_CNT_RING_FULL, FT_LOSS_EVENT_QUEUE},
+        {FT_BPF_CNT_AGG_FULL, FT_LOSS_AGGREGATION},
+        {FT_BPF_CNT_SOCK_UNIDENTIFIED, FT_LOSS_SOCKET_IDENT},
+    };
+
+    for (size_t i = 0; i < FT_ARRAY_LEN(losses); i++) {
+        uint64_t delta = totals[losses[i].counter] - b->counters[losses[i].counter];
+        if (delta == 0)
             continue;
 
         struct ft_event ev = {
             .type = FT_EVENT_LOSS,
             .ts_ns = now_ns,
-            .loss = {.kind = kinds[idx], .count = delta, .since_ns = b->last_flush_ns},
+            .loss = {.kind = losses[i].kind, .count = delta, .since_ns = b->last_flush_ns},
         };
         b->sink.emit(b->sink.ctx, &ev);
     }
@@ -571,12 +580,19 @@ static void backend_flush(struct ft_backend *b)
 {
     uint64_t now_ns = ft_clock_mono_ns();
     uint64_t queued = ring__avail_data_size(ring_buffer__ring(b->ring, 0));
+    uint64_t totals[FT_BPF_CNT_MAX];
 
     if (queued > b->queue_peak_bytes)
         b->queue_peak_bytes = queued;
     ring_buffer__consume(b->ring);
-    drain_counters(b);
-    report_losses(b, now_ns);
+
+    /* Emptying a counter map walks all of its buckets, so skip it while nothing was added. */
+    read_counters(b, totals);
+    if (totals[FT_BPF_CNT_AGG_INSERTS] != b->counters[FT_BPF_CNT_AGG_INSERTS])
+        drain_counters(b);
+    report_losses(b, totals, now_ns);
+
+    memcpy(b->counters, totals, sizeof(b->counters));
     b->last_flush_ns = now_ns;
 }
 

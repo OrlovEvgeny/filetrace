@@ -128,7 +128,8 @@ enum ft_bpf_counter {
     FT_BPF_CNT_AGG_FULL = 1,
     FT_BPF_CNT_SOCK_UNIDENTIFIED = 2,
     FT_BPF_CNT_PATH_BUSY = 3,
-    FT_BPF_CNT_MAX = 4,
+    FT_BPF_CNT_AGG_INSERTS = 4,
+    FT_BPF_CNT_MAX = 5,
 };
 
 struct ft_bpf_cfg {
