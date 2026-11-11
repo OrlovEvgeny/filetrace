@@ -84,8 +84,8 @@ $linux_amd64
   def caveats
     on_macos do
       <<~EOS
-        macOS has no collection backend yet: the command builds and reports
-        diagnostics, and reads an agent that runs on Linux.
+        macOS has no collection backend yet: the command reports diagnostics
+        there, and collection needs Linux.
       EOS
     end
     on_linux do
