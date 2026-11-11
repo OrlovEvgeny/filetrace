@@ -414,6 +414,14 @@ expect "minimal: bytes have no file" \
 stop_agent
 expect "minimal agent exit code" "$?" 0
 
+# A hangup stops the agent as SIGTERM does: exit code 0 and the socket removed.
+start_agent --mode minimal || { echo "FAIL: the agent did not start for the hangup"; exit 1; }
+kill -HUP "$agent_pid"
+wait "$agent_pid"
+expect "agent exit code after SIGHUP" "$?" 0
+agent_pid=
+expect "socket removed after SIGHUP" "$([ -e "$sock" ] && echo present || echo removed)" removed
+
 # A configuration file decides what is collected and how the commands print.
 cat >"$work/config.toml" <<CONFIG
 [agent]

@@ -168,6 +168,8 @@ static int run(struct ft_config *config, int argc, char **argv, const char *prog
     sigemptyset(&sa.sa_mask);
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
+    /* The configuration is read once, so a hangup stops the agent rather than reloading it. */
+    sigaction(SIGHUP, &sa, nullptr);
 
     int code = ft_agent_run(cfg, &err);
     if (code != FT_EXIT_OK)
