@@ -2,6 +2,13 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.3.4 (2026-11-11)
+
+### Bug Fix
+
+- Keep reads of background files from taking over a send ([758c198](https://github.com/OrlovEvgeny/filetrace/commit/758c19892e25d705bdf76a1cf9f7a9bd7ab11a42))
+- Learn background files from the paths the kernel reports ([36fed69](https://github.com/OrlovEvgeny/filetrace/commit/36fed69255ee5e5d9d46ff3b6024c18cb58d66c5))
+
 ## 26.11.2.11 (2026-11-11)
 
 ### New Feature
