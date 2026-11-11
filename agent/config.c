@@ -655,6 +655,15 @@ static bool apply_filters(struct ft_config *cfg, const char *key, struct value *
     return false;
 }
 
+static bool apply_process(struct ft_config *cfg, const char *key, struct value *v, char *why,
+                          size_t size, bool *known)
+{
+    if (strcmp(key, "arguments") == 0)
+        return want_bool(v, &cfg->agent.state_cfg.command_line_arguments, why, size);
+    *known = false;
+    return false;
+}
+
 static bool apply_prometheus(struct ft_config *cfg, const char *key, struct value *v, char *why,
                              size_t size, bool *known)
 {
@@ -684,6 +693,8 @@ static bool apply_otlp(struct ft_config *cfg, const char *key, struct value *v, 
         return want_bool(v, &otlp->metrics, why, size);
     if (strcmp(key, "file_paths") == 0)
         return want_bool(v, &otlp->file_paths, why, size);
+    if (strcmp(key, "command_line") == 0)
+        return want_bool(v, &otlp->command_line, why, size);
     if (strcmp(key, "events") == 0) {
         uint32_t types = 0;
 
@@ -739,17 +750,12 @@ static const struct {
     bool (*apply)(struct ft_config *cfg, const char *key, struct value *v, char *why, size_t size,
                   bool *known);
 } sections[] = {
-    {"agent", apply_agent},
-    {"network", apply_network},
-    {"file", apply_file},
-    {"correlation", apply_correlation},
-    {"storage", apply_storage},
-    {"limits", apply_limits},
-    {"output", apply_output},
-    {"filters", apply_filters},
-    {"prometheus", apply_prometheus},
-    {"otlp", apply_otlp},
-    {"grpc", apply_grpc},
+    {"agent", apply_agent},     {"network", apply_network},
+    {"file", apply_file},       {"correlation", apply_correlation},
+    {"storage", apply_storage}, {"limits", apply_limits},
+    {"output", apply_output},   {"filters", apply_filters},
+    {"process", apply_process}, {"prometheus", apply_prometheus},
+    {"otlp", apply_otlp},       {"grpc", apply_grpc},
 };
 
 static bool parse(struct parser *ps, struct ft_config *cfg)
@@ -1024,6 +1030,9 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     print_patterns(o, "exclude_processes", cfg->exclude_processes, cfg->exclude_process_count);
     print_patterns(o, "exclude_paths", cfg->exclude_paths, cfg->exclude_path_count);
 
+    fputs("\n[process]\n", o);
+    fprintf(o, "arguments = %s\n", yes_no(state->command_line_arguments));
+
     fputs("\n[prometheus]\n", o);
     fprintf(o, "enabled = %s\n", yes_no(cfg->agent.prometheus.enabled));
     print_string(o, "listen", cfg->agent.prometheus.listen);
@@ -1044,6 +1053,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     }
     fputs("]\n", o);
     fprintf(o, "file_paths = %s\n", yes_no(otlp->file_paths));
+    fprintf(o, "command_line = %s\n", yes_no(otlp->command_line));
     fprintf(o, "batch_size = %u\n", otlp->batch_size);
     print_duration(o, "flush_interval", otlp->flush_interval_ns);
     print_duration(o, "metrics_interval", otlp->metrics_interval_ns);

@@ -74,6 +74,13 @@
 # exclude_processes = []
 # exclude_paths = []
 
+# What is kept of each process: its command line, working directory and, for an
+# interpreter, the script it runs.
+[process]
+# Arguments can hold passwords and tokens. false keeps only the program in the
+# command line; the script is still named.
+# arguments = true
+
 # A page of metrics for Prometheus to scrape, served without authentication.
 [prometheus]
 # enabled = false
@@ -88,6 +95,8 @@
 # metrics = true
 # events = ["file_transfer", "event_loss"]
 # file_paths = true
+# Arguments can hold passwords and tokens, and the records leave this host.
+# command_line = false
 # Records per request.
 # batch_size = 1024
 # flush_interval = "5s"
