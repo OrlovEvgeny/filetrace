@@ -273,8 +273,43 @@ expect_match "top files" "$(ft top files --limit 1 | sed -n 3,4p | tr '\n' ' ')"
 expect_match "grouped flows" "$(ft flows --group-by protocol --format csv | head -1)" \
     '^protocol,bytes_sent,bytes_received,flows$'
 
+# The event log holds the records that the totals above add up.
+jsonl=$(ft events --type file_transfer --file "$data/report.csv" --jsonl)
+expect_match "events: transfer record" "$jsonl" \
+    '^\{"event":"file_transfer","timestamp":"[^"]+","sequence":[0-9]+,"process":\{"pid":[0-9]+,.*"name":"ft_workload"\},"file":\{"path":"[^"]*/report\.csv",.*"size":5000000,.*"network":\{"protocol":"tcp",.*"remote_ip":"127\.0\.0\.1",.*"transfer":\{"method":"sendfile","bytes_sent":[0-9]+,"confidence":"exact"\}\}$'
+expect "events: transfer bytes add up" "$(printf '%s\n' "$jsonl" |
+    sed 's/.*"method":"sendfile","bytes_sent":\([0-9]*\).*/\1/' | awk '{ s += $1 } END { print s }')" \
+    5000000
+expect_match "events: text form" "$(ft events --type file_seen --file "$data/report.csv")" \
+    'FILE_SEEN'
+expect_match "events: text fields" \
+    "$(ft events --type file_seen --file "$data/report.csv" | tr '\n' ' ')" \
+    "file=$data/report.csv +inode=[0-9]+ +device=[0-9]+ +size=5000000"
+expect "events: limit" "$(ft events --type network_send --limit 3 --jsonl | wc -l | tr -d ' ')" 3
+expect_match "events: raw" "$(ft events --type socket_close --limit 1 --raw)" \
+    '^seq=[0-9]+ time_ns=[0-9]+ type=socket_close pid=[0-9]+ .* text=$'
+expect "events: unknown type exit code" "$(ft events --type file_open >/dev/null 2>&1; echo $?)" 2
+expect_match "events: unknown type names the known ones" \
+    "$(ft events --type file_open 2>&1)" 'file_transfer'
+
+# Following delivers what happens next and ends cleanly on a signal.
+"$bin/filetrace" --socket "$sock" events --follow --type file_transfer,network_send --jsonl \
+    >"$work/follow.jsonl" &
+follow_pid=$!
+sleep 0.5
+"$workload" sendfile "$data/follow.bin" 700000 >/dev/null
+settle
+kill -TERM "$follow_pid"
+wait "$follow_pid"
+expect "events: follow exit code" "$?" 0
+expect_match "events: follow saw the transfer" "$(cat "$work/follow.jsonl")" \
+    '"event":"file_transfer".*follow\.bin'
+expect "events: follow starts at the present" \
+    "$(grep -c 'report\.csv' "$work/follow.jsonl")" 0
+
 stats=$(ft stats --format json)
 expect_match "stats status" "$stats" '"status":"healthy"'
+expect_match "stats event log" "$stats" '"event_log_bytes":1048576,"event_log_events":[1-9]'
 expect_match "stats backend" "$stats" \
     '"backend":"Linux eBPF \((trampolines|kprobes)\)","mode":"standard"'
 if [ "$probes" != auto ]; then

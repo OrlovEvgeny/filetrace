@@ -68,8 +68,8 @@ static void help_top(FILE *o)
           "\n"
           "Options:\n",
           o);
-    ft_query_args_help(o, FT_QO_PID | FT_QO_PROCESS | FT_QO_PROTOCOL | FT_QO_TIME | FT_QO_OUTPUT,
-                       0);
+    ft_query_args_help(o, FT_QO_PID | FT_QO_PROCESS | FT_QO_PROTOCOL | FT_QO_TIME | FT_QO_OUTPUT, 0,
+                       FT_FORMATS_ALL);
     fputs("  --limit <n>             Number of rows (default: 10)\n"
           "\n"
           "Examples:\n"
@@ -83,7 +83,7 @@ static void help_top(FILE *o)
 
 static void help_transfer_options(FILE *o)
 {
-    ft_query_args_help(o, FT_OPTS_TRANSFERS, FT_SORTS_TRANSFERS);
+    ft_query_args_help(o, FT_OPTS_TRANSFERS, FT_SORTS_TRANSFERS, FT_FORMATS_ALL);
 }
 
 static void help_files(FILE *o)
@@ -155,7 +155,7 @@ static void help_processes(FILE *o)
           "  --active-only           Only running processes with open connections\n"
           "  --include-children      Add each process's descendants to its totals\n",
           o);
-    ft_query_args_help(o, FT_OPTS_PROCESSES, FT_SORTS_PROCESSES);
+    ft_query_args_help(o, FT_OPTS_PROCESSES, FT_SORTS_PROCESSES, FT_FORMATS_ALL);
     fputs("\nExamples:\n"
           "  filetrace processes --sort outbound\n"
           "  filetrace processes --name nginx --include-children\n"
@@ -180,7 +180,7 @@ static void help_connections(FILE *o)
           "Options:\n"
           "  --active                Only sockets that are open\n",
           o);
-    ft_query_args_help(o, FT_OPTS_CONNECTIONS, FT_SORTS_CONNECTIONS);
+    ft_query_args_help(o, FT_OPTS_CONNECTIONS, FT_SORTS_CONNECTIONS, FT_FORMATS_ALL);
     fputs("\nExamples:\n"
           "  filetrace connections --protocol tcp\n"
           "  filetrace connections --remote 203.0.113.42\n"
@@ -206,13 +206,58 @@ static void help_flows(FILE *o)
           "  --direction <dir>       Order by inbound, outbound (default) or both\n"
           "  --active                Only flows with recent traffic\n",
           o);
-    ft_query_args_help(o, FT_OPTS_FLOWS, FT_SORTS_FLOWS);
+    ft_query_args_help(o, FT_OPTS_FLOWS, FT_SORTS_FLOWS, FT_FORMATS_ALL);
     fputs("\nExamples:\n"
           "  filetrace flows --group-by remote\n"
           "  filetrace flows --pid 1842 --min-bytes 10MB\n"
           "  filetrace flows --direction inbound --since 1h\n"
           "\n"
           "--format quiet prints one flow ID per row.\n",
+          o);
+    fputs(machine_output, o);
+    fputs(exit_codes, o);
+}
+
+static void help_events(FILE *o)
+{
+    fputs("Usage:\n"
+          "  filetrace events [options]\n"
+          "\n"
+          "The collector's records in the order they were made, oldest first: what\n"
+          "the other commands add up. Byte counts are gathered in the kernel and\n"
+          "collected several times a second, so a network or transfer event carries\n"
+          "the bytes of one such interval, not of one system call.\n"
+          "\n"
+          "Event types:\n"
+          "  process_exec, process_fork, process_exit\n"
+          "  socket_connect, socket_listen, socket_established, socket_close\n"
+          "  file_seen        A file was read or sent for the first time\n"
+          "  network_send     Bytes a socket accepted\n"
+          "  network_receive  Bytes a socket delivered\n"
+          "  file_transfer    File bytes attributed to a socket, with the method and\n"
+          "                   the confidence of the association so far\n"
+          "  event_loss       Events the collector could not record\n"
+          "\n"
+          "File opens and individual system calls are not recorded.\n"
+          "\n"
+          "Options:\n"
+          "  --type <types>          Only these event types, separated by commas\n"
+          "  --follow, -f            Keep printing events as they happen; starts at\n"
+          "                          the present unless --since or --limit is given\n"
+          "  --raw                   One line per event with every field unformatted\n",
+          o);
+    ft_query_args_help(o, FT_OPTS_EVENTS & ~(uint32_t)FT_QO_LIMIT, 0, FT_FORMATS_EVENTS);
+    fputs("  --limit <n>             Only the most recent n events\n"
+          "\n"
+          "Past events come from a log of bounded size kept in memory: it holds only\n"
+          "the most recent ones and starts empty when the daemon does. Without a\n"
+          "running daemon, --follow collects in the foreground.\n"
+          "\n"
+          "Examples:\n"
+          "  sudo filetrace events --follow\n"
+          "  filetrace events --type file_transfer,network_send --pid 1245 --since 5m\n"
+          "  filetrace events --file '/data/*' --remote 203.0.113.0/24\n"
+          "  filetrace events --since 1h --format jsonl\n",
           o);
     fputs(machine_output, o);
     fputs(exit_codes, o);
@@ -341,6 +386,7 @@ static const struct command commands[] = {
     {"processes", "Inspect process activity", ft_cmd_processes, help_processes},
     {"connections", "Inspect network connections", ft_cmd_connections, help_connections},
     {"flows", "Inspect network flows", ft_cmd_flows, help_flows},
+    {"events", "Show the collector's raw events", ft_cmd_events, help_events},
     {"stats", "Display collection statistics", ft_cmd_stats, help_stats},
     {"daemon", "Run or control the background daemon", ft_cmd_daemon, help_daemon},
     {"doctor", "Diagnose system compatibility", ft_cmd_doctor, help_doctor},

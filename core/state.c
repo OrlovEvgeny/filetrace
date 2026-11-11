@@ -11,6 +11,7 @@ void ft_state_config_defaults(struct ft_state_config *cfg)
         .max_flows = 16384,
         .max_files = 16384,
         .max_transfers = 16384,
+        .event_log_bytes = 1024 * 1024,
         .inferred_min_bytes = 1024,
         .inferred_min_permille = 50,
         .active_window_ns = 5 * FT_NS_PER_SEC,
@@ -70,7 +71,20 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
     st->files = ft_table_create(cfg->max_files, sizeof(struct ft_file_id), sizeof(struct ft_file));
     st->transfers = ft_table_create(cfg->max_transfers, sizeof(struct ft_transfer_key),
                                     sizeof(struct ft_transfer));
-    if (!st->processes || !st->sockets || !st->flows || !st->files || !st->transfers) {
+    st->record = calloc(1, sizeof(*st->record));
+    bool ok = st->processes && st->sockets && st->flows && st->files && st->transfers && st->record;
+
+    /* Half for what the tool is about, an eighth for the chattiest and least specific. */
+    static const size_t eighths[FT_LOG_CLASS_COUNT] = {
+        [FT_LOG_TRANSFERS] = 4,
+        [FT_LOG_NETWORK] = 3,
+        [FT_LOG_PROCESSES] = 1,
+    };
+    for (size_t i = 0; cfg->event_log_bytes && i < FT_LOG_CLASS_COUNT; i++) {
+        st->logs[i] = ft_evlog_create(cfg->event_log_bytes / 8 * eighths[i]);
+        ok = ok && st->logs[i];
+    }
+    if (!ok) {
         ft_state_destroy(st);
         return nullptr;
     }
@@ -87,6 +101,9 @@ void ft_state_destroy(struct ft_state *st)
     ft_table_destroy(st->flows);
     ft_table_destroy(st->files);
     ft_table_destroy(st->transfers);
+    for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++)
+        ft_evlog_destroy(st->logs[i]);
+    free(st->record);
     free(st);
 }
 
@@ -137,33 +154,38 @@ static struct ft_process *process_ensure(struct ft_state *st, uint32_t pid)
     return p;
 }
 
-static void ingest_exec(struct ft_state *st, const struct ft_ev_process *e)
+/* Each ingest function returns whether the event changed the state. */
+
+static bool ingest_exec(struct ft_state *st, const struct ft_ev_process *e)
 {
     struct ft_process *p = process_record(st, e);
     p->exited = false;
     if (e->exe[0])
         ft_strlcpy(p->exe, e->exe, sizeof(p->exe));
+    return true;
 }
 
-static void ingest_fork(struct ft_state *st, const struct ft_ev_process *e)
+static bool ingest_fork(struct ft_state *st, const struct ft_ev_process *e)
 {
     struct ft_process *p = process_record(st, e);
     const struct ft_process *parent = ft_table_find(st->processes, &e->ppid);
     if (!p->exe[0] && parent)
         ft_strlcpy(p->exe, parent->exe, sizeof(p->exe));
+    return true;
 }
 
-static void ingest_exit(struct ft_state *st, const struct ft_event *ev)
+static bool ingest_exit(struct ft_state *st, const struct ft_event *ev)
 {
     const struct ft_ev_process *e = &ev->process;
     struct ft_process *p = ft_table_find(st->processes, &e->pid);
     if (!p || (p->start_ns && e->start_ns && !same_start(p->start_ns, e->start_ns)))
-        return;
+        return false;
 
     /* Its last counters may still arrive; a sweep removes the entry once idle. */
     p->exited = true;
     p->exit_ns = ev->ts_ns;
     p->exit_status = e->exit_status;
+    return true;
 }
 
 void ft_state_sweep(struct ft_state *st, uint64_t now_ns)
@@ -202,12 +224,12 @@ static void socket_set_owner(struct ft_state *st, struct ft_socket *s, uint32_t 
     ft_strlcpy(s->comm, p->comm, sizeof(s->comm));
 }
 
-static void ingest_socket(struct ft_state *st, const struct ft_event *ev)
+static bool ingest_socket(struct ft_state *st, const struct ft_event *ev)
 {
     const struct ft_ev_socket *e = &ev->socket;
 
     if (e->state == FT_SOCK_CLOSED && !ft_table_find(st->sockets, &e->sock_id))
-        return;
+        return false;
 
     bool created;
     struct ft_socket *s = ft_table_insert(st->sockets, &e->sock_id, &created);
@@ -229,9 +251,10 @@ static void ingest_socket(struct ft_state *st, const struct ft_event *ev)
     }
     if (e->pid)
         socket_set_owner(st, s, e->pid);
+    return true;
 }
 
-static void ingest_flow(struct ft_state *st, const struct ft_event *ev)
+static bool ingest_flow(struct ft_state *st, const struct ft_event *ev)
 {
     const struct ft_ev_flow *e = &ev->flow;
     bool created;
@@ -298,9 +321,10 @@ static void ingest_flow(struct ft_state *st, const struct ft_event *ev)
     st->rx_bytes += e->rx_bytes;
     ft_rate_add(&st->tx_rate, ev->ts_ns, e->tx_bytes);
     ft_rate_add(&st->rx_rate, ev->ts_ns, e->rx_bytes);
+    return true;
 }
 
-static void ingest_file(struct ft_state *st, const struct ft_event *ev)
+static bool ingest_file(struct ft_state *st, const struct ft_event *ev)
 {
     const struct ft_ev_file *e = &ev->file;
     bool created;
@@ -326,9 +350,10 @@ static void ingest_file(struct ft_state *st, const struct ft_event *ev)
             f->path = copy;
         }
     }
+    return true;
 }
 
-static void ingest_transfer(struct ft_state *st, const struct ft_event *ev)
+static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
 {
     const struct ft_ev_transfer *e = &ev->transfer;
     struct ft_transfer_key key;
@@ -360,9 +385,10 @@ static void ingest_transfer(struct ft_state *st, const struct ft_event *ev)
 
     /* Keep the file's metadata for as long as transfers refer to it. */
     ft_table_touch(st->files, &e->file);
+    return true;
 }
 
-static void ingest_loss(struct ft_state *st, const struct ft_event *ev)
+static bool ingest_loss(struct ft_state *st, const struct ft_event *ev)
 {
     const struct ft_ev_loss *e = &ev->loss;
 
@@ -375,7 +401,7 @@ static void ingest_loss(struct ft_state *st, const struct ft_event *ev)
         if (last->end_ns >= e->since_ns) {
             last->end_ns = ev->ts_ns;
             last->count += e->count;
-            return;
+            return true;
         }
     }
     st->loss_windows[st->loss_count % FT_LOSS_WINDOWS] = (struct ft_loss_window){
@@ -384,6 +410,197 @@ static void ingest_loss(struct ft_state *st, const struct ft_event *ev)
         .count = e->count,
     };
     st->loss_count++;
+    return true;
+}
+
+static enum ft_log_class record_class(enum ft_record_type type)
+{
+    switch (type) {
+    case FT_REC_PROCESS_EXEC:
+    case FT_REC_PROCESS_FORK:
+    case FT_REC_PROCESS_EXIT:
+        return FT_LOG_PROCESSES;
+    case FT_REC_FILE_SEEN:
+    case FT_REC_FILE_TRANSFER:
+    case FT_REC_EVENT_LOSS:
+        return FT_LOG_TRANSFERS;
+    default:
+        return FT_LOG_NETWORK;
+    }
+}
+
+static struct ft_row_event *record_begin(struct ft_state *st, enum ft_record_type type,
+                                         uint64_t ts_ns)
+{
+    struct ft_row_event *r = st->record;
+
+    memset(r, 0, offsetof(struct ft_row_event, text) + 1);
+    r->type = type;
+    r->time_ns = ts_ns;
+    r->confidence = FT_CONF_ANY;
+    return r;
+}
+
+static void record_commit(struct ft_state *st)
+{
+    struct ft_row_event *r = st->record;
+    struct ft_evlog *log = st->logs[record_class((enum ft_record_type)r->type)];
+
+    r->seq = ++st->next_record_seq;
+    /* Counters are collected after the events that followed their last byte. */
+    if (r->time_ns < st->last_record_ns)
+        r->time_ns = st->last_record_ns;
+    st->last_record_ns = r->time_ns;
+    if (log)
+        ft_evlog_append(log, r, ft_row_event_size(r));
+    if (st->on_record)
+        st->on_record(st->on_record_ctx, r);
+}
+
+static void record_owner(struct ft_state *st, struct ft_row_event *r, uint32_t pid)
+{
+    const struct ft_process *p = pid ? ft_table_find(st->processes, &pid) : nullptr;
+
+    r->pid = pid;
+    if (p) {
+        r->ppid = p->ppid;
+        r->uid = p->uid;
+        ft_strlcpy(r->comm, p->comm, sizeof(r->comm));
+    }
+}
+
+static void record_process(struct ft_state *st, enum ft_record_type type, const struct ft_event *ev)
+{
+    struct ft_row_event *r = record_begin(st, type, ev->ts_ns);
+    const struct ft_process *p = ft_table_find(st->processes, &ev->process.pid);
+
+    r->pid = ev->process.pid;
+    r->exit_status = ev->process.exit_status;
+    if (p) {
+        r->ppid = p->ppid;
+        r->uid = p->uid;
+        ft_strlcpy(r->comm, p->comm, sizeof(r->comm));
+        ft_strlcpy(r->text, p->exe, sizeof(r->text));
+    }
+    record_commit(st);
+}
+
+static void record_socket(struct ft_state *st, const struct ft_event *ev)
+{
+    const struct ft_socket *s = ft_table_find(st->sockets, &ev->socket.sock_id);
+    enum ft_record_type type;
+
+    switch (ev->socket.state) {
+    case FT_SOCK_CONNECTING:
+        type = FT_REC_SOCKET_CONNECT;
+        break;
+    case FT_SOCK_LISTENING:
+        type = FT_REC_SOCKET_LISTEN;
+        break;
+    case FT_SOCK_CLOSED:
+        type = FT_REC_SOCKET_CLOSE;
+        break;
+    case FT_SOCK_ESTABLISHED:
+        type = FT_REC_SOCKET_ESTABLISHED;
+        break;
+    default:
+        return;
+    }
+    if (!s)
+        return;
+
+    struct ft_row_event *r = record_begin(st, type, ev->ts_ns);
+    r->sock_id = s->id;
+    r->proto = s->proto;
+    r->local = s->local;
+    r->remote = s->remote;
+    record_owner(st, r, s->pid);
+    record_commit(st);
+}
+
+static void record_network(struct ft_state *st, enum ft_record_type type, const struct ft_event *ev,
+                           uint64_t bytes)
+{
+    const struct ft_socket *s = ft_table_find(st->sockets, &ev->flow.sock_id);
+    struct ft_row_event *r;
+
+    if (bytes == 0)
+        return;
+    r = record_begin(st, type, ev->ts_ns);
+    r->sock_id = ev->flow.sock_id;
+    r->proto = ev->flow.proto;
+    r->local = s ? s->local : ev->flow.local;
+    r->remote = ev->flow.remote;
+    r->bytes = bytes;
+    record_owner(st, r, ev->flow.pid);
+    record_commit(st);
+}
+
+static void record_file(struct ft_row_event *r, const struct ft_file *f)
+{
+    r->dev = f->id.dev;
+    r->ino = f->id.ino;
+    r->file_size = f->size;
+    if (f->deleted)
+        r->flags |= FT_EVENT_FILE_DELETED;
+    if (f->path)
+        ft_strlcpy(r->text, f->path, sizeof(r->text));
+}
+
+static void record_file_seen(struct ft_state *st, const struct ft_event *ev)
+{
+    const struct ft_file *f = ft_table_find(st->files, &ev->file.id);
+    if (!f)
+        return;
+    record_file(record_begin(st, FT_REC_FILE_SEEN, ev->ts_ns), f);
+    record_commit(st);
+}
+
+static void record_transfer(struct ft_state *st, const struct ft_event *ev)
+{
+    const struct ft_ev_transfer *e = &ev->transfer;
+    const struct ft_socket *s = ft_table_find(st->sockets, &e->sock_id);
+    const struct ft_file *f = ft_table_find(st->files, &e->file);
+    struct ft_transfer_key key;
+    enum ft_confidence conf;
+    uint32_t evidence;
+
+    memset(&key, 0, sizeof(key));
+    key.sock_id = e->sock_id;
+    key.file = e->file;
+    key.pid = e->pid;
+    key.method = e->method;
+    const struct ft_transfer *t = ft_table_find(st->transfers, &key);
+
+    struct ft_row_event *r = record_begin(st, FT_REC_FILE_TRANSFER, ev->ts_ns);
+    r->sock_id = e->sock_id;
+    r->dev = e->file.dev;
+    r->ino = e->file.ino;
+    r->bytes = e->bytes;
+    r->read_bytes = e->read_bytes;
+    r->method = e->method;
+    /* The level is that of the whole association so far, not of this part of it. */
+    if (t && ft_state_classify(st, t, &conf, &evidence)) {
+        r->confidence = conf;
+        r->flags |= FT_EVENT_HAS_CONFIDENCE;
+    }
+    record_owner(st, r, e->pid);
+    if (s) {
+        r->proto = s->proto;
+        r->local = s->local;
+        r->remote = s->remote;
+    }
+    if (f)
+        record_file(r, f);
+    record_commit(st);
+}
+
+static void record_loss(struct ft_state *st, const struct ft_event *ev)
+{
+    struct ft_row_event *r = record_begin(st, FT_REC_EVENT_LOSS, ev->ts_ns);
+    r->bytes = ev->loss.count;
+    r->loss_kind = ev->loss.kind;
+    record_commit(st);
 }
 
 void ft_state_ingest(struct ft_state *st, const struct ft_event *ev)
@@ -394,28 +611,38 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev)
 
     switch (ev->type) {
     case FT_EVENT_PROCESS_EXEC:
-        ingest_exec(st, &ev->process);
+        if (ingest_exec(st, &ev->process))
+            record_process(st, FT_REC_PROCESS_EXEC, ev);
         break;
     case FT_EVENT_PROCESS_FORK:
-        ingest_fork(st, &ev->process);
+        if (ingest_fork(st, &ev->process))
+            record_process(st, FT_REC_PROCESS_FORK, ev);
         break;
     case FT_EVENT_PROCESS_EXIT:
-        ingest_exit(st, ev);
+        if (ingest_exit(st, ev))
+            record_process(st, FT_REC_PROCESS_EXIT, ev);
         break;
     case FT_EVENT_SOCKET_STATE:
-        ingest_socket(st, ev);
+        if (ingest_socket(st, ev))
+            record_socket(st, ev);
         break;
     case FT_EVENT_FILE_SEEN:
-        ingest_file(st, ev);
+        if (ingest_file(st, ev))
+            record_file_seen(st, ev);
         break;
     case FT_EVENT_FLOW:
-        ingest_flow(st, ev);
+        if (ingest_flow(st, ev)) {
+            record_network(st, FT_REC_NETWORK_SEND, ev, ev->flow.tx_bytes);
+            record_network(st, FT_REC_NETWORK_RECEIVE, ev, ev->flow.rx_bytes);
+        }
         break;
     case FT_EVENT_TRANSFER:
-        ingest_transfer(st, ev);
+        if (ingest_transfer(st, ev))
+            record_transfer(st, ev);
         break;
     case FT_EVENT_LOSS:
-        ingest_loss(st, ev);
+        if (ingest_loss(st, ev))
+            record_loss(st, ev);
         break;
     }
 }

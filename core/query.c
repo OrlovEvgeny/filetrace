@@ -755,6 +755,116 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
     return true;
 }
 
+bool ft_state_record_matches(const struct ft_query *q, uint64_t from_ns, uint64_t to_ns,
+                             const struct ft_row_event *row)
+{
+    bool about_file = row->type == FT_REC_FILE_SEEN || row->type == FT_REC_FILE_TRANSFER;
+    bool network_filter = q->proto || q->port || q->family || q->remote.family || q->local.family;
+
+    if (q->event_types && !(q->event_types & (1u << row->type)))
+        return false;
+    if (row->time_ns < from_ns || row->time_ns > to_ns)
+        return false;
+    if (q->pid && q->pid != row->pid)
+        return false;
+    if (q->sock_id && q->sock_id != row->sock_id)
+        return false;
+    if (!match_name(q->process, row->comm))
+        return false;
+    if (q->path[0] && !(about_file && ft_glob_match(q->path, row->text)))
+        return false;
+    if (network_filter && !(row->sock_id && match_tuple(q, row->proto, &row->local, &row->remote)))
+        return false;
+    return true;
+}
+
+/* Walks the logs in the order the records were made; emits those after the first skip. */
+static uint64_t scan_events(struct ft_state *st, const struct ft_query *q, const struct span *sp,
+                            uint64_t skip, ft_row_fn *emit, void *ctx, struct ft_row_event *rows)
+{
+    struct ft_evlog_cursor cursors[FT_LOG_CLASS_COUNT];
+    bool pending[FT_LOG_CLASS_COUNT];
+    uint64_t matched = 0;
+    /* One reading of both clocks keeps the order of the records in their wall times. */
+    uint64_t wall_now = ft_clock_wall_ns();
+    uint64_t mono_now = ft_clock_mono_ns();
+
+    for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++) {
+        pending[i] = false;
+        if (!st->logs[i])
+            continue;
+        ft_evlog_rewind(st->logs[i], &cursors[i]);
+        pending[i] = ft_evlog_peek(st->logs[i], &cursors[i], &rows[i]);
+    }
+
+    for (;;) {
+        size_t next = FT_LOG_CLASS_COUNT;
+        for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++) {
+            if (pending[i] && (next == FT_LOG_CLASS_COUNT || rows[i].seq < rows[next].seq))
+                next = i;
+        }
+        if (next == FT_LOG_CLASS_COUNT)
+            break;
+
+        struct ft_row_event *row = &rows[next];
+        if (ft_state_record_matches(q, sp->from_ns, sp->to_ns, row) && matched++ >= skip && emit) {
+            row->time_ns = row->time_ns <= mono_now ? wall_now - (mono_now - row->time_ns)
+                                                    : wall_now + (row->time_ns - mono_now);
+            emit(ctx, FT_MSG_ROW_EVENT, row, ft_row_event_size(row));
+        }
+        ft_evlog_advance(st->logs[next], &cursors[next]);
+        pending[next] = ft_evlog_peek(st->logs[next], &cursors[next], row);
+    }
+    return matched;
+}
+
+static bool class_selected(const struct ft_query *q, enum ft_log_class class)
+{
+    static const uint32_t types[FT_LOG_CLASS_COUNT] = {
+        [FT_LOG_TRANSFERS] =
+            1u << FT_REC_FILE_SEEN | 1u << FT_REC_FILE_TRANSFER | 1u << FT_REC_EVENT_LOSS,
+        [FT_LOG_NETWORK] = 1u << FT_REC_SOCKET_CONNECT | 1u << FT_REC_SOCKET_LISTEN |
+                           1u << FT_REC_SOCKET_ESTABLISHED | 1u << FT_REC_SOCKET_CLOSE |
+                           1u << FT_REC_NETWORK_SEND | 1u << FT_REC_NETWORK_RECEIVE,
+        [FT_LOG_PROCESSES] =
+            1u << FT_REC_PROCESS_EXEC | 1u << FT_REC_PROCESS_FORK | 1u << FT_REC_PROCESS_EXIT,
+    };
+    return q->event_types == 0 || (q->event_types & types[class]) != 0;
+}
+
+static bool query_events(struct ft_state *st, const struct ft_query *q, ft_row_fn *emit, void *ctx,
+                         struct ft_msg_end *end)
+{
+    struct span sp = query_span(q);
+    struct ft_row_event *rows = calloc(FT_LOG_CLASS_COUNT, sizeof(*rows));
+    uint64_t skip = 0;
+
+    if (!rows)
+        return false;
+    if (q->limit) {
+        uint64_t matched = scan_events(st, q, &sp, 0, nullptr, nullptr, rows);
+        skip = matched > q->limit ? matched - q->limit : 0;
+    }
+    uint64_t matched = scan_events(st, q, &sp, skip, emit, ctx, rows);
+    end->rows = (uint32_t)(matched - skip);
+
+    /* A log that has discarded records answers only from its oldest one on. */
+    for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++) {
+        struct ft_evlog_cursor oldest;
+        if (!st->logs[i] || !class_selected(q, (enum ft_log_class)i) ||
+            ft_evlog_discarded(st->logs[i]) == 0)
+            continue;
+        ft_evlog_rewind(st->logs[i], &oldest);
+        if (!ft_evlog_peek(st->logs[i], &oldest, &rows[0]))
+            continue;
+        uint64_t since = ft_clock_mono_to_wall(rows[0].time_ns);
+        if (since > end->observed_since_wall_ns)
+            end->observed_since_wall_ns = since;
+    }
+    free(rows);
+    return true;
+}
+
 bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_ns, ft_row_fn *emit,
                     void *ctx, struct ft_msg_end *end, struct ft_error *err)
 {
@@ -763,6 +873,7 @@ bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_
     uint64_t last = 0;
 
     memset(end, 0, sizeof(*end));
+    end->observed_since_wall_ns = ft_clock_mono_to_wall(st->start_ns);
     switch (q->kind) {
     case FT_Q_PROCESSES:
         if (!query_processes(st, q, now_ns, emit, ctx, end)) {
@@ -780,11 +891,16 @@ bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_
         if (!query_transfers(st, q, now_ns, emit, ctx, end, err))
             return false;
         break;
+    case FT_Q_EVENTS:
+        if (!query_events(st, q, emit, ctx, end)) {
+            ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+            return false;
+        }
+        break;
     default:
         break;
     }
 
-    end->observed_since_wall_ns = ft_clock_mono_to_wall(st->start_ns);
     end->lost_events = ft_state_lost_between(st, sp.from_ns, sp.to_ns, &first, &last);
     end->loss_first_wall_ns = ft_clock_mono_to_wall(first);
     end->loss_last_wall_ns = ft_clock_mono_to_wall(last);
@@ -819,6 +935,13 @@ void ft_state_fill_stats(struct ft_state *st, uint64_t now_ns, struct ft_row_sta
     row->flows = table_usage(st->flows);
     row->files = table_usage(st->files);
     row->transfers = table_usage(st->transfers);
+    for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++) {
+        if (!st->logs[i])
+            continue;
+        row->event_log_bytes += ft_evlog_capacity(st->logs[i]);
+        row->event_log_records += ft_evlog_records(st->logs[i]);
+        row->event_log_discarded += ft_evlog_discarded(st->logs[i]);
+    }
 
     for (struct ft_flow *f = ft_table_first(st->flows); f; f = ft_table_next(st->flows, f)) {
         if (now_ns - f->last_ns <= st->cfg.active_window_ns)

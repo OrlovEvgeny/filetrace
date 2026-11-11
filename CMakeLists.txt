@@ -118,6 +118,7 @@ add_library(ft_core STATIC
     core/capabilities.c
     core/client.c
     core/clock.c
+    core/evlog.c
     core/format.c
     core/model.c
     core/query.c
@@ -154,6 +155,7 @@ target_link_libraries(filetraced PRIVATE ft_daemon)
 add_library(ft_cli STATIC
     cmd/args.c
     cmd/diagnostics.c
+    cmd/events.c
     cmd/queries.c
     cmd/service.c
     cmd/views.c

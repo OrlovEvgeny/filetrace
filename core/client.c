@@ -1,6 +1,7 @@
 #include "filetrace/client.h"
 
 #include <errno.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -10,6 +11,7 @@
 struct ft_client {
     int fd;
     unsigned char *payload;
+    const volatile sig_atomic_t *stop;
 };
 
 static bool write_all(int fd, const void *buf, size_t size)
@@ -32,10 +34,21 @@ static bool write_all(int fd, const void *buf, size_t size)
     return true;
 }
 
-static bool read_all(int fd, void *buf, size_t size)
+static bool read_all(const struct ft_client *c, void *buf, size_t size)
 {
+    constexpr int STOP_CHECK_MS = 200;
     unsigned char *p = buf;
+    int fd = c->fd;
+
     while (size) {
+        if (c->stop) {
+            /* A signal that lands just before a blocking read would go unnoticed. */
+            struct pollfd pfd = {.fd = fd, .events = POLLIN};
+            if (*c->stop)
+                return false;
+            if (poll(&pfd, 1, STOP_CHECK_MS) <= 0)
+                continue;
+        }
         ssize_t n = read(fd, p, size);
         if (n == 0)
             return false;
@@ -121,6 +134,11 @@ struct ft_client *ft_client_connect(const char *socket_path, struct ft_error *er
     return c;
 }
 
+void ft_client_stop_on(struct ft_client *c, const volatile sig_atomic_t *stop)
+{
+    c->stop = stop;
+}
+
 void ft_client_close(struct ft_client *c)
 {
     if (!c)
@@ -130,8 +148,10 @@ void ft_client_close(struct ft_client *c)
     free(c);
 }
 
-static int broken(struct ft_error *err)
+static int broken(const struct ft_client *c, struct ft_error *err)
 {
+    if (c->stop && *c->stop)
+        return FT_EXIT_OK;
     return ft_error_set(err, FT_EXIT_NO_DAEMON, "The connection to the daemon was lost.");
 }
 
@@ -145,15 +165,15 @@ int ft_client_query(struct ft_client *c, const struct ft_query *q, ft_client_row
 
     for (;;) {
         struct ft_frame_hdr hdr;
-        if (!read_all(c->fd, &hdr, sizeof(hdr)))
-            return broken(err);
+        if (!read_all(c, &hdr, sizeof(hdr)))
+            return broken(c, err);
         if (hdr.magic != FT_WIRE_MAGIC || hdr.version != FT_WIRE_VERSION ||
             hdr.length > FT_WIRE_MAX_PAYLOAD)
             return ft_error_set(err, FT_EXIT_ERROR,
                                 "The daemon speaks a different protocol version. "
                                 "Upgrade filetrace and filetraced together.");
-        if (hdr.length && !read_all(c->fd, c->payload, hdr.length))
-            return broken(err);
+        if (hdr.length && !read_all(c, c->payload, hdr.length))
+            return broken(c, err);
 
         if (hdr.type == FT_MSG_END) {
             struct ft_msg_end local = {0};
@@ -176,14 +196,13 @@ int ft_client_query(struct ft_client *c, const struct ft_query *q, ft_client_row
 int ft_client_shutdown(struct ft_client *c, struct ft_error *err)
 {
     if (!ft_wire_send(c->fd, FT_MSG_SHUTDOWN, nullptr, 0))
-        return broken(err);
+        return broken(c, err);
 
     struct ft_frame_hdr hdr;
-    if (!read_all(c->fd, &hdr, sizeof(hdr)))
+    if (!read_all(c, &hdr, sizeof(hdr)))
         return FT_EXIT_OK;
-    if (hdr.length > FT_WIRE_MAX_PAYLOAD ||
-        (hdr.length && !read_all(c->fd, c->payload, hdr.length)))
-        return broken(err);
+    if (hdr.length > FT_WIRE_MAX_PAYLOAD || (hdr.length && !read_all(c, c->payload, hdr.length)))
+        return broken(c, err);
     if (hdr.type == FT_MSG_ERROR) {
         struct ft_msg_error e = {0};
         memcpy(&e, c->payload, hdr.length < sizeof(e) ? hdr.length : sizeof(e));

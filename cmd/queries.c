@@ -736,6 +736,18 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
         fprintf(o, "%-18s%s\n", "Event queue:", a);
         fprintf(o, "%-18s%" PRIu64 "%%\n", "Peak utilization:",
                 s->queue_bytes ? s->queue_peak_bytes * 100 / s->queue_bytes : 0);
+        if (s->event_log_bytes) {
+            ft_format_bytes(s->event_log_bytes, a, sizeof(a));
+            ft_format_count(s->event_log_records, b, sizeof(b));
+            fprintf(o, "%-18s%s, holding %s events", "Event log:", a, b);
+            if (s->event_log_discarded) {
+                ft_format_count(s->event_log_discarded, b, sizeof(b));
+                fprintf(o, " (%s older ones discarded)", b);
+            }
+            fputc('\n', o);
+        } else {
+            fprintf(o, "%-18s%s\n", "Event log:", "off");
+        }
         usage_line(o, "Processes:", &s->processes);
         usage_line(o, "Sockets:", &s->sockets);
         usage_line(o, "Flows:", &s->flows);
@@ -797,8 +809,10 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
             s->cpu_milli_percent / 1000, s->cpu_milli_percent % 1000, s->rss_bytes, s->open_fds);
     fprintf(o,
             ",\"collector\":{\"event_queue_bytes\":%" PRIu64 ",\"event_queue_peak_bytes\":%" PRIu64
-            ",\"candidates_below_threshold\":%" PRIu64 ",",
-            s->queue_bytes, s->queue_peak_bytes, s->candidates_rejected);
+            ",\"candidates_below_threshold\":%" PRIu64 ",\"event_log_bytes\":%" PRIu64
+            ",\"event_log_events\":%" PRIu64 ",\"event_log_discarded\":%" PRIu64 ",",
+            s->queue_bytes, s->queue_peak_bytes, s->candidates_rejected, s->event_log_bytes,
+            s->event_log_records, s->event_log_discarded);
     usage_json(o, "processes", &s->processes, false);
     usage_json(o, "sockets", &s->sockets, false);
     usage_json(o, "flows", &s->flows, false);

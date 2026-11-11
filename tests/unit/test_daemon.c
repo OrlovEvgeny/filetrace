@@ -89,6 +89,18 @@ static void scripted_flush(struct ft_backend *b)
     scripted_emit(b, &ev);
 }
 
+/* Reports ten more bytes sent on one socket at every flush. */
+static void ticking_flush(struct ft_backend *b)
+{
+    struct ft_event ev = {.type = FT_EVENT_FLOW, .ts_ns = ft_clock_mono_ns()};
+    ev.flow.sock_id = 500;
+    ev.flow.pid = 77;
+    ev.flow.proto = FT_PROTO_UDP;
+    ev.flow.first_ns = ev.ts_ns;
+    ev.flow.tx_bytes = 10;
+    scripted_emit(b, &ev);
+}
+
 static void scripted_stats(struct ft_backend *b, struct ft_backend_stats *out)
 {
     out->events = b->events;
@@ -111,6 +123,15 @@ static const struct ft_backend_ops scripted_ops = {
     .name = "scripted",
     .open = scripted_open,
     .flush = scripted_flush,
+    .stats = scripted_stats,
+    .capabilities = scripted_capabilities,
+    .close = scripted_close,
+};
+
+static const struct ft_backend_ops ticking_ops = {
+    .name = "ticking",
+    .open = scripted_open,
+    .flush = ticking_flush,
     .stats = scripted_stats,
     .capabilities = scripted_capabilities,
     .close = scripted_close,
@@ -331,9 +352,61 @@ static void reports_a_backend_that_cannot_start(void)
     CHECK_U64(wait_exit(pid), FT_EXIT_PERMISSION);
 }
 
+struct followed {
+    uint64_t rows;
+    uint64_t last_seq;
+    bool in_order;
+    bool all_sends;
+    volatile sig_atomic_t stop;
+};
+
+static void on_followed(void *ctx, uint16_t type, const void *payload, size_t size)
+{
+    struct followed *f = ctx;
+    struct ft_row_event head;
+
+    if (type != FT_MSG_ROW_EVENT || size < offsetof(struct ft_row_event, text))
+        return;
+    memcpy(&head, payload, offsetof(struct ft_row_event, text));
+    f->in_order = f->in_order && head.seq > f->last_seq;
+    f->all_sends = f->all_sends && head.type == FT_REC_NETWORK_SEND && head.bytes == 10;
+    f->last_seq = head.seq;
+    if (++f->rows == 3)
+        f->stop = 1;
+}
+
+static void streams_events_to_a_follower(void)
+{
+    struct followed f = {.in_order = true, .all_sends = true};
+    struct ft_error err = {0};
+    struct ft_query q;
+    int pair[2];
+
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    pid_t pid = start_daemon(&ticking_ops, nullptr, pair[1], pair[0]);
+    close(pair[1]);
+
+    struct ft_client *c = ft_client_adopt(pair[0]);
+    CHECK(c != nullptr);
+    ft_client_stop_on(c, &f.stop);
+
+    /* No end is sent while following; the query returns because the follower stops. */
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.flags = FT_QF_FOLLOW;
+    q.event_types = 1u << FT_REC_NETWORK_SEND;
+    CHECK_U64(ft_client_query(c, &q, on_followed, &f, nullptr, &err), FT_EXIT_OK);
+    CHECK(f.rows >= 3);
+    CHECK(f.in_order);
+    CHECK(f.all_sends);
+
+    ft_client_close(c);
+    CHECK_U64(wait_exit(pid), FT_EXIT_OK);
+}
+
 void test_daemon(void)
 {
     serves_queries_over_a_socket();
     serves_a_single_session();
+    streams_events_to_a_follower();
     reports_a_backend_that_cannot_start();
 }

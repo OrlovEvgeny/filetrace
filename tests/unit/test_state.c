@@ -15,6 +15,7 @@ struct collected {
     struct ft_row_connection connections[16];
     struct ft_row_flow flows[16];
     struct ft_row_transfer *transfers;
+    struct ft_row_event *events;
     size_t count;
 };
 
@@ -36,6 +37,10 @@ static void collect(void *ctx, uint16_t type, const void *row, size_t size)
     case FT_MSG_ROW_TRANSFER:
         memset(&c->transfers[c->count], 0, sizeof(c->transfers[0]));
         memcpy(&c->transfers[c->count], row, size);
+        break;
+    case FT_MSG_ROW_EVENT:
+        memset(&c->events[c->count], 0, sizeof(c->events[0]));
+        memcpy(&c->events[c->count], row, size);
         break;
     default:
         return;
@@ -60,6 +65,7 @@ static void fixture_open(struct fixture *f)
     memset(f, 0, sizeof(*f));
     f->st = ft_state_create(&cfg);
     f->rows.transfers = calloc(16, sizeof(struct ft_row_transfer));
+    f->rows.events = calloc(16, sizeof(struct ft_row_event));
     f->now = ft_clock_mono_ns();
     f->st->start_ns = f->now;
 }
@@ -68,6 +74,7 @@ static void fixture_close(struct fixture *f)
 {
     ft_state_destroy(f->st);
     free(f->rows.transfers);
+    free(f->rows.events);
 }
 
 static void run_query(struct fixture *f, const struct ft_query *q)
@@ -748,6 +755,171 @@ static void rates_cover_recent_seconds(void)
     fixture_close(&f);
 }
 
+static void emit_loss(struct fixture *f, uint64_t count)
+{
+    struct ft_event ev = {.type = FT_EVENT_LOSS, .ts_ns = f->now};
+    ev.loss.kind = FT_LOSS_EVENT_QUEUE;
+    ev.loss.count = count;
+    ev.loss.since_ns = f->now;
+    ft_state_ingest(f->st, &ev);
+}
+
+static void events_are_logged_in_order(void)
+{
+    static const uint8_t expected[] = {
+        FT_REC_PROCESS_EXEC, FT_REC_SOCKET_CONNECT, FT_REC_NETWORK_SEND, FT_REC_NETWORK_RECEIVE,
+        FT_REC_FILE_SEEN,    FT_REC_FILE_TRANSFER,  FT_REC_EVENT_LOSS,
+    };
+    struct ft_endpoint local = endpoint(10, 0, 0, 10, 443);
+    struct ft_endpoint remote = endpoint(203, 0, 113, 42, 52144);
+    struct fixture f;
+    struct ft_query q;
+
+    fixture_open(&f);
+    emit_exec(&f, PID_A, 1, "nginx", 1000);
+    emit_socket(&f, SOCK_A, PID_A, FT_SOCK_CONNECTING, local, remote);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 700, 9000);
+    emit_file(&f, 11, "/var/www/a.bin", false);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+    emit_loss(&f, 3);
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, FT_ARRAY_LEN(expected));
+    for (size_t i = 0; i < FT_ARRAY_LEN(expected) && i < f.rows.count; i++) {
+        CHECK_U64(f.rows.events[i].type, expected[i]);
+        CHECK_U64(f.rows.events[i].seq, i + 1);
+    }
+    CHECK_STR(f.rows.events[0].text, "/usr/sbin/nginx");
+    CHECK_U64(f.rows.events[2].bytes, 700);
+    CHECK_U64(f.rows.events[3].bytes, 9000);
+    CHECK_STR(f.rows.events[3].comm, "nginx");
+    CHECK_U64(f.rows.events[4].file_size, 11 * 1024 * 1024);
+    CHECK_U64(f.rows.events[6].bytes, 3);
+
+    const struct ft_row_event *transfer = &f.rows.events[5];
+    CHECK_U64(transfer->bytes, 4096);
+    CHECK_U64(transfer->method, FT_METHOD_SENDFILE);
+    CHECK(transfer->flags & FT_EVENT_HAS_CONFIDENCE);
+    CHECK_U64(transfer->confidence, FT_CONF_EXACT);
+    CHECK_U64(transfer->pid, PID_A);
+    CHECK_U64(transfer->remote.port, 52144);
+    CHECK_STR(transfer->text, "/var/www/a.bin");
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.event_types = 1u << FT_REC_FILE_TRANSFER | 1u << FT_REC_FILE_SEEN;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+
+    /* A network filter leaves out the records that have no socket. */
+    ft_query_init(&q, FT_Q_EVENTS);
+    CHECK(ft_addr_parse("203.0.113.0", &q.remote));
+    q.remote_host_bits = 8;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 4);
+    CHECK_U64(f.rows.events[3].type, FT_REC_FILE_TRANSFER);
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    ft_strlcpy(q.path, "/var/www/*", sizeof(q.path));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+
+    /* A limit keeps the most recent records, still oldest first. */
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.limit = 2;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    CHECK_U64(f.rows.events[0].type, FT_REC_FILE_TRANSFER);
+    CHECK_U64(f.rows.events[1].type, FT_REC_EVENT_LOSS);
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.since_wall_ns = ft_clock_mono_to_wall(f.now) + 60 * FT_NS_PER_SEC;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+
+    /* Bytes counted before the last record but collected after it do not turn time back. */
+    f.now -= 5 * FT_NS_PER_MS;
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 100, 0);
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.limit = 2;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.events[1].type, FT_REC_NETWORK_SEND);
+    CHECK(f.rows.events[1].time_ns >= f.rows.events[0].time_ns);
+    fixture_close(&f);
+}
+
+static void event_log_keeps_the_most_recent(void)
+{
+    struct ft_evlog *log = ft_evlog_create(1000);
+    struct ft_row_event *row = calloc(2, sizeof(*row));
+    struct ft_evlog_cursor cur;
+
+    /* Each record takes 4 bytes for its size and 160 for itself. */
+    for (uint64_t seq = 1; seq <= 100; seq++) {
+        row->seq = seq;
+        snprintf(row->text, sizeof(row->text), "/data/%09" PRIu64, seq);
+        CHECK_U64(ft_row_event_size(row), 160);
+        ft_evlog_append(log, row, ft_row_event_size(row));
+    }
+    CHECK_U64(ft_evlog_records(log), 6);
+    CHECK_U64(ft_evlog_discarded(log), 94);
+
+    uint64_t expected = 95;
+    for (ft_evlog_rewind(log, &cur); ft_evlog_peek(log, &cur, &row[1]);
+         ft_evlog_advance(log, &cur)) {
+        char path[32];
+        snprintf(path, sizeof(path), "/data/%09" PRIu64, expected);
+        CHECK_U64(row[1].seq, expected);
+        CHECK_STR(row[1].text, path);
+        expected++;
+    }
+    CHECK_U64(expected, 101);
+
+    /* A record larger than the whole log is not stored and displaces nothing. */
+    ft_evlog_append(log, row, 2000);
+    CHECK_U64(ft_evlog_records(log), 6);
+    ft_evlog_destroy(log);
+    free(row);
+}
+
+static void event_floods_stay_in_their_class(void)
+{
+    struct ft_state_config cfg;
+    struct fixture f = {0};
+    struct ft_query q;
+
+    ft_state_config_defaults(&cfg);
+    cfg.event_log_bytes = 64 * 1024;
+    f.st = ft_state_create(&cfg);
+    f.now = ft_clock_mono_ns();
+    f.st->start_ns = f.now;
+    f.rows.transfers = calloc(16, sizeof(struct ft_row_transfer));
+    f.rows.events = calloc(16, sizeof(struct ft_row_event));
+
+    emit_exec(&f, PID_A, 1, "nginx", 1000);
+    emit_file(&f, 11, "/var/www/a.bin", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 1, 443), 4096, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+    f.now += FT_NS_PER_SEC;
+    for (uint32_t i = 0; i < 2000; i++)
+        emit_exec(&f, 5000 + i, 1, "sh", 2000 + i);
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.event_types = 1u << FT_REC_FILE_TRANSFER;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    uint64_t start = f.end.observed_since_wall_ns;
+
+    /* The process records pushed out their own oldest, and the answer says from when. */
+    q.event_types = 1u << FT_REC_PROCESS_EXEC;
+    q.limit = 1;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.events[0].pid, 6999);
+    CHECK(f.end.observed_since_wall_ns > start);
+    fixture_close(&f);
+}
+
 static void tables_stay_bounded(void)
 {
     struct ft_state_config cfg;
@@ -793,5 +965,8 @@ void test_state(void)
     reused_inode_is_another_file();
     processes_count_their_files();
     rates_cover_recent_seconds();
+    events_are_logged_in_order();
+    event_log_keeps_the_most_recent();
+    event_floods_stay_in_their_class();
     tables_stay_bounded();
 }

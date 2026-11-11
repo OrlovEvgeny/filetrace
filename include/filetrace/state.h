@@ -13,6 +13,7 @@ struct ft_state_config {
     size_t max_flows;
     size_t max_files;
     size_t max_transfers;
+    size_t event_log_bytes; /* 0: recent events are not kept */
 
     /* An inferred association is reported only at or above both thresholds. */
     uint64_t inferred_min_bytes;
@@ -163,6 +164,19 @@ struct ft_loss_window {
 
 #define FT_LOSS_WINDOWS 64
 
+/* A flood of one kind of record does not push the others out of the log. */
+enum ft_log_class : uint8_t {
+    FT_LOG_TRANSFERS, /* files seen, file transfers, event loss */
+    FT_LOG_NETWORK,   /* socket states and bytes */
+    FT_LOG_PROCESSES,
+    FT_LOG_CLASS_COUNT,
+};
+
+struct ft_evlog;
+
+/* Receives each record as it is made; its time_ns is still monotonic. */
+typedef void ft_record_fn(void *ctx, const struct ft_row_event *row);
+
 struct ft_state {
     struct ft_state_config cfg;
     struct ft_table *processes; /* key: uint32_t pid */
@@ -170,10 +184,16 @@ struct ft_state {
     struct ft_table *flows;     /* key: struct ft_flow_key */
     struct ft_table *files;     /* key: struct ft_file_id */
     struct ft_table *transfers; /* key: struct ft_transfer_key */
+    struct ft_evlog *logs[FT_LOG_CLASS_COUNT];
+    struct ft_row_event *record; /* the record being made */
+    ft_record_fn *on_record;
+    void *on_record_ctx;
 
     uint64_t start_ns;
     uint64_t next_transfer_id;
     uint64_t next_flow_id;
+    uint64_t next_record_seq;
+    uint64_t last_record_ns;
     uint64_t events;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
@@ -210,7 +230,33 @@ typedef void ft_row_fn(void *ctx, uint16_t type, const void *row, size_t size);
 bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_ns, ft_row_fn *emit,
                     void *ctx, struct ft_msg_end *end, struct ft_error *err);
 
+/* Whether a record passes the filters of an events query; times are monotonic. */
+bool ft_state_record_matches(const struct ft_query *q, uint64_t from_ns, uint64_t to_ns,
+                             const struct ft_row_event *row);
+
 /* Fills the parts of the statistics row that the state owns. */
 void ft_state_fill_stats(struct ft_state *st, uint64_t now_ns, struct ft_row_stats *row);
+
+struct ft_evlog *ft_evlog_create(size_t bytes);
+void ft_evlog_destroy(struct ft_evlog *log);
+
+/* Stores the first size bytes of row, discarding the oldest records to make room. */
+void ft_evlog_append(struct ft_evlog *log, const struct ft_row_event *row, size_t size);
+
+size_t ft_evlog_capacity(const struct ft_evlog *log);
+uint64_t ft_evlog_records(const struct ft_evlog *log);
+uint64_t ft_evlog_discarded(const struct ft_evlog *log);
+
+struct ft_evlog_cursor {
+    size_t pos;
+    size_t remaining;
+};
+
+void ft_evlog_rewind(const struct ft_evlog *log, struct ft_evlog_cursor *cur);
+
+/* Copies the record under the cursor into out; false once the cursor is past the newest. */
+bool ft_evlog_peek(const struct ft_evlog *log, const struct ft_evlog_cursor *cur,
+                   struct ft_row_event *out);
+void ft_evlog_advance(const struct ft_evlog *log, struct ft_evlog_cursor *cur);
 
 #endif

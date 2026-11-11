@@ -177,6 +177,7 @@ void ft_query_args_init(struct ft_query_args *qa, const char *command, enum ft_q
     qa->command = command;
     qa->allowed = allowed;
     qa->sorts = sorts;
+    qa->formats = FT_FORMATS_ALL;
 }
 
 static int bad_value(const struct ft_query_args *qa, const char *option, const char *value,
@@ -259,7 +260,7 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         q->flags &= ~(uint32_t)FT_QF_PATH_REGEX;
         return 1;
     }
-    if (OPTION(FT_QO_FILE, "--path-regex")) {
+    if (OPTION(FT_QO_FILE_MATCH, "--path-regex")) {
         if (r < 0)
             return -1;
         if (strlen(v) >= sizeof(q->path))
@@ -268,7 +269,7 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         q->flags |= FT_QF_PATH_REGEX;
         return 1;
     }
-    if (OPTION(FT_QO_FILE, "--min-size")) {
+    if (OPTION(FT_QO_FILE_MATCH, "--min-size")) {
         if (r < 0)
             return -1;
         return ft_parse_size(v, &q->min_size)
@@ -414,7 +415,7 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
 #undef OPTION
 
     if (qa->allowed & FT_QO_OUTPUT) {
-        r = ft_args_format(a, qa->command, FT_FORMATS_ALL, &qa->out.format);
+        r = ft_args_format(a, qa->command, qa->formats, &qa->out.format);
         if (r != 0) {
             qa->out.format_given = r > 0;
             return r;
@@ -434,7 +435,7 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
     return 0;
 }
 
-void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
+void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t formats)
 {
     static const struct {
         uint32_t group;
@@ -447,10 +448,10 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
         {FT_QO_SCOPE, "  --cgroup <id|dir>       Only processes in this cgroup\n"
                       "  --namespace <inode>     Only processes in this network, PID or mount\n"
                       "                          namespace\n"},
-        {FT_QO_FILE, "  --path <path>           Only this file ('*' wildcards; alias: --file)\n"
-                     "  --path-regex <regex>    Only files whose path matches this POSIX\n"
-                     "                          extended regular expression\n"
-                     "  --min-size <size>       Only files at least this large\n"},
+        {FT_QO_FILE, "  --path <path>           Only this file ('*' wildcards; alias: --file)\n"},
+        {FT_QO_FILE_MATCH, "  --path-regex <regex>    Only files whose path matches this POSIX\n"
+                           "                          extended regular expression\n"
+                           "  --min-size <size>       Only files at least this large\n"},
         {FT_QO_REMOTE, "  --remote <ip|cidr>      Only this remote address or network\n"},
         {FT_QO_LOCAL, "  --local <ip|cidr>       Only this local address or network\n"},
         {FT_QO_PORT, "  --port <port>           Only this local or remote port\n"},
@@ -494,11 +495,17 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
     }
     if (allowed & FT_QO_LIMIT)
         fputs("  --limit <n>             Show at most n rows\n", out);
-    if (allowed & FT_QO_OUTPUT)
-        fputs("  --format <format>       table (default), json, jsonl, csv or quiet\n"
+    if (allowed & FT_QO_OUTPUT) {
+        fputs("  --format <format>       table (default)", out);
+        for (size_t i = FT_FMT_TABLE + 1; i < FT_FMT_COUNT; i++) {
+            if (formats & FT_FMT_BIT(i))
+                fprintf(out, "%s%s", (formats >> (i + 1)) ? ", " : " or ", format_names[i]);
+        }
+        fputs("\n"
               "  --json, --jsonl         Short for --format json and --format jsonl\n"
               "  --output <file>         Write to a file instead of standard output\n",
               out);
+    }
     if (allowed & FT_QO_TIME)
         fputs("\nByte counts cover a record's whole observed lifetime; --since and --until\n"
               "select which records are listed.\n",

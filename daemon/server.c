@@ -21,6 +21,8 @@
 constexpr size_t MAX_CLIENTS = 32;
 constexpr size_t MAX_REPLY_BYTES = 64u * 1024u * 1024u;
 constexpr uint64_t RATE_WINDOW_NS = FT_NS_PER_SEC;
+/* A follower that has this much unread is sent no more until it catches up. */
+constexpr size_t FOLLOW_BACKLOG_BYTES = 1024 * 1024;
 
 struct client {
     int fd;
@@ -31,6 +33,10 @@ struct client {
     size_t out_off;
     size_t out_cap;
     unsigned char *out;
+    struct ft_query *follow; /* the events query whose matches it is being sent, or nullptr */
+    uint64_t follow_from_ns;
+    uint64_t follow_to_ns;
+    uint64_t follow_missed;
     unsigned char in[sizeof(struct ft_frame_hdr) + sizeof(struct ft_query)];
 };
 
@@ -41,6 +47,7 @@ struct daemon {
     int listen_fd;
     struct client clients[MAX_CLIENTS];
     size_t nclients;
+    struct ft_row_event *live; /* a record on its way to followers */
 
     uint64_t start_wall_ns;
     uint64_t rate_mono_ns;
@@ -147,10 +154,16 @@ static int open_listener(const char *path, struct ft_error *err)
 
 static void reply(struct client *c, uint16_t type, const void *payload, size_t size)
 {
-    size_t need = c->out_len + sizeof(struct ft_frame_hdr) + size;
-
     if (c->overflow)
         return;
+    /* Written bytes are dropped once they outweigh the unwritten ones. */
+    if (c->out_off && c->out_off >= c->out_len - c->out_off) {
+        memmove(c->out, c->out + c->out_off, c->out_len - c->out_off);
+        c->out_len -= c->out_off;
+        c->out_off = 0;
+    }
+
+    size_t need = c->out_len + sizeof(struct ft_frame_hdr) + size;
     if (need > c->out_cap) {
         size_t cap = c->out_cap ? c->out_cap : 16384;
         while (cap < need)
@@ -192,6 +205,45 @@ static void reply_error(struct client *c, int code, const char *fmt, ...)
     va_end(ap);
     c->overflow = false;
     reply(c, FT_MSG_ERROR, &e, sizeof(e));
+}
+
+static void on_record(void *ctx, const struct ft_row_event *row)
+{
+    struct daemon *d = ctx;
+    struct ft_row_event *live = d->live;
+
+    for (size_t i = 0; i < d->nclients; i++) {
+        struct client *c = &d->clients[i];
+
+        if (!c->follow ||
+            !ft_state_record_matches(c->follow, c->follow_from_ns, c->follow_to_ns, row))
+            continue;
+        if (c->out_len - c->out_off > FOLLOW_BACKLOG_BYTES) {
+            c->follow_missed++;
+            continue;
+        }
+        if (c->follow_missed) {
+            memset(live, 0, offsetof(struct ft_row_event, text) + 1);
+            live->type = FT_REC_EVENT_LOSS;
+            live->time_ns = ft_clock_wall_ns();
+            live->bytes = c->follow_missed;
+            live->loss_kind = FT_EVENT_LOSS_READER;
+            live->confidence = FT_CONF_ANY;
+            reply(c, FT_MSG_ROW_EVENT, live, ft_row_event_size(live));
+            c->follow_missed = 0;
+        }
+        size_t size = ft_row_event_size(row);
+        memcpy(live, row, size);
+        live->time_ns = ft_clock_mono_to_wall(row->time_ns);
+        reply(c, FT_MSG_ROW_EVENT, live, size);
+    }
+}
+
+static void follow_end(struct client *c)
+{
+    free(c->follow);
+    c->follow = nullptr;
+    c->follow_missed = 0;
 }
 
 static void sample_rates(struct daemon *d, uint64_t now_ns)
@@ -265,6 +317,8 @@ static void reply_capabilities(struct daemon *d, struct client *c)
 static void handle_query(struct daemon *d, struct client *c, const void *payload, size_t size)
 {
     struct ft_query *q = calloc(1, sizeof(*q));
+
+    follow_end(c);
     if (!q) {
         reply_error(c, FT_EXIT_ERROR, "Out of memory");
         return;
@@ -284,18 +338,27 @@ static void handle_query(struct daemon *d, struct client *c, const void *payload
     case FT_Q_PROCESSES:
     case FT_Q_CONNECTIONS:
     case FT_Q_FLOWS:
-    case FT_Q_TRANSFERS: {
+    case FT_Q_TRANSFERS:
+    case FT_Q_EVENTS: {
         struct ft_msg_end end;
         struct ft_error err = {0};
         size_t mark = c->out_len;
         if (!ft_state_query(d->state, q, now_ns, reply_row, c, &end, &err)) {
             c->out_len = mark;
             reply_error(c, err.code, "%s", err.msg);
-        } else if (c->overflow)
+        } else if (c->overflow) {
             reply_error(c, FT_EXIT_ERROR,
                         "The result is too large. Narrow it with filters or --limit.");
-        else
+        } else if (q->kind == FT_Q_EVENTS && (q->flags & FT_QF_FOLLOW)) {
+            /* No end follows: the records made from here on do, until the client leaves. */
+            c->follow = q;
+            c->follow_from_ns = q->since_wall_ns ? ft_clock_wall_to_mono(q->since_wall_ns) : 0;
+            c->follow_to_ns =
+                q->until_wall_ns ? ft_clock_wall_to_mono(q->until_wall_ns) : UINT64_MAX;
+            return;
+        } else {
             reply(c, FT_MSG_END, &end, sizeof(end));
+        }
         break;
     }
     default:
@@ -329,6 +392,7 @@ static void client_drop(struct daemon *d, size_t index)
         stop_requested = 1;
     close(c->fd);
     free(c->out);
+    free(c->follow);
     d->clients[index] = d->clients[--d->nclients];
 }
 
@@ -444,16 +508,22 @@ int ft_daemon_run(const struct ft_daemon_config *cfg, struct ft_error *err)
     if (!state_cfg.lookup_process)
         state_cfg.lookup_process = cfg->backend->lookup_process;
     d->state = ft_state_create(&state_cfg);
-    if (!d->state) {
+    d->live = malloc(sizeof(*d->live));
+    if (!d->state || !d->live) {
         ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+        ft_state_destroy(d->state);
+        free(d->live);
         free(d);
         return fail_session(cfg, err);
     }
+    d->state->on_record = on_record;
+    d->state->on_record_ctx = d;
 
     struct ft_sink sink = {.ctx = d, .emit = on_event};
     d->backend = cfg->backend->open(&cfg->backend_cfg, &sink, err);
     if (!d->backend) {
         ft_state_destroy(d->state);
+        free(d->live);
         free(d);
         return fail_session(cfg, err);
     }
@@ -463,6 +533,7 @@ int ft_daemon_run(const struct ft_daemon_config *cfg, struct ft_error *err)
         if (d->listen_fd < 0) {
             cfg->backend->close(d->backend);
             ft_state_destroy(d->state);
+            free(d->live);
             free(d);
             return fail_session(cfg, err);
         }
@@ -555,6 +626,7 @@ int ft_daemon_run(const struct ft_daemon_config *cfg, struct ft_error *err)
     }
     cfg->backend->close(d->backend);
     ft_state_destroy(d->state);
+    free(d->live);
     free(d);
     return FT_EXIT_OK;
 }

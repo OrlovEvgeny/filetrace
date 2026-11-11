@@ -18,6 +18,7 @@ enum ft_msg_type : uint16_t {
     FT_MSG_ROW_TRANSFER = 19,
     FT_MSG_ROW_STATS = 20,
     FT_MSG_ROW_CAPABILITY = 21,
+    FT_MSG_ROW_EVENT = 22,
 
     FT_MSG_END = 64,
     FT_MSG_ERROR = 65,
@@ -38,6 +39,7 @@ enum ft_query_kind : uint16_t {
     FT_Q_CONNECTIONS,
     FT_Q_FLOWS,
     FT_Q_TRANSFERS,
+    FT_Q_EVENTS,
 };
 
 enum ft_query_flag : uint32_t {
@@ -48,6 +50,7 @@ enum ft_query_flag : uint32_t {
     FT_QF_INCLUDE_CHILDREN = 1u << 4,
     FT_QF_HAS_UID = 1u << 5,
     FT_QF_PATH_REGEX = 1u << 6, /* path is a POSIX extended regular expression */
+    FT_QF_FOLLOW = 1u << 7,     /* events: keep sending them as they are recorded */
 };
 
 enum ft_sort : uint16_t {
@@ -80,7 +83,8 @@ struct ft_query {
     uint8_t confidence;       /* enum ft_confidence or FT_CONF_ANY */
     uint8_t remote_host_bits; /* low-order address bits left out of the comparison */
     uint8_t local_host_bits;
-    uint8_t pad[6];
+    uint8_t pad[2];
+    uint32_t event_types;   /* events: bit per enum ft_record_type; 0: any */
     uint64_t since_wall_ns; /* 0: unbounded */
     uint64_t until_wall_ns; /* 0: unbounded */
     uint64_t min_bytes;
@@ -224,6 +228,9 @@ struct ft_row_stats {
     uint64_t rx_rate;
     uint64_t loss[4]; /* indexed by enum ft_loss_kind */
     uint64_t last_loss_wall_ns;
+    uint64_t event_log_bytes; /* capacity of the recent-event log; 0 when it is off */
+    uint64_t event_log_records;
+    uint64_t event_log_discarded; /* records that made room for later ones */
     uint64_t candidates_rejected; /* inferred associations below the thresholds */
     struct ft_table_usage processes;
     struct ft_table_usage sockets;
@@ -250,6 +257,54 @@ struct ft_row_capability {
     char reason[188];
 };
 
+enum ft_record_type : uint8_t {
+    FT_REC_PROCESS_EXEC = 1,
+    FT_REC_PROCESS_FORK,
+    FT_REC_PROCESS_EXIT,
+    FT_REC_SOCKET_CONNECT,
+    FT_REC_SOCKET_LISTEN,
+    FT_REC_SOCKET_ESTABLISHED,
+    FT_REC_SOCKET_CLOSE,
+    FT_REC_FILE_SEEN,
+    FT_REC_NETWORK_SEND,    /* bytes a socket accepted since its previous record */
+    FT_REC_NETWORK_RECEIVE, /* bytes a socket delivered since its previous record */
+    FT_REC_FILE_TRANSFER,   /* file bytes attributed to a socket since the previous record */
+    FT_REC_EVENT_LOSS,
+    FT_REC_TYPE_COUNT,
+};
+
+#define FT_EVENT_FILE_DELETED 0x1u
+#define FT_EVENT_HAS_CONFIDENCE 0x2u
+
+/* loss_kind of an EVENT_LOSS record made for a follower that read too slowly. */
+#define FT_EVENT_LOSS_READER 0xffu
+
+struct ft_row_event {
+    uint64_t seq;
+    uint64_t time_ns; /* wall clock on the wire */
+    uint64_t sock_id;
+    uint64_t bytes;      /* sent, received or attributed; EVENT_LOSS: events lost */
+    uint64_t read_bytes; /* FILE_TRANSFER: read from the file */
+    uint64_t file_size;
+    uint64_t dev;
+    uint64_t ino;
+    uint32_t pid;
+    uint32_t ppid;
+    uint32_t uid;
+    int32_t exit_status;
+    uint16_t proto;
+    uint8_t type; /* enum ft_record_type */
+    uint8_t confidence;
+    uint8_t method;
+    uint8_t loss_kind;
+    uint8_t flags;
+    uint8_t pad;
+    struct ft_endpoint local;
+    struct ft_endpoint remote;
+    char comm[FT_COMM_MAX];
+    char text[FT_PATH_MAX]; /* file path or executable; sent up to its terminator */
+};
+
 struct ft_msg_end {
     uint32_t rows;
     uint32_t health;
@@ -266,6 +321,10 @@ struct ft_msg_error {
 
 /* Payload size of the row: everything up to its path's terminator. */
 size_t ft_row_transfer_size(const struct ft_row_transfer *row);
+size_t ft_row_event_size(const struct ft_row_event *row);
+
+const char *ft_record_type_name(enum ft_record_type type);
+bool ft_record_type_parse(const char *text, enum ft_record_type *type);
 
 const char *ft_default_socket_path(void);
 
