@@ -39,6 +39,7 @@ static void usage(FILE *out, const char *program)
             "                            Longest read-to-send gap that still\n"
             "                            associates a file with a send (default: 2s)\n"
             "  --log-level <level>       error, warn, info or debug (default: info)\n"
+            "  --version                 Show the version\n"
             "  -h, --help                Show this help\n"
             "\n"
             "Modes:\n"
@@ -82,6 +83,10 @@ static int run(struct ft_config *config, int argc, char **argv, const char *prog
         const char *value = nullptr;
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(stdout, program);
+            return FT_EXIT_OK;
+        }
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("Filetrace agent %s\n", FT_VERSION);
             return FT_EXIT_OK;
         }
         if (option_value(argc, argv, &i, "--config", &value)) {
