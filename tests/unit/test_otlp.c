@@ -321,6 +321,106 @@ static void encodes_counters_as_cumulative_sums(void)
     ft_state_destroy(st);
 }
 
+static void set_strings(struct ft_row_event *row, const char *command_line, const char *cwd,
+                        const char *script)
+{
+    struct ft_process_strings text = {command_line, cwd, script};
+    size_t lead = strlen(row->text) + 1;
+    ft_process_strings_pack(row->text + lead, sizeof(row->text) - lead, &text);
+    row->flags |= FT_EVENT_PROCESS_TEXT;
+}
+
+static const LogRecord *only_record(LogsRequest *request)
+{
+    const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
+        request->resource_logs[0]->scope_logs[0];
+    CHECK_U64(scope->n_log_records, 1);
+    return scope->log_records[0];
+}
+
+/* Arguments leave only when asked for; the directory and script stay with the paths. */
+static void says_what_a_process_runs(void)
+{
+    struct ft_otlp_logs *quiet = ft_otlp_logs_new(16, true, false);
+    struct ft_otlp_logs *full = ft_otlp_logs_new(16, true, true);
+    struct ft_otlp_logs *pathless = ft_otlp_logs_new(16, false, true);
+    struct ft_row_event *row = transfer_row(10, 1);
+
+    set_strings(row, "python3 export.py --token=abc", "/srv/app", "/srv/app/export.py");
+    CHECK(ft_otlp_logs_add(quiet, row));
+    CHECK(ft_otlp_logs_add(full, row));
+    CHECK(ft_otlp_logs_add(pathless, row));
+
+    LogsRequest *request = encode(quiet);
+    const LogRecord *r = only_record(request);
+    CHECK_STR(text(r, "process.command_line"), "(absent)");
+    CHECK_STR(text(r, "process.working_directory"), "/srv/app");
+    CHECK_STR(text(r, "filetrace.process.script"), "/srv/app/export.py");
+    CHECK_STR(text(r, "file.path"), "/data/report.pdf");
+    release(request);
+
+    request = encode(full);
+    r = only_record(request);
+    CHECK_STR(text(r, "process.command_line"), "python3 export.py --token=abc");
+    release(request);
+
+    request = encode(pathless);
+    r = only_record(request);
+    CHECK_STR(text(r, "process.command_line"), "python3 export.py --token=abc");
+    CHECK_STR(text(r, "process.working_directory"), "(absent)");
+    CHECK_STR(text(r, "filetrace.process.script"), "(absent)");
+    CHECK_STR(text(r, "file.path"), "(absent)");
+    release(request);
+
+    /* A pool is no path. */
+    free(row);
+    row = transfer_row(10, 1);
+    set_strings(row, "php-fpm: pool site1", "/", "pool:site1");
+    CHECK(ft_otlp_logs_add(pathless, row));
+    request = encode(pathless);
+    CHECK_STR(text(only_record(request), "filetrace.process.script"), "pool:site1");
+    release(request);
+
+    ft_otlp_logs_free(quiet);
+    ft_otlp_logs_free(full);
+    ft_otlp_logs_free(pathless);
+    free(row);
+}
+
+/* The parts of a transfer are summed into the record that came first, strings and all. */
+static void sums_keep_the_first_strings(void)
+{
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, true);
+    struct ft_row_event *bare = transfer_row(10, 1);
+    struct ft_row_event *described = transfer_row(20, 2);
+
+    set_strings(described, "python3 export.py", "/srv/app", "/srv/app/export.py");
+    CHECK(ft_otlp_logs_add(batch, bare));
+    CHECK(ft_otlp_logs_add(batch, described));
+    described->sock_id++;
+    CHECK(ft_otlp_logs_add(batch, described));
+    bare->sock_id = described->sock_id;
+    CHECK(ft_otlp_logs_add(batch, bare));
+    described->sock_id++;
+    CHECK(ft_otlp_logs_add(batch, described));
+
+    LogsRequest *request = encode(batch);
+    const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
+        request->resource_logs[0]->scope_logs[0];
+    CHECK_U64(scope->n_log_records, 3);
+    if (scope->n_log_records == 3) {
+        CHECK_U64(number(scope->log_records[0], "filetrace.transfer.bytes"), 30);
+        CHECK_STR(text(scope->log_records[0], "process.command_line"), "(absent)");
+        CHECK_U64(number(scope->log_records[1], "filetrace.transfer.bytes"), 30);
+        CHECK_STR(text(scope->log_records[1], "process.command_line"), "python3 export.py");
+        CHECK_STR(text(scope->log_records[2], "filetrace.process.script"), "/srv/app/export.py");
+    }
+    release(request);
+    ft_otlp_logs_free(batch);
+    free(bare);
+    free(described);
+}
+
 void test_otlp(void)
 {
     describes_a_transfer_with_standard_names();
@@ -328,4 +428,6 @@ void test_otlp(void)
     leaves_paths_out_on_request_and_keeps_text_valid();
     refuses_more_than_a_batch_holds();
     encodes_counters_as_cumulative_sums();
+    says_what_a_process_runs();
+    sums_keep_the_first_strings();
 }
