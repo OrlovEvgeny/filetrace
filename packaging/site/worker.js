@@ -58,8 +58,8 @@ async function download(request, bucket, pathname) {
     headers.set("content-length", String(object.size));
     return new Response(null, { headers });
   }
-  // get() returns no body when a precondition of onlyIf fails.
-  if (!("body" in object)) {
+  // get() returns an object whose body is undefined when a precondition of onlyIf fails.
+  if (object.body === undefined) {
     const notModified = request.headers.has("if-none-match") || request.headers.has("if-modified-since");
     return new Response(null, { status: notModified ? 304 : 412, headers });
   }
