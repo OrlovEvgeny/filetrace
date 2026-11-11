@@ -91,6 +91,14 @@ static void print_text(FILE *o, const struct ft_row_event *e, bool timestamps)
             fprintf(o, "  ppid=%" PRIu32 "\n", e->ppid);
         fprintf(o, "  executable=%s\n", e->text);
     }
+    struct ft_process_strings ps;
+    ft_row_event_strings(e, &ps);
+    if (ps.command_line[0])
+        fprintf(o, "  command_line=%s\n", ps.command_line);
+    if (ps.cwd[0])
+        fprintf(o, "  working_directory=%s\n", ps.cwd);
+    if (ps.script[0])
+        fprintf(o, "  script=%s\n", ps.script);
     if (e->type == FT_REC_PROCESS_EXIT) {
         if (WIFSIGNALED(e->exit_status))
             fprintf(o, "  signal=%d\n", WTERMSIG(e->exit_status));
@@ -165,6 +173,14 @@ static void print_raw(FILE *o, const struct ft_row_event *e)
             e->file_size, e->method, e->confidence, e->loss_kind, e->flags, e->text);
 }
 
+static void json_member(FILE *o, const char *key, const char *value)
+{
+    if (!value[0])
+        return;
+    fprintf(o, ",\"%s\":", key);
+    ft_json_string(o, value);
+}
+
 static void json_endpoint(FILE *o, const char *side, const struct ft_endpoint *ep)
 {
     char buf[64];
@@ -199,6 +215,11 @@ static void print_json(FILE *o, const struct ft_row_event *e)
             fputs(",\"executable\":", o);
             ft_json_string(o, e->text);
         }
+        struct ft_process_strings ps;
+        ft_row_event_strings(e, &ps);
+        json_member(o, "command_line", ps.command_line);
+        json_member(o, "working_directory", ps.cwd);
+        json_member(o, "script", ps.script);
         if (e->type == FT_REC_PROCESS_EXIT) {
             if (WIFSIGNALED(e->exit_status))
                 fprintf(o, ",\"signal\":%d", WTERMSIG(e->exit_status));
@@ -255,11 +276,12 @@ static void on_event(void *ctx, uint16_t type, const void *payload, size_t size)
 
     if (type != FT_MSG_ROW_EVENT || size < offsetof(struct ft_row_event, text))
         return;
-    memset(e, 0, offsetof(struct ft_row_event, text) + 1);
-    memcpy(e, payload, size < sizeof(*e) ? size : sizeof(*e));
+    if (size > sizeof(*e))
+        size = sizeof(*e);
+    memcpy(e, payload, size);
+    memset((unsigned char *)e + size, 0, sizeof(*e) - size);
     e->comm[sizeof(e->comm) - 1] = '\0';
-    e->text[size < sizeof(*e) ? size - offsetof(struct ft_row_event, text) : FT_PATH_MAX - 1] =
-        '\0';
+    e->text[sizeof(e->text) - 1] = '\0';
 
     if (p->raw) {
         print_raw(o, e);

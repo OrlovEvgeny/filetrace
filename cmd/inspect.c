@@ -245,13 +245,17 @@ static const struct ft_view_column history_columns[] = {
     {"TIME", "transfer.started", false},    {"PROCESS", "process.name", false},
     {"PID", "process.pid", false},          {"REMOTE", "@remote", false},
     {"BYTES", "transfer.bytes_sent", true}, {"METHOD", "@method", false},
-    {"CONFIDENCE", "@confidence", false},
+    {"CONFIDENCE", "@confidence", false},   {"SCRIPT", "process.script", false},
 };
 
 static const struct ft_view_column sent_columns[] = {
-    {"FILE", "@file", false},     {"PROCESS", "process.name", false},
-    {"REMOTE", "@remote", false}, {"BYTES", "transfer.bytes_sent", true},
-    {"METHOD", "@method", false}, {"CONFIDENCE", "@confidence", false},
+    {"FILE", "@file", false},
+    {"PROCESS", "process.name", false},
+    {"REMOTE", "@remote", false},
+    {"BYTES", "transfer.bytes_sent", true},
+    {"METHOD", "@method", false},
+    {"CONFIDENCE", "@confidence", false},
+    {"SCRIPT", "process.script", false},
 };
 
 static void sent_files(const struct inspect *in, const struct ft_rows *transfers, const char *title,
@@ -566,6 +570,14 @@ static int inspect_process(struct inspect *in, const char *arg)
     field(o, "User:", "%s", user_name(p.uid, a, sizeof(a)));
     if (p.exe[0])
         field(o, "Executable:", "%s", p.exe);
+    struct ft_process_strings text;
+    ft_row_process_strings(&p, &text);
+    if (text.command_line[0])
+        field(o, "Command line:", "%s", text.command_line);
+    if (text.cwd[0])
+        field(o, "Directory:", "%s", text.cwd);
+    if (text.script[0])
+        field(o, "Script:", "%s", text.script);
     if (cgroup[0])
         field(o, "Cgroup:", "%s", cgroup);
     else if (p.cgroup_id)

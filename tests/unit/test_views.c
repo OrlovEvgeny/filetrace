@@ -152,11 +152,13 @@ static void transfers(void)
     text = render(FT_VIEW_FILES, &rows, FT_FMT_CSV, false);
     CHECK(strstr(text,
                  "event,transfer_id,timestamp,host,platform,process.pid,process.ppid,"
-                 "process.name,process.executable,file.path,file.inode,file.device,") == text);
+                 "process.name,process.executable,process.command_line,"
+                 "process.working_directory,process.script,file.path,file.inode,file.device,") ==
+          text);
     /* A field containing a comma or a quote is quoted, with quotes doubled. */
     CHECK(
         strstr(text,
-               ",nginx,/usr/sbin/nginx,\"/data/export/report, \"\"final\"\".csv\","
+               ",nginx,/usr/sbin/nginx,,,,\"/data/export/report, \"\"final\"\".csv\","
                "928371,2049,148293012,root,ext4,false,tcp,127,10.0.0.10,443,203.0.113.42,"
                "52144,,"
                "sendfile,148293012,,1258291,1248,2026-11-10T21:42:03.010Z,8200,completed,exact,") !=

@@ -294,7 +294,7 @@ expect_match "grouped flows" "$(ft flows --group-by protocol --format csv | head
 # The event log holds the records that the totals above add up.
 jsonl=$(ft events --type file_transfer --file "$data/report.csv" --jsonl)
 expect_match "events: transfer record" "$jsonl" \
-    '^\{"event":"file_transfer","timestamp":"[^"]+","sequence":[0-9]+,"process":\{"pid":[0-9]+,.*"name":"ft_workload"\},"file":\{"path":"[^"]*/report\.csv",.*"size":5000000,.*"network":\{"protocol":"tcp",.*"remote_ip":"127\.0\.0\.1",.*"transfer":\{"method":"sendfile","bytes_sent":[0-9]+,"confidence":"exact"\}\}$'
+    '^\{"event":"file_transfer","timestamp":"[^"]+","sequence":[0-9]+,"process":\{"pid":[0-9]+,.*"name":"ft_workload"[^}]*\},"file":\{"path":"[^"]*/report\.csv",.*"size":5000000,.*"network":\{"protocol":"tcp",.*"remote_ip":"127\.0\.0\.1",.*"transfer":\{"method":"sendfile","bytes_sent":[0-9]+,"confidence":"exact"\}\}$'
 expect "events: transfer bytes add up" "$(printf '%s\n' "$jsonl" |
     sed 's/.*"method":"sendfile","bytes_sent":\([0-9]*\).*/\1/' | awk '{ s += $1 } END { print s }')" \
     5000000

@@ -34,6 +34,7 @@ struct value {
 
 constexpr unsigned F_VIRTUAL = 0x1; /* table-only combination of other fields */
 constexpr unsigned F_UPPER = 0x2;   /* upper case in tables */
+constexpr unsigned F_SPARSE = 0x4;  /* its column is left out of a table where no row has it */
 
 struct field {
     const char *key;
@@ -213,6 +214,27 @@ static void p_exe(const void *row, struct value *v)
     ROW(ft_row_process);
     set_str(v, r->exe);
 }
+static void p_command_line(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    struct ft_process_strings s;
+    ft_row_process_strings(r, &s);
+    set_str(v, s.command_line);
+}
+static void p_cwd(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    struct ft_process_strings s;
+    ft_row_process_strings(r, &s);
+    set_str(v, s.cwd);
+}
+static void p_script(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    struct ft_process_strings s;
+    ft_row_process_strings(r, &s);
+    set_str(v, s.script);
+}
 static void p_tx(const void *row, struct value *v)
 {
     ROW(ft_row_process);
@@ -308,6 +330,9 @@ static const struct field process_fields[] = {
     {"uid", 0, p_uid},
     {"gid", 0, p_gid},
     {"executable", 0, p_exe},
+    {"command_line", 0, p_command_line},
+    {"working_directory", 0, p_cwd},
+    {"script", F_SPARSE, p_script},
     {"bytes_sent", 0, p_tx},
     {"bytes_received", 0, p_rx},
     {"bytes_sent_per_second", 0, p_tx_rate},
@@ -332,6 +357,7 @@ static const struct ft_view_column process_columns[] = {
     {"CONNECTIONS", "connections", true},
     {"SENT", "bytes_sent", true},
     {"RECEIVED", "bytes_received", true},
+    {"SCRIPT", "script", false},
 };
 
 static void c_proto(const void *row, struct value *v)
@@ -679,6 +705,30 @@ static void t_exe(const void *row, struct value *v)
     set_str(v, r->exe);
 }
 
+static void t_command_line(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    struct ft_process_strings s;
+    ft_row_transfer_strings(r, &s);
+    set_str(v, s.command_line);
+}
+
+static void t_cwd(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    struct ft_process_strings s;
+    ft_row_transfer_strings(r, &s);
+    set_str(v, s.cwd);
+}
+
+static void t_script(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    struct ft_process_strings s;
+    ft_row_transfer_strings(r, &s);
+    set_str(v, s.script);
+}
+
 static void t_ppid(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
@@ -898,6 +948,9 @@ static const struct field transfer_fields[] = {
     {"process.ppid", 0, t_ppid},
     {"process.name", 0, t_name},
     {"process.executable", 0, t_exe},
+    {"process.command_line", 0, t_command_line},
+    {"process.working_directory", 0, t_cwd},
+    {"process.script", F_SPARSE, t_script},
     {"file.path", 0, t_path},
     {"file.inode", 0, t_inode},
     {"file.device", 0, t_device},
@@ -937,6 +990,7 @@ static const struct ft_view_column file_columns[] = {
     {"BYTES", "transfer.bytes_sent", true},
     {"METHOD", "@method", false},
     {"CONFIDENCE", "@confidence", false},
+    {"SCRIPT", "process.script", false},
 };
 
 static const struct ft_view_column transfer_columns[] = {
@@ -947,6 +1001,7 @@ static const struct ft_view_column transfer_columns[] = {
     {"BYTES", "transfer.bytes_sent", true},
     {"METHOD", "@method", false},
     {"CONFIDENCE", "@confidence", false},
+    {"SCRIPT", "process.script", false},
 };
 
 static const struct view views[] = {
@@ -1069,18 +1124,34 @@ static const char *table_cell(void *ctx, size_t r, size_t c, char *buf, size_t s
     return value_text(t->fields[c], t->value, false, buf, size);
 }
 
+static bool any_value(const struct ft_rows *rows, size_t nrows, const struct view *view,
+                      const struct field *f, void *row, struct value *value)
+{
+    for (size_t r = 0; r < nrows; r++) {
+        ft_rows_get(rows, r, row, view->row_size);
+        get_value(f, row, value);
+        if (!value->absent)
+            return true;
+    }
+    return false;
+}
+
 static void render_table(const struct view *view, const struct ft_rows *rows, size_t nrows,
                          const struct ft_view_column *columns, size_t ncolumns, FILE *out,
                          bool rank, void *row, struct value *value)
 {
     struct ft_column_spec specs[16];
     const struct field *fields[16];
+    size_t nfields = 0;
     size_t ncols = 0;
 
     if (rank)
         specs[ncols++] = (struct ft_column_spec){"RANK", false};
     for (size_t i = 0; i < ncolumns && ncols < FT_ARRAY_LEN(specs); i++) {
-        fields[i] = find_field(view, columns[i].key);
+        const struct field *f = find_field(view, columns[i].key);
+        if ((f->flags & F_SPARSE) && !any_value(rows, nrows, view, f, row, value))
+            continue;
+        fields[nfields++] = f;
         specs[ncols++] = (struct ft_column_spec){columns[i].title, columns[i].right};
     }
 
