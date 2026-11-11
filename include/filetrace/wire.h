@@ -5,7 +5,7 @@
 
 /* Frames use host byte order: both ends of the socket run on the same host. */
 #define FT_WIRE_MAGIC 0x43525446u /* "FTRC" */
-#define FT_WIRE_VERSION 2
+#define FT_WIRE_VERSION 3
 #define FT_WIRE_MAX_PAYLOAD (64u * 1024u)
 
 enum ft_msg_type : uint16_t {
@@ -248,7 +248,7 @@ struct ft_row_stats {
     uint32_t pid;
     char backend[48];
     char mode[16];
-    char version[16];
+    char version[48];
 };
 
 struct ft_row_capability {
