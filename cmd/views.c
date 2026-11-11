@@ -278,10 +278,10 @@ static const struct field process_fields[] = {
     {"uid", 0, p_uid},
     {"gid", 0, p_gid},
     {"executable", 0, p_exe},
-    {"outbound_bytes", 0, p_tx},
-    {"inbound_bytes", 0, p_rx},
-    {"outbound_bytes_per_second", 0, p_tx_rate},
-    {"inbound_bytes_per_second", 0, p_rx_rate},
+    {"bytes_sent", 0, p_tx},
+    {"bytes_received", 0, p_rx},
+    {"bytes_sent_per_second", 0, p_tx_rate},
+    {"bytes_received_per_second", 0, p_rx_rate},
     {"connections", 0, p_conns},
     {"files", 0, p_files},
     {"transfers", 0, p_transfers},
@@ -295,12 +295,8 @@ static const struct field process_fields[] = {
 };
 
 static const struct column process_columns[] = {
-    {"PID", "pid", false},
-    {"PPID", "ppid", false},
-    {"PROCESS", "name", false},
-    {"USER", "user", false},
-    {"OUTBOUND", "outbound_bytes", true},
-    {"INBOUND", "inbound_bytes", true},
+    {"PID", "pid", false},   {"PPID", "ppid", false},          {"PROCESS", "name", false},
+    {"USER", "user", false}, {"OUTBOUND", "bytes_sent", true}, {"INBOUND", "bytes_received", true},
 };
 
 static void c_proto(const void *row, struct value *v)
@@ -413,15 +409,15 @@ static const struct field connection_fields[] = {
     {"process", 0, c_process},
     {"@local", F_VIRTUAL, c_local},
     {"@remote", F_VIRTUAL, c_remote},
-    {"local_address", 0, c_laddr},
+    {"local_ip", 0, c_laddr},
     {"local_port", 0, c_lport},
-    {"remote_address", 0, c_raddr},
+    {"remote_ip", 0, c_raddr},
     {"remote_port", 0, c_rport},
     {"state", F_UPPER, c_state},
-    {"sent_bytes", 0, c_tx},
-    {"received_bytes", 0, c_rx},
-    {"sent_bytes_per_second", 0, c_tx_rate},
-    {"received_bytes_per_second", 0, c_rx_rate},
+    {"bytes_sent", 0, c_tx},
+    {"bytes_received", 0, c_rx},
+    {"bytes_sent_per_second", 0, c_tx_rate},
+    {"bytes_received_per_second", 0, c_rx_rate},
     {"first_seen", 0, c_first},
     {"last_seen", 0, c_last},
 };
@@ -547,14 +543,14 @@ static const struct field flow_fields[] = {
     {"process", 0, f_process},
     {"@local", F_VIRTUAL, f_local},
     {"@remote", F_VIRTUAL, f_remote},
-    {"local_address", 0, f_laddr},
+    {"local_ip", 0, f_laddr},
     {"local_port", 0, f_lport},
-    {"remote_address", 0, f_raddr},
+    {"remote_ip", 0, f_raddr},
     {"remote_port", 0, f_rport},
-    {"sent_bytes", 0, f_tx},
-    {"received_bytes", 0, f_rx},
-    {"sent_bytes_per_second", 0, f_tx_rate},
-    {"received_bytes_per_second", 0, f_rx_rate},
+    {"bytes_sent", 0, f_tx},
+    {"bytes_received", 0, f_rx},
+    {"bytes_sent_per_second", 0, f_tx_rate},
+    {"bytes_received_per_second", 0, f_rx_rate},
     {"send_operations", 0, f_txops},
     {"receive_operations", 0, f_rxops},
     {"first_seen", 0, f_first},
@@ -564,7 +560,7 @@ static const struct field flow_fields[] = {
 static const struct column flow_columns[] = {
     {"PROCESS", "process", false}, {"PROTO", "protocol", false},
     {"LOCAL", "@local", false},    {"REMOTE", "@remote", false},
-    {"SENT", "sent_bytes", true},  {"RECEIVED", "received_bytes", true},
+    {"SENT", "bytes_sent", true},  {"RECEIVED", "bytes_received", true},
 };
 
 static struct ft_host_info host_info;
@@ -579,7 +575,7 @@ void ft_transfer_id_format(const struct ft_row_transfer *row, char *buf, size_t 
 static void t_event(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
-    set_str(v, (r->flags & FT_XFER_ACTIVE) ? "transfer.progress" : "transfer.completed");
+    set_str(v, (r->flags & FT_XFER_FILE_KNOWN) ? "file_transfer" : "network_transfer");
 }
 
 static void t_id(const void *row, struct value *v)
@@ -835,20 +831,20 @@ static const struct field transfer_fields[] = {
     {"file.deleted", 0, t_deleted},
     {"network.protocol", 0, t_proto},
     {"network.socket_id", 0, t_sock},
-    {"network.local_address", 0, t_laddr},
+    {"network.local_ip", 0, t_laddr},
     {"network.local_port", 0, t_lport},
-    {"network.remote_address", 0, t_raddr},
+    {"network.remote_ip", 0, t_raddr},
     {"network.remote_port", 0, t_rport},
     {"transfer.method", 0, t_method},
-    {"transfer.bytes", 0, t_bytes},
+    {"transfer.bytes_sent", 0, t_bytes},
     {"transfer.bytes_read", 0, t_read_bytes},
     {"transfer.bytes_per_second", 0, t_rate},
     {"transfer.operations", 0, t_ops},
     {"transfer.duration_ms", 0, t_duration},
     {"transfer.state", 0, t_state},
-    {"attribution.confidence", 0, t_confidence},
-    {"attribution.evidence", 0, t_evidence},
-    {"attribution.incomplete", 0, t_incomplete},
+    {"transfer.confidence", 0, t_confidence},
+    {"transfer.evidence", 0, t_evidence},
+    {"transfer.incomplete", 0, t_incomplete},
     {"@file", F_VIRTUAL, t_file_column},
     {"@remote", F_VIRTUAL, t_remote},
     {"@method", F_VIRTUAL, t_method_column},
@@ -856,9 +852,12 @@ static const struct field transfer_fields[] = {
 };
 
 static const struct column file_columns[] = {
-    {"FILE", "@file", false},           {"PID", "process.pid", false},
-    {"PROCESS", "process.name", false}, {"REMOTE", "@remote", false},
-    {"SENT", "transfer.bytes", true},   {"CONFIDENCE", "@confidence", false},
+    {"FILE", "@file", false},
+    {"PID", "process.pid", false},
+    {"PROCESS", "process.name", false},
+    {"REMOTE", "@remote", false},
+    {"SENT", "transfer.bytes_sent", true},
+    {"CONFIDENCE", "@confidence", false},
 };
 
 static const struct column transfer_columns[] = {
@@ -866,7 +865,7 @@ static const struct column transfer_columns[] = {
     {"PROCESS", "process.name", false},
     {"FILE", "@file", false},
     {"REMOTE", "@remote", false},
-    {"BYTES", "transfer.bytes", true},
+    {"BYTES", "transfer.bytes_sent", true},
     {"METHOD", "@method", false},
     {"CONFIDENCE", "@confidence", false},
 };

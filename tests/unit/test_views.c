@@ -113,7 +113,7 @@ static void transfers(void)
     free(text);
 
     text = render(FT_VIEW_FILES, &rows, FT_FMT_JSONL, false);
-    CHECK(strstr(text, "{\"event\":\"transfer.completed\",\"transfer_id\":\"tr_2a\","
+    CHECK(strstr(text, "{\"event\":\"file_transfer\",\"transfer_id\":\"tr_2a\","
                        "\"timestamp\":\"2026-11-10T21:42:11.210Z\",\"host\":\"") == text);
     CHECK(strstr(text, "\"process\":{\"pid\":1842,\"ppid\":1,\"name\":\"nginx\","
                        "\"executable\":\"/usr/sbin/nginx\"},") != nullptr);
@@ -122,13 +122,12 @@ static void transfers(void)
                        "\"owner\":\"root\",\"filesystem\":\"ext4\","
                        "\"deleted\":false},") != nullptr);
     CHECK(strstr(text, "\"network\":{\"protocol\":\"tcp\",\"socket_id\":127,"
-                       "\"local_address\":\"10.0.0.10\",\"local_port\":443,"
-                       "\"remote_address\":\"203.0.113.42\",\"remote_port\":52144},") != nullptr);
-    CHECK(strstr(text, "\"transfer\":{\"method\":\"sendfile\",\"bytes\":148293012,"
-                       "\"bytes_per_second\":1258291,\"operations\":1248,\"duration_ms\":8200,"
-                       "\"state\":\"completed\"},") != nullptr);
+                       "\"local_ip\":\"10.0.0.10\",\"local_port\":443,"
+                       "\"remote_ip\":\"203.0.113.42\",\"remote_port\":52144},") != nullptr);
     CHECK(strstr(text,
-                 "\"attribution\":{\"confidence\":\"exact\",\"evidence\":["
+                 "\"transfer\":{\"method\":\"sendfile\",\"bytes_sent\":148293012,"
+                 "\"bytes_per_second\":1258291,\"operations\":1248,\"duration_ms\":8200,"
+                 "\"state\":\"completed\",\"confidence\":\"exact\",\"evidence\":["
                  "\"direct_file_to_socket_transfer\",\"file_identity\","
                  "\"socket_identity\",\"remote_endpoint\"],\"incomplete\":false}}\n") != nullptr);
 
@@ -139,8 +138,9 @@ static void transfers(void)
     CHECK(strstr(second, "\"method\"") == nullptr);
     CHECK(strstr(second, "\"evidence\"") == nullptr);
     CHECK(strstr(second, "\"process\":{\"pid\":2910,\"name\":\"python\"},") != nullptr);
-    CHECK(strstr(second, "\"attribution\":{\"confidence\":\"unknown\",\"incomplete\":true}}\n") !=
-          nullptr);
+    CHECK(strstr(second, "{\"event\":\"network_transfer\",") == second);
+    CHECK(strstr(second, "\"state\":\"completed\",\"confidence\":\"unknown\","
+                         "\"incomplete\":true}}\n") != nullptr);
     free(text);
 
     text = render(FT_VIEW_FILES, &rows, FT_FMT_JSON, false);
@@ -193,12 +193,13 @@ static void processes(void)
     free(text);
 
     text = render(FT_VIEW_PROCESSES, &rows, FT_FMT_JSONL, false);
-    CHECK_STR(text, "{\"pid\":1842,\"ppid\":1,\"name\":\"nginx\",\"user\":\"4000000000\","
-                    "\"uid\":4000000000,\"gid\":0,\"outbound_bytes\":1524713390,"
-                    "\"inbound_bytes\":85983232,\"outbound_bytes_per_second\":13002342,"
-                    "\"inbound_bytes_per_second\":0,\"connections\":12,\"files\":0,\"transfers\":0,"
-                    "\"active_transfers\":0,"
-                    "\"status\":\"running\"}\n");
+    CHECK_STR(text,
+              "{\"pid\":1842,\"ppid\":1,\"name\":\"nginx\",\"user\":\"4000000000\","
+              "\"uid\":4000000000,\"gid\":0,\"bytes_sent\":1524713390,"
+              "\"bytes_received\":85983232,\"bytes_sent_per_second\":13002342,"
+              "\"bytes_received_per_second\":0,\"connections\":12,\"files\":0,\"transfers\":0,"
+              "\"active_transfers\":0,"
+              "\"status\":\"running\"}\n");
     free(text);
 
     text = render(FT_VIEW_PROCESSES, &rows, FT_FMT_QUIET, false);
@@ -230,10 +231,10 @@ static void connections(void)
 
     text = render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_JSONL, false);
     CHECK_STR(text, "{\"socket_id\":18,\"protocol\":\"udp\",\"pid\":3821,"
-                    "\"process\":\"python\",\"local_address\":\"2001:db8::1\","
-                    "\"local_port\":53001,\"state\":\"active\",\"sent_bytes\":0,"
-                    "\"received_bytes\":0,\"sent_bytes_per_second\":0,"
-                    "\"received_bytes_per_second\":0}\n");
+                    "\"process\":\"python\",\"local_ip\":\"2001:db8::1\","
+                    "\"local_port\":53001,\"state\":\"active\",\"bytes_sent\":0,"
+                    "\"bytes_received\":0,\"bytes_sent_per_second\":0,"
+                    "\"bytes_received_per_second\":0}\n");
     free(text);
     ft_rows_free(&rows);
 }

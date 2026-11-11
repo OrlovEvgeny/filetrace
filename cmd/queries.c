@@ -271,9 +271,9 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
     }
 
     if (out->format == FT_FMT_CSV) {
-        fprintf(o, "%s,sent_bytes", layout->label_key);
+        fprintf(o, "%s,bytes_sent", layout->label_key);
         if (layout->received)
-            fputs(",received_bytes", o);
+            fputs(",bytes_received", o);
         if (layout->count_key)
             fprintf(o, ",%s", layout->count_key);
         if (layout->confidence)
@@ -303,9 +303,9 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
             fputs(i ? ",\n " : "\n ", o);
         fprintf(o, "{\"%s\":", layout->label_key);
         ft_json_string(o, it->label);
-        fprintf(o, ",\"sent_bytes\":%" PRIu64, it->tx);
+        fprintf(o, ",\"bytes_sent\":%" PRIu64, it->tx);
         if (layout->received)
-            fprintf(o, ",\"received_bytes\":%" PRIu64, it->rx);
+            fprintf(o, ",\"bytes_received\":%" PRIu64, it->rx);
         if (layout->count_key)
             fprintf(o, ",\"%s\":%" PRIu64, layout->count_key, it->count);
         if (layout->confidence)
@@ -330,7 +330,7 @@ enum flow_grouping : uint8_t {
 
 static const struct group_layout flow_layouts[] = {
     [GROUP_PROCESS] = {"PROCESS", "process", "FLOWS", "flows", true, false, false},
-    [GROUP_REMOTE] = {"REMOTE", "remote_address", "FLOWS", "flows", true, false, false},
+    [GROUP_REMOTE] = {"REMOTE", "remote_ip", "FLOWS", "flows", true, false, false},
     [GROUP_PORT] = {"REMOTE PORT", "remote_port", "FLOWS", "flows", true, false, false},
     [GROUP_PROTOCOL] = {"PROTO", "protocol", "FLOWS", "flows", true, false, false},
     [GROUP_FILE] = {"FILE", "file", "TRANSFERS", "transfers", false, true, false},
@@ -805,8 +805,8 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
     usage_json(o, "files", &s->files, false);
     usage_json(o, "transfers", &s->transfers, true);
     fprintf(o,
-            "},\"network\":{\"outbound_bytes\":%" PRIu64 ",\"inbound_bytes\":%" PRIu64
-            ",\"outbound_bytes_per_second\":%" PRIu64 ",\"inbound_bytes_per_second\":%" PRIu64
+            "},\"network\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
+            ",\"bytes_sent_per_second\":%" PRIu64 ",\"bytes_received_per_second\":%" PRIu64
             ",\"open_sockets\":%u,\"active_flows\":%u,\"active_transfers\":%u}}\n",
             s->tx_bytes, s->rx_bytes, s->tx_rate, s->rx_rate, s->open_sockets, s->active_flows,
             s->active_transfers);
