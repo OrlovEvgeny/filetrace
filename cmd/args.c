@@ -361,7 +361,7 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         if (r < 0)
             return -1;
         if (!ft_method_parse(v, &m))
-            return bad_value(qa, "--method", v, "sendfile or read_send");
+            return bad_value(qa, "--method", v, "sendfile, read-write, splice, mmap or io_uring");
         q->method = m;
         return 1;
     }
@@ -458,7 +458,9 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
         {FT_QO_FAMILY, "  --family ipv4|ipv6      Only this address family\n"},
         {FT_QO_STATE, "  --state <state>         connecting, established, listening, closed,\n"
                       "                          active or idle\n"},
-        {FT_QO_METHOD, "  --method <method>       sendfile or read_send\n"},
+        {FT_QO_METHOD,
+         "  --method <method>       sendfile or read-write; splice, mmap and io_uring\n"
+         "                          are accepted but not observed by this build\n"},
         {FT_QO_CONFIDENCE, "  --confidence <level>    exact, strong, inferred or unknown\n"},
         {FT_QO_MIN_BYTES, "  --min-bytes <size>      At least this many bytes (1KB, 100MB, 1GB)\n"},
         {FT_QO_ACTIVITY, "  --active                Only records still in progress\n"

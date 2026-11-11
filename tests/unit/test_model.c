@@ -103,8 +103,14 @@ static void names(void)
 
     CHECK(ft_method_parse("sendfile", &method));
     CHECK(method == FT_METHOD_SENDFILE);
-    CHECK(ft_method_parse("read+send", &method));
+    CHECK(ft_method_parse("read-write", &method));
     CHECK(method == FT_METHOD_READ_SEND);
+    CHECK_STR(ft_method_name(FT_METHOD_READ_SEND), "read-write");
+    CHECK(ft_method_observed(method));
+    /* Named so that a query can ask for them; no probe attributes them. */
+    CHECK(ft_method_parse("io_uring", &method));
+    CHECK(!ft_method_observed(method));
+    CHECK(!ft_method_parse("read_send", &method));
     CHECK(!ft_method_parse("none", &method));
 
     CHECK(ft_sock_state_parse("established", &state));

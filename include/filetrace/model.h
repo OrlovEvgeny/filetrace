@@ -22,7 +22,10 @@ enum ft_confidence : uint8_t {
 enum ft_method : uint8_t {
     FT_METHOD_NONE = 0,
     FT_METHOD_SENDFILE = 1,
-    FT_METHOD_READ_SEND = 2,
+    FT_METHOD_READ_SEND = 2, /* a read of the file followed by a send; named "read-write" */
+    FT_METHOD_SPLICE = 3,
+    FT_METHOD_MMAP = 4,
+    FT_METHOD_IO_URING = 5,
     FT_METHOD_ANY = 0xff,
 };
 
@@ -71,6 +74,9 @@ bool ft_confidence_parse(const char *text, enum ft_confidence *c);
 
 const char *ft_method_name(enum ft_method m);
 bool ft_method_parse(const char *text, enum ft_method *m);
+
+/* Whether any probe can attribute a transfer made this way. */
+bool ft_method_observed(enum ft_method m);
 
 const char *ft_mode_name(enum ft_mode m);
 bool ft_mode_parse(const char *text, enum ft_mode *m);

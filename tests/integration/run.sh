@@ -142,7 +142,7 @@ settle
 csv=$(ft files --path "$data/upload.bin" --format csv)
 expect "read+send rows" "$(printf '%s\n' "$csv" | rows)" 1
 expect "read+send confidence" "$(printf '%s\n' "$csv" | column attribution.confidence)" inferred
-expect "read+send method" "$(printf '%s\n' "$csv" | column transfer.method)" read_send
+expect "read+send method" "$(printf '%s\n' "$csv" | column transfer.method)" read-write
 expect "read+send bytes" "$(printf '%s\n' "$csv" | column transfer.bytes)" 3000000
 expect "read+send bytes read" "$(printf '%s\n' "$csv" | column transfer.bytes_read)" 3000000
 expect_match "read+send evidence" "$(printf '%s\n' "$csv" | column attribution.evidence)" \

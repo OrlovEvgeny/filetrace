@@ -8,7 +8,8 @@
 #include <sys/socket.h>
 
 static const char *const confidence_names[] = {"unknown", "inferred", "strong", "exact"};
-static const char *const method_names[] = {"none", "sendfile", "read_send"};
+static const char *const method_names[] = {"none",   "sendfile", "read-write",
+                                           "splice", "mmap",     "io_uring"};
 static const char *const state_names[] = {"unknown", "connecting", "established", "listening",
                                           "closed",  "active",     "idle"};
 
@@ -45,14 +46,15 @@ const char *ft_method_name(enum ft_method m)
 bool ft_method_parse(const char *text, enum ft_method *m)
 {
     uint8_t v;
-    if (strcasecmp(text, "read+send") == 0 || strcasecmp(text, "read-send") == 0) {
-        *m = FT_METHOD_READ_SEND;
-        return true;
-    }
     if (!parse_name(text, method_names, FT_ARRAY_LEN(method_names), &v) || v == FT_METHOD_NONE)
         return false;
     *m = (enum ft_method)v;
     return true;
+}
+
+bool ft_method_observed(enum ft_method m)
+{
+    return m == FT_METHOD_SENDFILE || m == FT_METHOD_READ_SEND;
 }
 
 const char *ft_mode_name(enum ft_mode m)

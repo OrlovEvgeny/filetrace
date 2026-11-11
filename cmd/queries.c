@@ -545,6 +545,16 @@ static int transfer_command(const struct ft_cli *cli, struct ft_args *a, const c
             return unknown_argument(command, a);
         }
     }
+
+    /* An empty answer would read as "nothing was sent this way". */
+    enum ft_method method = (enum ft_method)qa.query.method;
+    if (method != FT_METHOD_ANY && !ft_method_observed(method)) {
+        fprintf(stderr,
+                "filetrace: transfers made with %s are not observed by this build, so none\n"
+                "can be listed. 'filetrace capabilities' shows what is observed.\n",
+                ft_method_name(method));
+        return FT_EXIT_UNSUPPORTED;
+    }
     return run_list(cli, &qa, view, FT_MSG_ROW_TRANSFER, false,
                     unknown_by_default ? "transfers" : "file transfers");
 }
