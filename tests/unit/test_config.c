@@ -74,6 +74,9 @@ static const char every_section[] = "[agent]\n"
                                     "exclude_processes = [\"systemd\"]\n"
                                     "exclude_paths = [\"/proc/*\", \"/sys/*\"]\n"
                                     "\n"
+                                    "[process]\n"
+                                    "arguments = false\n"
+                                    "\n"
                                     "[limits]\n"
                                     "metric_series = 512\n"
                                     "\n"
@@ -87,6 +90,7 @@ static const char every_section[] = "[agent]\n"
                                     "metrics = false\n"
                                     "events = [\"file_transfer\", \"process_exec\"]\n"
                                     "file_paths = false\n"
+                                    "command_line = true\n"
                                     "batch_size = 256\n"
                                     "flush_interval = \"500ms\"\n"
                                     "timeout = \"3s\"\n"
@@ -120,6 +124,8 @@ static void reads_every_section(void)
     CHECK(cfg->agent.otlp.logs);
     CHECK(!cfg->agent.otlp.metrics);
     CHECK(!cfg->agent.otlp.file_paths);
+    CHECK(cfg->agent.otlp.command_line);
+    CHECK(!cfg->agent.state_cfg.command_line_arguments);
     CHECK_STR(cfg->agent.otlp.endpoint, "unix:/run/otelcol.sock");
     CHECK_U64(cfg->agent.otlp.event_types, 1u << FT_REC_FILE_TRANSFER | 1u << FT_REC_PROCESS_EXEC);
     CHECK_U64(cfg->agent.otlp.batch_size, 256);
@@ -302,6 +308,8 @@ static void prints_what_it_reads(void)
     CHECK_U64(second->agent.otlp.event_types, first->agent.otlp.event_types);
     CHECK_U64(second->agent.otlp.flush_interval_ns, 500 * FT_NS_PER_MS);
     CHECK(!second->agent.otlp.file_paths);
+    CHECK(second->agent.otlp.command_line);
+    CHECK(!second->agent.state_cfg.command_line_arguments);
     CHECK_STR(second->agent.api.listen, "127.0.0.1:9500");
 
     /* Printing the defaults reads back without a warning. */
@@ -318,6 +326,9 @@ static void prints_what_it_reads(void)
     CHECK_U64(reread->agent.backend_cfg.corr_window_ns, defaults->agent.backend_cfg.corr_window_ns);
     CHECK_U64(reread->background_path_count, defaults->background_path_count);
     CHECK_STR(reread->background_paths[0], defaults->background_paths[0]);
+    /* Arguments are kept for the commands on this host and left out of what is exported. */
+    CHECK(reread->agent.state_cfg.command_line_arguments);
+    CHECK(!reread->agent.otlp.command_line);
 
     free(text);
     ft_config_free(first);
