@@ -528,6 +528,35 @@ else
     echo "SKIP: python3 is not installed; its interpreter checks did not run"
 fi
 
+# A sender that exits right after sending is gone before /proc can be read; its command line
+# and directory come with its exec.
+(cd "$data" && "$workload" readsend "$data/short.bin" 300000 65536) >/dev/null
+settle
+csv=$(ft files --path "$data/short.bin" --format csv)
+expect "short-lived: command line" "$(printf '%s\n' "$csv" | column process.command_line)" \
+    "$workload readsend $data/short.bin 300000 65536"
+expect "short-lived: working directory" \
+    "$(printf '%s\n' "$csv" | column process.working_directory)" "$data"
+if command -v python3 >/dev/null 2>&1; then
+    cat >"$work/scripts/quick.py" <<'PYTHON'
+import socket
+import sys
+
+server = socket.create_server(("127.0.0.1", 0))
+client = socket.create_connection(server.getsockname())
+peer, _ = server.accept()
+with open(sys.argv[1], "rb", buffering=0) as f:
+    while chunk := f.read(65536):
+        client.sendall(chunk)
+PYTHON
+    head -c 300000 /dev/urandom >"$data/quick-upload.bin"
+    (cd "$work/scripts" && python3 quick.py "$data/quick-upload.bin")
+    settle
+    expect "short-lived: script" \
+        "$(ft files --path "$data/quick-upload.bin" --format csv | column process.script)" \
+        "$work/scripts/quick.py"
+fi
+
 stop_agent
 expect "agent exit code" "$?" 0
 expect "socket removed" "$([ -e "$sock" ] && echo present || echo removed)" removed

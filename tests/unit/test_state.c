@@ -1267,6 +1267,52 @@ static struct ft_process_strings transfer_strings(struct fixture *f, uint32_t pi
     return s;
 }
 
+/* A program that is gone before /proc is read is still named by what its exec carried. */
+static void exec_carries_the_command_line(void)
+{
+    static const char args[] = "python3\0-W\0ignore\0send.py\0/data/users.csv";
+    struct fixture f;
+    struct ft_process_strings s;
+    struct ft_endpoint remote = endpoint(203, 0, 113, 42, 443);
+
+    fixture_open_procfs(&f, true);
+    struct ft_event ev = {.type = FT_EVENT_PROCESS_EXEC, .ts_ns = f.now};
+    ev.process.pid = PID_A;
+    ev.process.ppid = 1;
+    ev.process.start_ns = 1000 * FT_NS_PER_SEC;
+    ft_strlcpy(ev.process.comm, "python3", sizeof(ev.process.comm));
+    ft_strlcpy(ev.process.exe, "/usr/bin/python3.13", sizeof(ev.process.exe));
+    ev.process.args = args;
+    ev.process.args_len = sizeof(args);
+    ev.process.cwd = "/srv/job";
+    ft_state_ingest(f.st, &ev);
+    CHECK_U64(procfs_reads, 0);
+
+    /* Its traffic is handled after it exited, when /proc has nothing left to read. */
+    emit_file(&f, 11, "/data/users.csv", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 4096, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_READ_SEND, 4096, 4096, 1);
+    CHECK(procfs_reads > 0);
+
+    s = transfer_strings(&f, PID_A);
+    CHECK_STR(s.command_line, "python3 -W ignore send.py /data/users.csv");
+    CHECK_STR(s.cwd, "/srv/job");
+    CHECK_STR(s.script, "/srv/job/send.py");
+    fixture_close(&f);
+
+    /* Without them the agent reads /proc, as for a process seen before it started. */
+    fixture_open_procfs(&f, true);
+    procfs_set(PID_A, "python3|export.py", "/srv/app");
+    emit_exec(&f, PID_A, 1, "python3", 1000);
+    CHECK_U64(procfs_reads, 1);
+    emit_file(&f, 11, "/data/users.csv", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 4096, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_READ_SEND, 4096, 4096, 1);
+    s = transfer_strings(&f, PID_A);
+    CHECK_STR(s.script, "/srv/app/export.py");
+    fixture_close(&f);
+}
+
 /* An interpreter's records say what it runs, as read when it started it. */
 static void processes_carry_their_command_line(void)
 {
@@ -1523,6 +1569,7 @@ void test_state(void)
     background_files_need_the_whole_read();
     confidence_threshold();
     tables_stay_bounded();
+    exec_carries_the_command_line();
     processes_carry_their_command_line();
     forked_workers_are_read_again();
     arguments_can_be_left_out();
