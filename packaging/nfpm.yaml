@@ -1,0 +1,101 @@
+# Run by tools/dist/package.sh from a directory that holds root/ and scripts/.
+name: filetrace
+arch: ${FT_ARCH}
+platform: linux
+version: ${FT_PACKAGE_VERSION}
+version_schema: none
+section: admin
+priority: optional
+maintainer: Evgenii Orlov <OrlovEvgeny@users.noreply.github.com>
+description: |
+  File-to-network observability
+  Shows which files a machine sends over the network, which process sends
+  them, and where they go, by observing the kernel with eBPF.
+vendor: Evgenii Orlov
+homepage: https://github.com/OrlovEvgeny/filetrace
+license: MIT
+
+contents:
+  - src: root/usr/bin/filetrace
+    dst: /usr/bin/filetrace
+    file_info:
+      mode: 0755
+  - src: root/usr/bin/filetrace-agent
+    dst: /usr/bin/filetrace-agent
+    file_info:
+      mode: 0755
+  - src: root/etc/filetrace/config.toml
+    dst: /etc/filetrace/config.toml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: root/usr/share/doc/filetrace/
+    dst: /usr/share/doc/filetrace
+    file_info:
+      mode: 0644
+
+  - src: root/systemd/filetrace-agent.service
+    dst: /usr/lib/systemd/system/filetrace-agent.service
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: root/systemd/filetrace-agent.service
+    dst: /usr/lib/systemd/system/filetrace-agent.service
+    packager: rpm
+    file_info:
+      mode: 0644
+
+  - src: root/sysv/filetrace-agent
+    dst: /etc/init.d/filetrace-agent
+    type: config
+    packager: deb
+    file_info:
+      mode: 0755
+  - src: root/logrotate/filetrace-agent
+    dst: /etc/logrotate.d/filetrace-agent
+    type: config|noreplace
+    packager: deb
+    file_info:
+      mode: 0644
+
+  - src: root/openrc/filetrace-agent
+    dst: /etc/init.d/filetrace-agent
+    packager: apk
+    file_info:
+      mode: 0755
+  - src: root/openrc/filetrace-agent.confd
+    dst: /etc/conf.d/filetrace-agent
+    type: config|noreplace
+    packager: apk
+    file_info:
+      mode: 0644
+  - src: root/logrotate/filetrace-agent
+    dst: /etc/logrotate.d/filetrace-agent
+    type: config|noreplace
+    packager: apk
+    file_info:
+      mode: 0644
+
+overrides:
+  deb:
+    scripts:
+      postinstall: scripts/postinstall.deb
+      preremove: scripts/preremove.deb
+      postremove: scripts/postremove.deb
+  rpm:
+    scripts:
+      postinstall: scripts/postinstall.rpm
+      preremove: scripts/preremove.rpm
+      postremove: scripts/postremove.rpm
+  apk:
+    scripts:
+      postinstall: scripts/postinstall.apk
+      preremove: scripts/preremove.apk
+
+apk:
+  scripts:
+    postupgrade: scripts/postupgrade.apk
+
+rpm:
+  summary: File-to-network observability
+  group: Applications/System
