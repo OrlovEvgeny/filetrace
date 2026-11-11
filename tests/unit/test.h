@@ -48,5 +48,6 @@ void test_table(void);
 void test_state(void);
 void test_daemon(void);
 void test_views(void);
+void test_config(void);
 
 #endif

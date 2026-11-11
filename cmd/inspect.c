@@ -994,6 +994,7 @@ int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a)
     int r;
 
     ft_output_init(&in.out);
+    in.out.format = ft_cli_format(cli, FT_FORMATS_REPORT);
     while (!ft_args_done(a)) {
         if ((r = ft_args_format(a, "inspect", FT_FORMATS_REPORT, &in.out.format)) != 0) {
             if (r < 0)

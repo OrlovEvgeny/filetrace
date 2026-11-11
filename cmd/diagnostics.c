@@ -131,7 +131,7 @@ static void capability_collect(void *ctx, uint16_t type, const void *payload, si
 
 int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a)
 {
-    enum ft_format format = FT_FMT_TABLE;
+    enum ft_format format = ft_cli_format(cli, FT_FORMATS_REPORT);
 
     while (!ft_args_done(a)) {
         int r = ft_args_format(a, "capabilities", FT_FORMATS_REPORT, &format);

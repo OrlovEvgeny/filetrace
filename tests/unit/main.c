@@ -11,6 +11,7 @@ int main(void)
     } suites[] = {
         {"format", test_format}, {"model", test_model},   {"table", test_table},
         {"state", test_state},   {"daemon", test_daemon}, {"views", test_views},
+        {"config", test_config},
     };
 
     for (size_t i = 0; i < sizeof(suites) / sizeof(suites[0]); i++) {

@@ -180,6 +180,12 @@ void ft_query_args_init(struct ft_query_args *qa, const char *command, enum ft_q
     qa->formats = FT_FORMATS_ALL;
 }
 
+void ft_query_args_finish(struct ft_query_args *qa, const struct ft_cli *cli)
+{
+    if (!qa->out.format_given)
+        qa->out.format = ft_cli_format(cli, qa->formats);
+}
+
 static int bad_value(const struct ft_query_args *qa, const char *option, const char *value,
                      const char *expected)
 {

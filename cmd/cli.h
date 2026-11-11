@@ -21,9 +21,28 @@ constexpr size_t FT_FMT_COUNT = FT_FMT_QUIET + 1;
 constexpr uint32_t FT_FORMATS_ALL = FT_FMT_BIT(FT_FMT_COUNT) - 1;
 constexpr uint32_t FT_FORMATS_REPORT = FT_FMT_BIT(FT_FMT_TABLE) | FT_FMT_BIT(FT_FMT_JSON);
 
+struct ft_config;
+struct ft_daemon_config;
+
 struct ft_cli {
     const char *socket_path;
+    bool socket_given;              /* by --socket or $FILETRACE_SOCKET, not by the file */
+    const char *config_path;        /* --config; nullptr for the default file */
+    const struct ft_config *config; /* nullptr for the commands that run without one */
 };
+
+/* Reads the configuration file into cli; reports what is wrong with it and returns
+   FT_EXIT_CONFIG when it cannot be used. */
+int ft_cli_load_config(struct ft_cli *cli);
+void ft_cli_free_config(struct ft_cli *cli);
+const char *ft_config_default_path_text(void);
+
+/* The configured default output format when the command can print it, else table. */
+enum ft_format ft_cli_format(const struct ft_cli *cli, uint32_t accepted);
+bool ft_cli_timestamps(const struct ft_cli *cli);
+
+/* Settings for a collector started by a command, or nullptr for the built-in ones. */
+const struct ft_daemon_config *ft_cli_collector_config(const struct ft_cli *cli);
 
 struct ft_args {
     int argc;
@@ -142,6 +161,9 @@ void ft_query_args_init(struct ft_query_args *qa, const char *command, enum ft_q
 /* Returns 1 for a consumed option, 0 for an unknown argument, -1 after reporting a bad value. */
 int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a);
 
+/* Once the arguments are parsed: the configured format, unless one was given. */
+void ft_query_args_finish(struct ft_query_args *qa, const struct ft_cli *cli);
+
 void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t formats);
 
 struct ft_session {
@@ -215,6 +237,7 @@ int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_version(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_daemon(const struct ft_cli *cli, struct ft_args *a);
+int ft_cmd_config(const struct ft_cli *cli, struct ft_args *a);
 
 /* Returns false when the command is unknown. */
 bool ft_help_command(FILE *out, const char *command);

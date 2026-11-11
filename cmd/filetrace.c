@@ -419,6 +419,38 @@ static void help_daemon(FILE *o)
           o);
 }
 
+static void help_config(FILE *o)
+{
+    fprintf(o,
+            "Usage:\n"
+            "  filetrace config show\n"
+            "  filetrace config validate [<file>]\n"
+            "  filetrace config path\n"
+            "\n"
+            "show      Print every setting with the value in effect, in the format of\n"
+            "          the configuration file. Without a file these are the defaults.\n"
+            "validate  Check a configuration file and report what is wrong with it.\n"
+            "path      Print which file is read.\n"
+            "\n"
+            "The file is %s, or $FILETRACE_CONFIG, or\n"
+            "the one named with the global option --config. The agent reads it when it\n"
+            "starts; its own command-line options override it. The commands take their\n"
+            "default output format, and the socket to reach the agent on, from it.\n"
+            "\n"
+            "A setting that asks for something this build cannot do, such as\n"
+            "[storage] enabled = true, is reported as a warning and ignored. An unknown\n"
+            "setting or a value of the wrong kind is an error.\n"
+            "\n"
+            "Examples:\n"
+            "  filetrace config show > /etc/filetrace/config.toml\n"
+            "  filetrace config validate ./config.toml\n"
+            "  filetrace --config ./config.toml config show\n"
+            "\n"
+            "Exit codes:\n"
+            "  0  the configuration is usable    6  it is not\n",
+            ft_config_default_path_text());
+}
+
 static void help_help(FILE *o)
 {
     fputs("Usage:\n"
@@ -442,6 +474,7 @@ static const struct command commands[] = {
     {"events", "Show the collector's raw events", ft_cmd_events, help_events},
     {"stats", "Display collection statistics", ft_cmd_stats, help_stats},
     {"daemon", "Run or control the background daemon", ft_cmd_daemon, help_daemon},
+    {"config", "Show or validate the configuration", ft_cmd_config, help_config},
     {"doctor", "Diagnose system compatibility", ft_cmd_doctor, help_doctor},
     {"capabilities", "Show supported features", ft_cmd_capabilities, help_capabilities},
     {"version", "Display version information", ft_cmd_version, help_version},
@@ -463,7 +496,8 @@ void ft_help_overview(FILE *o)
             "\n"
             "Global options:\n"
             "  --socket <path>   Daemon socket (default: %s,\n"
-            "                    or $FILETRACE_SOCKET)\n"
+            "                    or $FILETRACE_SOCKET, or the configured one)\n"
+            "  --config <path>   Configuration file (see 'filetrace help config')\n"
             "  -h, --help        Show help\n"
             "  --version         Show version information\n"
             "\n"
@@ -511,18 +545,27 @@ static bool wants_help(const struct ft_args *a)
 
 int main(int argc, char **argv)
 {
-    struct ft_cli cli = {.socket_path = getenv("FILETRACE_SOCKET")};
+    const char *env_socket = getenv("FILETRACE_SOCKET");
+    struct ft_cli cli = {0};
     struct ft_args args = {.argc = argc, .argv = argv, .pos = 1};
     const char *value;
     int r;
 
-    if (!cli.socket_path || !cli.socket_path[0])
-        cli.socket_path = ft_default_socket_path();
-
-    while ((r = ft_args_value(&args, "--socket", &value)) != 0) {
+    if (env_socket && env_socket[0]) {
+        cli.socket_path = env_socket;
+        cli.socket_given = true;
+    }
+    for (;;) {
+        if ((r = ft_args_value(&args, "--socket", &value)) != 0) {
+            cli.socket_path = value;
+            cli.socket_given = true;
+        } else if ((r = ft_args_value(&args, "--config", &value)) != 0) {
+            cli.config_path = value;
+        } else {
+            break;
+        }
         if (r < 0)
             return FT_EXIT_USAGE;
-        cli.socket_path = value;
     }
 
     const char *name = ft_args_take(&args);
@@ -533,17 +576,32 @@ int main(int argc, char **argv)
     if (strcmp(name, "--version") == 0)
         name = "version";
 
+    const struct command *command = nullptr;
     for (size_t i = 0; i < FT_ARRAY_LEN(commands); i++) {
-        if (strcmp(commands[i].name, name) != 0)
-            continue;
-        /* 'daemon run' forwards its options, including --help, to the daemon. */
-        if (commands[i].run != cmd_help && wants_help(&args) &&
-            !(commands[i].run == ft_cmd_daemon && ft_args_peek(&args) &&
-              strcmp(ft_args_peek(&args), "run") == 0)) {
-            ft_help_command(stdout, name);
-            return FT_EXIT_OK;
-        }
-        return commands[i].run(&cli, &args);
+        if (strcmp(commands[i].name, name) == 0)
+            command = &commands[i];
     }
-    return ft_usage_error(nullptr, "unknown command '%s'", name);
+    if (!command)
+        return ft_usage_error(nullptr, "unknown command '%s'", name);
+
+    /* 'daemon run' forwards its options, including --help, to the daemon. */
+    if (command->run != cmd_help && wants_help(&args) &&
+        !(command->run == ft_cmd_daemon && ft_args_peek(&args) &&
+          strcmp(ft_args_peek(&args), "run") == 0)) {
+        ft_help_command(stdout, name);
+        return FT_EXIT_OK;
+    }
+
+    /* 'config' reads the file itself, to report on it rather than depend on it. */
+    if (command->run != cmd_help && command->run != ft_cmd_config) {
+        int code = ft_cli_load_config(&cli);
+        if (code != FT_EXIT_OK)
+            return code;
+    }
+    if (!cli.socket_path)
+        cli.socket_path = ft_default_socket_path();
+
+    int code = command->run(&cli, &args);
+    ft_cli_free_config(&cli);
+    return code;
 }

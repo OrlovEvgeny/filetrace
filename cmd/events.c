@@ -27,6 +27,7 @@ struct printer {
     uint64_t count;
     bool raw;
     bool follow;
+    bool timestamps;
 };
 
 static bool has_process(const struct ft_row_event *e)
@@ -64,7 +65,7 @@ static void endpoint_text(const struct ft_endpoint *ep, char *buf, size_t size)
         ft_endpoint_format(ep, buf, size);
 }
 
-static void print_text(FILE *o, const struct ft_row_event *e)
+static void print_text(FILE *o, const struct ft_row_event *e, bool timestamps)
 {
     char clock[16];
     char name[32];
@@ -76,7 +77,9 @@ static void print_text(FILE *o, const struct ft_row_event *e)
         name[i] = (char)toupper((unsigned char)type[i]);
     name[i] = '\0';
     ft_format_clock_local(e->time_ns, clock, sizeof(clock));
-    fprintf(o, "%s.%03u %s\n", clock, (unsigned)(e->time_ns % FT_NS_PER_SEC / FT_NS_PER_MS), name);
+    if (timestamps)
+        fprintf(o, "%s.%03u ", clock, (unsigned)(e->time_ns % FT_NS_PER_SEC / FT_NS_PER_MS));
+    fprintf(o, "%s\n", name);
 
     if (has_process(e)) {
         fprintf(o, "  pid=%" PRIu32 "\n", e->pid);
@@ -267,7 +270,7 @@ static void on_event(void *ctx, uint16_t type, const void *payload, size_t size)
         print_json(o, e);
         fputc('\n', o);
     } else {
-        print_text(o, e);
+        print_text(o, e, p->timestamps);
     }
     p->count++;
     if (p->follow)
@@ -333,6 +336,8 @@ int ft_cmd_events(const struct ft_cli *cli, struct ft_args *a)
     }
     if (printer.raw && qa.out.format_given)
         return ft_usage_error("events", "--raw is a format of its own; drop --format or --raw");
+    ft_query_args_finish(&qa, cli);
+    printer.timestamps = ft_cli_timestamps(cli);
 
     if (follow) {
         qa.query.flags |= FT_QF_FOLLOW;

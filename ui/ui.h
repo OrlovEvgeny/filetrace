@@ -38,6 +38,7 @@ struct ft_watch_options {
     uint64_t interval_ns;
     enum ft_watch_direction direction; /* which traffic ranks processes and connections */
     bool plain;                        /* append snapshots instead of drawing a dashboard */
+    bool timestamps;                   /* head each appended snapshot with its time */
 
     /* The filters shared by every view, the order of the transfers, and the rows per
        table (limit 0: as many as fit). */

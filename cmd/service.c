@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 /* The collector serves only this process and stops when the session closes. */
-static int start_collector(struct ft_session *s)
+static int start_collector(const struct ft_cli *cli, struct ft_session *s)
 {
     int pair[2];
 
@@ -35,7 +35,10 @@ static int start_collector(struct ft_session *s)
         close(pair[0]);
         /* An interrupt ends the foreground command; the collector stops with its session. */
         signal(SIGINT, SIG_IGN);
-        ft_daemon_config_defaults(&cfg);
+        if (ft_cli_collector_config(cli))
+            cfg = *ft_cli_collector_config(cli);
+        else
+            ft_daemon_config_defaults(&cfg);
         cfg.socket_path = nullptr;
         cfg.session_fd = pair[1];
         _exit(ft_daemon_run(&cfg, &err));
@@ -66,7 +69,7 @@ int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_s
         return err.code;
     }
 
-    int code = start_collector(s);
+    int code = start_collector(cli, s);
     if (code != FT_EXIT_OK)
         return code;
 
@@ -183,9 +186,10 @@ int ft_cmd_daemon(const struct ft_cli *cli, struct ft_args *a)
         return daemon_stop(cli);
     }
     if (strcmp(action, "run") == 0) {
-        /* Hand over to the daemon's own option parser, keeping --socket. */
+        /* Hand over to the daemon's own option parser, keeping --config and --socket. */
         int extra = a->argc - a->pos;
-        char **argv = calloc((size_t)extra + 4, sizeof(char *));
+        char **argv = calloc((size_t)extra + 6, sizeof(char *));
+        char config_opt[] = "--config";
         char socket_opt[] = "--socket";
         char name[] = "filetrace daemon run";
         int n = 0;
@@ -193,8 +197,14 @@ int ft_cmd_daemon(const struct ft_cli *cli, struct ft_args *a)
         if (!argv)
             return FT_EXIT_ERROR;
         argv[n++] = name;
-        argv[n++] = socket_opt;
-        argv[n++] = (char *)(uintptr_t)cli->socket_path;
+        if (cli->config_path) {
+            argv[n++] = config_opt;
+            argv[n++] = (char *)(uintptr_t)cli->config_path;
+        }
+        if (cli->socket_given) {
+            argv[n++] = socket_opt;
+            argv[n++] = (char *)(uintptr_t)cli->socket_path;
+        }
         for (int i = 0; i < extra; i++)
             argv[n++] = a->argv[a->pos + i];
 

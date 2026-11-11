@@ -652,7 +652,8 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *given)
         } else {
             char stamp[32];
             ft_format_time_local(snap.stats.now_wall_ns, stamp, sizeof(stamp));
-            printf("--- %s ---\n", stamp);
+            if (opt.timestamps)
+                printf("--- %s ---\n", stamp);
             print_plain(text);
         }
         free(text);

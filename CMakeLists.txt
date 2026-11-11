@@ -139,6 +139,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 add_library(ft_daemon STATIC
+    daemon/config.c
     daemon/lifecycle.c
     daemon/server.c
 )
@@ -154,6 +155,7 @@ target_link_libraries(filetraced PRIVATE ft_daemon)
 
 add_library(ft_cli STATIC
     cmd/args.c
+    cmd/config.c
     cmd/diagnostics.c
     cmd/events.c
     cmd/inspect.c

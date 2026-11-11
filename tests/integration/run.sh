@@ -404,6 +404,96 @@ expect "minimal: bytes have no file" \
 stop_daemon
 expect "minimal daemon exit code" "$?" 0
 
+# A configuration file decides what is collected and how the commands print.
+cat >"$work/config.toml" <<CONFIG
+[agent]
+socket = "$sock"
+flush_interval = "100ms"
+log_level = "warn"
+event_log_size = "256KB"
+
+[network]
+udp = false
+
+[correlation]
+confidence_threshold = "exact"
+
+[storage]
+enabled = true
+
+[filters]
+exclude_paths = ["$data/secret-*"]
+
+[output]
+format = "csv"
+CONFIG
+configured() {
+    "$bin/filetrace" --config "$work/config.toml" "$@"
+}
+wait_for_socket() {
+    i=0
+    while [ ! -S "$sock" ] && [ $i -lt 100 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+}
+out=$("$bin/filetrace" config validate "$work/config.toml" 2>&1)
+expect "config: validate exit code" "$?" 0
+expect_match "config: asks for what cannot be done" "$out" \
+    'warning: \[storage\] enabled = true is ignored'
+expect_match "config: show" "$(configured config show 2>/dev/null)" \
+    '^event_log_size = "256KB"$'
+printf '[agent]\nenabld = true\n' >"$work/broken.toml"
+expect "config: broken file exit code" \
+    "$("$bin/filetrace" config validate "$work/broken.toml" >/dev/null 2>&1; echo $?)" 6
+expect_match "config: broken file message" \
+    "$("$bin/filetrace" config validate "$work/broken.toml" 2>&1)" \
+    "broken.toml:2: unknown setting 'enabld' in \\[agent\\]"
+expect "config: commands refuse a broken file" \
+    "$("$bin/filetrace" --config "$work/broken.toml" files >/dev/null 2>&1; echo $?)" 6
+expect "config: the agent refuses a broken file" \
+    "$("$bin/filetraced" --config "$work/broken.toml" >/dev/null 2>&1; echo $?)" 6
+
+"$bin/filetraced" --config "$work/config.toml" --probes "$probes" 2>"$work/agent.err" &
+daemon_pid=$!
+wait_for_socket
+"$workload" sendfile "$data/secret-key.bin" 400000 >/dev/null
+"$workload" sendfile "$data/public.bin" 400000 >/dev/null
+"$workload" readsend "$data/inferred.bin" 3000000 65536 >/dev/null
+report=$("$workload" udp 50000)
+settle
+expect_match "config: the agent warns" "$(cat "$work/agent.err")" \
+    'storage\] enabled = true is ignored'
+expect_match "config: default format" "$(configured files | head -1)" '^event,transfer_id,'
+expect "config: excluded path" "$(configured files --path "$data/secret-key.bin" | rows)" 0
+expect "config: other paths" "$(configured files --path "$data/public.bin" | rows)" 1
+expect "config: confidence threshold" "$(configured files --path "$data/inferred.bin" | rows)" 0
+expect "config: ignored protocol" \
+    "$(configured flows --protocol udp --port "$(field "$report" port)" | rows)" 0
+expect_match "config: event log size" "$(configured stats --json)" '"event_log_bytes":262144,'
+configured daemon stop >/dev/null
+wait "$daemon_pid"
+expect "config: agent exit code" "$?" 0
+daemon_pid=
+
+printf '[agent]\nsocket = "%s"\n[file]\ntrack_read = false\n' "$sock" >"$work/noread.toml"
+"$bin/filetraced" --config "$work/noread.toml" --probes "$probes" --log-level warn &
+daemon_pid=$!
+wait_for_socket
+expect_match "config: read probe off" "$(ft capabilities | grep '^Read+send correlation')" \
+    'DISABLED +turned off in the configuration'
+expect_match "config: sendfile probe on" "$(ft capabilities | grep '^Sendfile attribution')" \
+    'FULL'
+"$workload" readsend "$data/unread.bin" 3000000 65536 >/dev/null
+"$workload" sendfile "$data/stillsent.bin" 300000 >/dev/null
+settle
+expect "config: no read-write attribution" \
+    "$(ft files --path "$data/unread.bin" --format csv | rows)" 0
+expect "config: sendfile still attributed" \
+    "$(ft files --path "$data/stillsent.bin" --format csv | rows)" 1
+stop_daemon
+expect "config: second agent exit code" "$?" 0
+
 # Without a daemon, watch collects for as long as it runs.
 out=$(timeout -s INT 3 "$bin/filetrace" --socket "$work/absent.sock" watch --no-ui \
     --interval 500ms 2>"$work/watch.err")

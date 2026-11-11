@@ -432,6 +432,7 @@ int ft_cmd_processes(const struct ft_cli *cli, struct ft_args *a)
         else
             return unknown_argument("processes", a);
     }
+    ft_query_args_finish(&qa, cli);
     return run_list(cli, &qa, FT_VIEW_PROCESSES, FT_MSG_ROW_PROCESS, false,
                     "processes with network activity");
 }
@@ -453,6 +454,7 @@ int ft_cmd_connections(const struct ft_cli *cli, struct ft_args *a)
         else
             return unknown_argument("connections", a);
     }
+    ft_query_args_finish(&qa, cli);
     return run_list(cli, &qa, FT_VIEW_CONNECTIONS, FT_MSG_ROW_CONNECTION, false, "connections");
 }
 
@@ -505,6 +507,7 @@ int ft_cmd_flows(const struct ft_cli *cli, struct ft_args *a)
             return unknown_argument("flows", a);
         }
     }
+    ft_query_args_finish(&qa, cli);
 
     if (grouping == GROUP_NONE)
         return run_list(cli, &qa, FT_VIEW_FLOWS, FT_MSG_ROW_FLOW, false, "network flows");
@@ -545,6 +548,7 @@ static int transfer_command(const struct ft_cli *cli, struct ft_args *a, const c
             return unknown_argument(command, a);
         }
     }
+    ft_query_args_finish(&qa, cli);
 
     /* An empty answer would read as "nothing was sent this way". */
     enum ft_method method = (enum ft_method)qa.query.method;
@@ -621,6 +625,7 @@ int ft_cmd_top(const struct ft_cli *cli, struct ft_args *a)
         if (r == 0)
             return unknown_argument("top", a);
     }
+    ft_query_args_finish(&qa, cli);
     uint32_t limit = qa.query.limit ? qa.query.limit : 10;
 
     bool heading = qa.out.format == FT_FMT_TABLE && !qa.output_path;
@@ -829,7 +834,7 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
 int ft_cmd_stats(const struct ft_cli *cli, struct ft_args *a)
 {
     enum stats_section section = STATS_ALL;
-    enum ft_format format = FT_FMT_TABLE;
+    enum ft_format format = ft_cli_format(cli, FT_FORMATS_REPORT);
     uint64_t interval_ns = FT_NS_PER_SEC;
     bool watch = false;
     const char *v;
@@ -916,6 +921,7 @@ int ft_cmd_watch(const struct ft_cli *cli, struct ft_args *a)
         return FT_EXIT_ERROR;
     }
     opt->interval_ns = FT_NS_PER_SEC;
+    opt->timestamps = ft_cli_timestamps(cli);
     ft_query_args_init(qa, "watch", FT_Q_TRANSFERS, FT_OPTS_WATCH, FT_SORTS_WATCH);
 
     while (code == FT_EXIT_OK && !ft_args_done(a)) {
