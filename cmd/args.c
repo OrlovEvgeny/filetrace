@@ -213,7 +213,24 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         if (strlen(v) >= sizeof(q->path))
             return bad_value(qa, "--path", v, "a shorter path");
         ft_strlcpy(q->path, v, sizeof(q->path));
+        q->flags &= ~(uint32_t)FT_QF_PATH_REGEX;
         return 1;
+    }
+    if (OPTION(FT_QO_FILE, "--path-regex")) {
+        if (r < 0)
+            return -1;
+        if (strlen(v) >= sizeof(q->path))
+            return bad_value(qa, "--path-regex", v, "a shorter expression");
+        ft_strlcpy(q->path, v, sizeof(q->path));
+        q->flags |= FT_QF_PATH_REGEX;
+        return 1;
+    }
+    if (OPTION(FT_QO_FILE, "--min-size")) {
+        if (r < 0)
+            return -1;
+        return ft_parse_size(v, &q->min_size)
+                   ? 1
+                   : bad_value(qa, "--min-size", v, "a size such as 100MB");
     }
     if (OPTION(FT_QO_REMOTE, "--remote")) {
         if (r < 0)
@@ -387,7 +404,10 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
         {FT_QO_SCOPE, "  --cgroup <id|dir>       Only processes in this cgroup\n"
                       "  --namespace <inode>     Only processes in this network, PID or mount\n"
                       "                          namespace\n"},
-        {FT_QO_FILE, "  --path <path>           Only this file ('*' wildcards; alias: --file)\n"},
+        {FT_QO_FILE, "  --path <path>           Only this file ('*' wildcards; alias: --file)\n"
+                     "  --path-regex <regex>    Only files whose path matches this POSIX\n"
+                     "                          extended regular expression\n"
+                     "  --min-size <size>       Only files at least this large\n"},
         {FT_QO_REMOTE, "  --remote <ip|cidr>      Only this remote address or network\n"},
         {FT_QO_LOCAL, "  --local <ip|cidr>       Only this local address or network\n"},
         {FT_QO_PORT, "  --port <port>           Only this local or remote port\n"},

@@ -47,7 +47,7 @@ enum ft_query_flag : uint32_t {
     FT_QF_DELETED = 1u << 3,         /* transfers: only files with no remaining links */
     FT_QF_INCLUDE_CHILDREN = 1u << 4,
     FT_QF_HAS_UID = 1u << 5,
-    FT_QF_PATH_GLOB = 1u << 6, /* path is a pattern rather than an exact path */
+    FT_QF_PATH_REGEX = 1u << 6, /* path is a POSIX extended regular expression */
 };
 
 enum ft_sort : uint16_t {
@@ -81,6 +81,7 @@ struct ft_query {
     uint64_t since_wall_ns; /* 0: unbounded */
     uint64_t until_wall_ns; /* 0: unbounded */
     uint64_t min_bytes;
+    uint64_t min_size;         /* transfers: smallest file size */
     uint64_t cgroup_id;        /* 0: any */
     struct ft_endpoint remote; /* family 0: any */
     struct ft_endpoint local;

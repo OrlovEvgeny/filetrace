@@ -200,8 +200,9 @@ enum ft_sock_state ft_state_socket_state(const struct ft_state *st, const struct
 
 typedef void ft_row_fn(void *ctx, uint16_t type, const void *row, size_t size);
 
-void ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_ns, ft_row_fn *emit,
-                    void *ctx, struct ft_msg_end *end);
+/* Returns false, with err set, for a query that cannot be evaluated. */
+bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_ns, ft_row_fn *emit,
+                    void *ctx, struct ft_msg_end *end, struct ft_error *err);
 
 /* Fills the parts of the statistics row that the state owns. */
 void ft_state_fill_stats(struct ft_state *st, uint64_t now_ns, struct ft_row_stats *row);

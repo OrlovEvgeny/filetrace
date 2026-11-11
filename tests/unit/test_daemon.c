@@ -242,6 +242,12 @@ static void serves_queries_over_a_socket(void)
     CHECK_U64(ft_client_query(c, &q, on_row, &r, &end, &err), FT_EXIT_OK);
     CHECK_U64(r.rows, 0);
 
+    /* A query the daemon cannot evaluate is an error, not an empty result. */
+    q.flags = FT_QF_PATH_REGEX;
+    ft_strlcpy(q.path, "(unclosed", sizeof(q.path));
+    CHECK_U64(ft_client_query(c, &q, on_row, &r, &end, &err), FT_EXIT_USAGE);
+    CHECK(strstr(err.msg, "Invalid path expression") != nullptr);
+
     ft_query_init(&q, FT_Q_STATS);
     r.rows = 0;
     CHECK_U64(ft_client_query(c, &q, on_row, &r, &end, &err), FT_EXIT_OK);

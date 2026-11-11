@@ -47,6 +47,8 @@ struct fixture {
     struct ft_state *st;
     struct collected rows;
     struct ft_msg_end end;
+    struct ft_error err;
+    bool ok;
     uint64_t now;
 };
 
@@ -71,7 +73,7 @@ static void fixture_close(struct fixture *f)
 static void run_query(struct fixture *f, const struct ft_query *q)
 {
     f->rows.count = 0;
-    ft_state_query(f->st, q, f->now, collect, &f->rows, &f->end);
+    f->ok = ft_state_query(f->st, q, f->now, collect, &f->rows, &f->end, &f->err);
 }
 
 static struct ft_endpoint endpoint(uint8_t a, uint8_t b, uint8_t c, uint8_t d, uint16_t port)
@@ -143,6 +145,7 @@ static void emit_file(struct fixture *f, uint64_t ino, const char *path, bool de
     struct ft_event ev = {.type = FT_EVENT_FILE_SEEN, .ts_ns = f->now};
     ev.file.id = file_id(ino);
     ev.file.path = path;
+    ev.file.size = ino * 1024 * 1024;
     ev.file.deleted = deleted;
     ft_strlcpy(ev.file.fs_type, "ext4", sizeof(ev.file.fs_type));
     ft_state_ingest(f->st, &ev);
@@ -331,6 +334,29 @@ static void filters(void)
     run_query(&f, &q);
     CHECK_U64(f.rows.count, 1);
     CHECK_U64(f.rows.transfers[0].pid, PID_B);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.flags = FT_QF_PATH_REGEX;
+    ft_strlcpy(q.path, "^/var/www/.*\\.(mp4|mkv)$", sizeof(q.path));
+    run_query(&f, &q);
+    CHECK(f.ok);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_STR(f.rows.transfers[0].path, "/var/www/video.mp4");
+
+    ft_strlcpy(q.path, "(unclosed", sizeof(q.path));
+    run_query(&f, &q);
+    CHECK(!f.ok);
+    CHECK_U64(f.err.code, FT_EXIT_USAGE);
+    CHECK(strstr(f.err.msg, "(unclosed") != nullptr);
+
+    /* File 32 is 32 MB, file 31 one megabyte less. */
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.min_size = 32 * 1024 * 1024;
+    q.flags = FT_QF_INCLUDE_UNKNOWN;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_STR(f.rows.transfers[0].path, "/tmp/cache.bin");
+    CHECK_U64(f.rows.transfers[0].file_size, 32 * 1024 * 1024);
 
     /* The host bits of a network are left out of the comparison. */
     ft_query_init(&q, FT_Q_TRANSFERS);

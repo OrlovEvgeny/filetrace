@@ -2,6 +2,7 @@
 #include "filetrace/format.h"
 #include "filetrace/state.h"
 
+#include <regex.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -505,16 +506,32 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
     emit(ctx, FT_MSG_ROW_TRANSFER, row, ft_row_transfer_size(row));
 }
 
-static void query_transfers(struct ft_state *st, const struct ft_query *q, uint64_t now_ns,
-                            ft_row_fn *emit, void *ctx, struct ft_msg_end *end)
+static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint64_t now_ns,
+                            ft_row_fn *emit, void *ctx, struct ft_msg_end *end,
+                            struct ft_error *err)
 {
     static const struct ft_endpoint unspecified;
     struct span sp = query_span(q);
     bool with_unknown = (q->flags & FT_QF_INCLUDE_UNKNOWN) != 0;
+    bool by_regex = q->path[0] && (q->flags & FT_QF_PATH_REGEX);
     struct candidates c;
+    regex_t regex;
 
-    if (!candidates_init(&c, ft_table_count(st->transfers) + ft_table_count(st->sockets)))
-        return;
+    if (by_regex) {
+        int rc = regcomp(&regex, q->path, REG_EXTENDED | REG_NOSUB);
+        if (rc != 0) {
+            char reason[128];
+            regerror(rc, &regex, reason, sizeof(reason));
+            ft_error_set(err, FT_EXIT_USAGE, "Invalid path expression '%s': %s", q->path, reason);
+            return false;
+        }
+    }
+    if (!candidates_init(&c, ft_table_count(st->transfers) + ft_table_count(st->sockets))) {
+        if (by_regex)
+            regfree(&regex);
+        ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+        return false;
+    }
 
     if (with_unknown) {
         for (struct ft_socket *s = ft_table_first(st->sockets); s;
@@ -554,7 +571,14 @@ static void query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         const struct ft_file *f = ft_table_find(st->files, &t->file);
         if ((q->flags & FT_QF_DELETED) && !(f && f->deleted))
             continue;
-        if (q->path[0] && !(f && f->path && ft_glob_match(q->path, f->path)))
+        if (q->path[0]) {
+            if (!f || !f->path)
+                continue;
+            if (by_regex ? regexec(&regex, f->path, 0, nullptr, 0) != 0
+                         : !ft_glob_match(q->path, f->path))
+                continue;
+        }
+        if (q->min_size && !(f && f->size >= q->min_size))
             continue;
 
         candidates_add(
@@ -566,8 +590,8 @@ static void query_transfers(struct ft_state *st, const struct ft_query *q, uint6
                 });
     }
 
-    bool unknown_wanted = with_unknown && !q->path[0] && !(q->flags & FT_QF_DELETED) &&
-                          q->method == FT_METHOD_ANY &&
+    bool unknown_wanted = with_unknown && !q->path[0] && !q->min_size &&
+                          !(q->flags & FT_QF_DELETED) && q->method == FT_METHOD_ANY &&
                           (q->confidence == FT_CONF_ANY || q->confidence == FT_CONF_UNKNOWN);
     for (struct ft_socket *s = unknown_wanted ? ft_table_first(st->sockets) : nullptr; s;
          s = ft_table_next(st->sockets, s)) {
@@ -608,10 +632,13 @@ static void query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         free(row);
     }
     free(c.items);
+    if (by_regex)
+        regfree(&regex);
+    return true;
 }
 
-void ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_ns, ft_row_fn *emit,
-                    void *ctx, struct ft_msg_end *end)
+bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_ns, ft_row_fn *emit,
+                    void *ctx, struct ft_msg_end *end, struct ft_error *err)
 {
     struct span sp = query_span(q);
     uint64_t first = 0;
@@ -629,7 +656,8 @@ void ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_
         query_flows(st, q, now_ns, emit, ctx, end);
         break;
     case FT_Q_TRANSFERS:
-        query_transfers(st, q, now_ns, emit, ctx, end);
+        if (!query_transfers(st, q, now_ns, emit, ctx, end, err))
+            return false;
         break;
     default:
         break;
@@ -640,6 +668,7 @@ void ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_
     end->loss_first_wall_ns = ft_clock_mono_to_wall(first);
     end->loss_last_wall_ns = ft_clock_mono_to_wall(last);
     end->health = end->lost_events ? FT_HEALTH_DEGRADED : FT_HEALTH_OK;
+    return true;
 }
 
 static struct ft_table_usage table_usage(const struct ft_table *t)

@@ -286,8 +286,12 @@ static void handle_query(struct daemon *d, struct client *c, const void *payload
     case FT_Q_FLOWS:
     case FT_Q_TRANSFERS: {
         struct ft_msg_end end;
-        ft_state_query(d->state, q, now_ns, reply_row, c, &end);
-        if (c->overflow)
+        struct ft_error err = {0};
+        size_t mark = c->out_len;
+        if (!ft_state_query(d->state, q, now_ns, reply_row, c, &end, &err)) {
+            c->out_len = mark;
+            reply_error(c, err.code, "%s", err.msg);
+        } else if (c->overflow)
             reply_error(c, FT_EXIT_ERROR,
                         "The result is too large. Narrow it with filters or --limit.");
         else
