@@ -592,7 +592,7 @@ void   filetrace__v1__transfer_event__free_unpacked
   assert(message->base.descriptor == &filetrace__v1__transfer_event__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor filetrace__v1__process__field_descriptors[4] =
+static const ProtobufCFieldDescriptor filetrace__v1__process__field_descriptors[7] =
 {
   {
     "pid",
@@ -642,17 +642,56 @@ static const ProtobufCFieldDescriptor filetrace__v1__process__field_descriptors[
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "command_line",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__Process, command_line),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "working_directory",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__Process, working_directory),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "script",
+    7,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__Process, script),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned filetrace__v1__process__field_indices_by_name[] = {
+  4,   /* field[4] = command_line */
   3,   /* field[3] = executable */
   2,   /* field[2] = name */
   1,   /* field[1] = parent_pid */
   0,   /* field[0] = pid */
+  6,   /* field[6] = script */
+  5,   /* field[5] = working_directory */
 };
 static const ProtobufCIntRange filetrace__v1__process__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 4 }
+  { 0, 7 }
 };
 const ProtobufCMessageDescriptor filetrace__v1__process__descriptor =
 {
@@ -662,7 +701,7 @@ const ProtobufCMessageDescriptor filetrace__v1__process__descriptor =
   "Filetrace__V1__Process",
   "filetrace.v1",
   sizeof(Filetrace__V1__Process),
-  4,
+  7,
   filetrace__v1__process__field_descriptors,
   filetrace__v1__process__field_indices_by_name,
   1,  filetrace__v1__process__number_ranges,
@@ -1146,7 +1185,7 @@ const ProtobufCMessageDescriptor filetrace__v1__transfer__descriptor =
   (ProtobufCMessageInit) filetrace__v1__transfer__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor filetrace__v1__transfer_filter__field_descriptors[8] =
+static const ProtobufCFieldDescriptor filetrace__v1__transfer_filter__field_descriptors[9] =
 {
   {
     "pid",
@@ -1244,6 +1283,18 @@ static const ProtobufCFieldDescriptor filetrace__v1__transfer_filter__field_desc
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "script",
+    9,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__TransferFilter, script),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned filetrace__v1__transfer_filter__field_indices_by_name[] = {
   7,   /* field[7] = confidence */
@@ -1253,12 +1304,13 @@ static const unsigned filetrace__v1__transfer_filter__field_indices_by_name[] = 
   4,   /* field[4] = port */
   1,   /* field[1] = process */
   3,   /* field[3] = remote */
+  8,   /* field[8] = script */
   5,   /* field[5] = transport */
 };
 static const ProtobufCIntRange filetrace__v1__transfer_filter__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 8 }
+  { 0, 9 }
 };
 const ProtobufCMessageDescriptor filetrace__v1__transfer_filter__descriptor =
 {
@@ -1268,7 +1320,7 @@ const ProtobufCMessageDescriptor filetrace__v1__transfer_filter__descriptor =
   "Filetrace__V1__TransferFilter",
   "filetrace.v1",
   sizeof(Filetrace__V1__TransferFilter),
-  8,
+  9,
   filetrace__v1__transfer_filter__field_descriptors,
   filetrace__v1__transfer_filter__field_indices_by_name,
   1,  filetrace__v1__transfer_filter__number_ranges,

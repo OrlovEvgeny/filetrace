@@ -89,10 +89,21 @@ struct  Filetrace__V1__Process
    * Path of the executable; empty when it was not observed.
    */
   char *executable;
+  /*
+   * The arguments joined by spaces, or the title the process gave itself;
+   * empty when not known. The agent can be set to keep only the program.
+   */
+  char *command_line;
+  char *working_directory;
+  /*
+   * What an interpreter runs: the path of its script, "module:<name>" for
+   * python -m, or "pool:<name>" for a PHP-FPM worker; empty otherwise.
+   */
+  char *script;
 };
 #define FILETRACE__V1__PROCESS__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&filetrace__v1__process__descriptor) \
-    , 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+    , 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
 
 
 /*
@@ -224,10 +235,15 @@ struct  Filetrace__V1__TransferFilter
   Filetrace__V1__Transport transport;
   Filetrace__V1__Method method;
   Filetrace__V1__Confidence confidence;
+  /*
+   * Script the process runs, as in Process.script; "*" matches any run of
+   * characters.
+   */
+  char *script;
 };
 #define FILETRACE__V1__TRANSFER_FILTER__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&filetrace__v1__transfer_filter__descriptor) \
-    , 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, FILETRACE__V1__TRANSPORT__TRANSPORT_UNSPECIFIED, FILETRACE__V1__METHOD__METHOD_UNSPECIFIED, FILETRACE__V1__CONFIDENCE__CONFIDENCE_UNSPECIFIED }
+    , 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, FILETRACE__V1__TRANSPORT__TRANSPORT_UNSPECIFIED, FILETRACE__V1__METHOD__METHOD_UNSPECIFIED, FILETRACE__V1__CONFIDENCE__CONFIDENCE_UNSPECIFIED, (char *)protobuf_c_empty_string }
 
 
 struct  Filetrace__V1__GetStatusRequest

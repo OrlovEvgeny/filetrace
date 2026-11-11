@@ -49,6 +49,13 @@ message Process {
   string name = 3;
   // Path of the executable; empty when it was not observed.
   string executable = 4;
+  // The arguments joined by spaces, or the title the process gave itself;
+  // empty when not known. The agent can be set to keep only the program.
+  string command_line = 5;
+  string working_directory = 6;
+  // What an interpreter runs: the path of its script, "module:<name>" for
+  // python -m, or "pool:<name>" for a PHP-FPM worker; empty otherwise.
+  string script = 7;
 }
 
 // A file is identified by device and inode; the rest describes it as it was
@@ -119,6 +126,9 @@ message TransferFilter {
   Transport transport = 6;
   Method method = 7;
   Confidence confidence = 8;
+  // Script the process runs, as in Process.script; "*" matches any run of
+  // characters.
+  string script = 9;
 }
 
 message GetStatusRequest {}

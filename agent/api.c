@@ -168,8 +168,9 @@ static struct ft_query *query_for(const Filter *f, enum ft_query_kind kind, cons
         return q;
 
     *why = nullptr;
-    if (strlen(f->process) >= sizeof(q->process) || strlen(f->path) >= sizeof(q->path))
-        *why = "The process or path pattern is too long.";
+    if (strlen(f->process) >= sizeof(q->process) || strlen(f->path) >= sizeof(q->path) ||
+        strlen(f->script) >= sizeof(q->script))
+        *why = "The process, script or path pattern is too long.";
     else if (f->port > UINT16_MAX)
         *why = "port is not a port number.";
     else if (f->remote[0] && !ft_prefix_parse(f->remote, &q->remote, &bits))
@@ -187,6 +188,7 @@ static struct ft_query *query_for(const Filter *f, enum ft_query_kind kind, cons
 
     q->pid = f->pid;
     ft_strlcpy(q->process, f->process, sizeof(q->process));
+    ft_strlcpy(q->script, f->script, sizeof(q->script));
     ft_strlcpy(q->path, f->path, sizeof(q->path));
     if (f->remote[0])
         q->remote_host_bits = (uint8_t)((q->remote.family == 6 ? 128 : 32) - bits);
@@ -227,6 +229,11 @@ static void list_row(void *ctx, uint16_t type, const void *payload, size_t size)
 
     filetrace__v1__transfer__init(t);
     fill_process(p, row->pid, row->ppid, row->comm, ft_arena_text(&l->arena, row->exe));
+    struct ft_process_strings strings;
+    ft_row_transfer_strings(row, &strings);
+    p->process.command_line = ft_arena_text(&l->arena, strings.command_line);
+    p->process.working_directory = ft_arena_text(&l->arena, strings.cwd);
+    p->process.script = ft_arena_text(&l->arena, strings.script);
     fill_connection(p, row->sock_id, row->proto, &row->local, &row->remote);
     t->id = row->id;
     t->process = &p->process;
@@ -335,8 +342,11 @@ static bool wanted(const struct watcher *w, const struct ft_row_event *row)
 void ft_api_record(struct ft_api *a, const struct ft_row_event *row)
 {
     static char path[FT_PATH_MAX];
+    static char command_line[FT_CMDLINE_MAX];
+    static char cwd[FT_PATH_MAX];
+    static char script[FT_PATH_MAX];
     static char none[1];
-    static uint8_t bytes[FT_PATH_MAX + 512];
+    static uint8_t bytes[FT_PATH_MAX + FT_PROCESS_TEXT_MAX + 512];
     struct parts parts;
     TransferEvent event;
     WatchResponse response;
@@ -352,7 +362,15 @@ void ft_api_record(struct ft_api *a, const struct ft_row_event *row)
         if (!described) {
             described = true;
             ft_utf8_copy(path, row->text, sizeof(path));
+            struct ft_process_strings strings;
+            ft_row_event_strings(row, &strings);
+            ft_utf8_copy(command_line, strings.command_line, sizeof(command_line));
+            ft_utf8_copy(cwd, strings.cwd, sizeof(cwd));
+            ft_utf8_copy(script, strings.script, sizeof(script));
             fill_process(&parts, row->pid, row->ppid, row->comm, none);
+            parts.process.command_line = command_line;
+            parts.process.working_directory = cwd;
+            parts.process.script = script;
             fill_connection(&parts, row->sock_id, row->proto, &row->local, &row->remote);
             filetrace__v1__file__init(&parts.file);
             parts.file.path = path;
