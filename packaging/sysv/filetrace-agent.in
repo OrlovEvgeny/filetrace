@@ -1,0 +1,90 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          filetrace-agent
+# Required-Start:    $local_fs $remote_fs $syslog
+# Required-Stop:     $local_fs $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Filetrace agent
+# Description:       Collects file-to-network activity for the filetrace command.
+### END INIT INFO
+
+name=filetrace-agent
+daemon=@bindir@/filetrace-agent
+cli=@bindir@/filetrace
+pidfile=/run/$name.pid
+logfile=/var/log/$name.log
+
+[ -x "$daemon" ] || exit 0
+
+FILETRACE_AGENT_OPTS=
+# shellcheck source=/dev/null
+[ ! -r "/etc/default/$name" ] || . "/etc/default/$name"
+
+running()
+{
+    start-stop-daemon --status --pidfile "$pidfile" 2>/dev/null
+}
+
+do_start()
+{
+    if running; then
+        echo "$name is already running"
+        return 0
+    fi
+    if [ ! -e /sys/kernel/btf/vmlinux ]; then
+        echo "$name: this kernel has no BTF (/sys/kernel/btf/vmlinux)" >&2
+        return 1
+    fi
+    "$cli" config validate >/dev/null || return 6
+    mkdir -p /run/filetrace
+
+    # The agent stays in the foreground and logs to stderr.
+    start-stop-daemon --start --quiet --background --make-pidfile --pidfile "$pidfile" \
+        --startas /bin/sh -- -c "exec $daemon $FILETRACE_AGENT_OPTS >>$logfile 2>&1"
+
+    tries=50
+    while [ "$tries" -gt 0 ]; do
+        code=0
+        "$cli" agent status >/dev/null 2>&1 || code=$?
+        if [ "$code" -eq 0 ] || [ "$code" -eq 9 ]; then
+            return 0
+        fi
+        running || break
+        sleep 0.2
+        tries=$((tries - 1))
+    done
+    echo "$name did not start; see $logfile" >&2
+    return 1
+}
+
+do_stop()
+{
+    start-stop-daemon --stop --quiet --oknodo --retry TERM/15/KILL/5 --pidfile "$pidfile"
+    rm -f "$pidfile"
+}
+
+case "${1:-}" in
+start)
+    do_start
+    ;;
+stop)
+    do_stop
+    ;;
+restart | force-reload)
+    do_stop
+    do_start
+    ;;
+status)
+    if running; then
+        echo "$name is running"
+    else
+        echo "$name is not running"
+        exit 3
+    fi
+    ;;
+*)
+    echo "Usage: $0 {start|stop|restart|force-reload|status}" >&2
+    exit 2
+    ;;
+esac

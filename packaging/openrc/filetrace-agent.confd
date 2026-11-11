@@ -1,0 +1,3 @@
+# Options added to the filetrace-agent command line; see filetrace-agent --help.
+# Settings normally belong in /etc/filetrace/config.toml.
+#FILETRACE_AGENT_OPTS=""

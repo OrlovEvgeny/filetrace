@@ -1,0 +1,10 @@
+# Written only where the service manager redirects the agent's output to a
+# file. The agent keeps the file open, so it is truncated in place.
+/var/log/filetrace-agent.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
