@@ -241,6 +241,7 @@ static void reports_what_is_wrong(void)
     rejects("[correlation]\nconfidence_threshold = \"unknown\"\n", "expected \"inferred\"");
     rejects("[limits]\nflows = 3\n", "[limits] flows: expected a whole number from 64");
     rejects("[filters]\nexclude_paths = \"/proc/*\"\n", "expected a list of strings");
+    rejects("[correlation]\nno_minimum_paths = \"/etc/*\"\n", "expected a list of strings");
     rejects("[filters]\nexclude_paths = [\"/proc/*\"\n", "expected ',' or ']'");
     rejects("[otlp]\nevents = [\"file_sent\"]\n", "\"file_sent\" is not an event type");
     rejects("[otlp]\nbatch_size = 5\n", "[otlp] batch_size: expected a whole number from 16");

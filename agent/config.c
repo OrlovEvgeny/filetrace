@@ -27,6 +27,7 @@ struct ft_config *ft_config_new(void)
     cfg->agent.socket_path = cfg->socket_path;
     cfg->agent.state_cfg.exclude_processes = (const char *const *)cfg->exclude_processes;
     cfg->agent.state_cfg.exclude_paths = (const char *const *)cfg->exclude_paths;
+    cfg->agent.state_cfg.no_minimum_paths = (const char *const *)cfg->no_minimum_paths;
     cfg->enabled = true;
     cfg->log_level = FT_LOG_INFO;
     cfg->correlation_enabled = true;
@@ -53,6 +54,7 @@ void ft_config_free(struct ft_config *cfg)
         return;
     patterns_clear(cfg->exclude_processes, &cfg->exclude_process_count);
     patterns_clear(cfg->exclude_paths, &cfg->exclude_path_count);
+    patterns_clear(cfg->no_minimum_paths, &cfg->no_minimum_path_count);
     free(cfg);
 }
 
@@ -65,6 +67,7 @@ void ft_config_finish(struct ft_config *cfg)
     backend->track_sendfile = cfg->correlation_enabled && cfg->track_sendfile;
     state->exclude_process_count = cfg->exclude_process_count;
     state->exclude_path_count = cfg->exclude_path_count;
+    state->no_minimum_path_count = cfg->no_minimum_path_count;
 
     /* Minimal mode queues only process and socket events, far fewer than standard mode. */
     if (backend->mode == FT_MODE_MINIMAL) {
@@ -511,6 +514,8 @@ static bool apply_correlation(struct ft_config *cfg, const char *key, struct val
         state->inferred_min_permille = (uint32_t)n * 10;
         return true;
     }
+    if (strcmp(key, "no_minimum_paths") == 0)
+        return want_patterns(v, cfg->no_minimum_paths, &cfg->no_minimum_path_count, why, size);
     if (strcmp(key, "track_fd_lifecycle") == 0)
         return want_unavailable(cfg, v, &cfg->track_fd_lifecycle,
                                 "[correlation] track_fd_lifecycle",
@@ -947,6 +952,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     print_string(o, "confidence_threshold", ft_confidence_name(state->min_confidence));
     print_size(o, "inferred_min_bytes", state->inferred_min_bytes);
     fprintf(o, "inferred_min_percent = %u\n", state->inferred_min_permille / 10);
+    print_patterns(o, "no_minimum_paths", cfg->no_minimum_paths, cfg->no_minimum_path_count);
     fputs("# Always on.\n", o);
     fprintf(o, "track_process_lifecycle = %s\n", yes_no(cfg->track_process_lifecycle));
     fputs(unavailable, o);

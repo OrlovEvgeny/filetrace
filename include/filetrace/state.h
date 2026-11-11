@@ -39,6 +39,9 @@ struct ft_state_config {
     size_t exclude_process_count;
     const char *const *exclude_paths;
     size_t exclude_path_count;
+    /* Borrowed patterns: a read-write transfer of a matching file is reported at any size. */
+    const char *const *no_minimum_paths;
+    size_t no_minimum_path_count;
 
     /* Describes a process that was running before observation started. */
     bool (*lookup_process)(uint32_t pid, struct ft_ev_process *out);
@@ -149,6 +152,7 @@ struct ft_file {
     bool deleted;
     bool path_truncated;
     bool excluded;
+    bool no_minimum;
     char *path;
 };
 
@@ -173,6 +177,7 @@ struct ft_transfer {
     uint64_t alternations;
     uint64_t counted_bytes; /* already added to the exported counters */
     bool counted;
+    bool no_minimum; /* the file matches [correlation] no_minimum_paths */
     struct ft_rate rate;
     char comm[FT_COMM_MAX];
 };

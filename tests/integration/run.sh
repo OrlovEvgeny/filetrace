@@ -430,6 +430,22 @@ expect "agent exit code after SIGHUP" "$?" 0
 agent_pid=
 expect "socket removed after SIGHUP" "$([ -e "$sock" ] && echo present || echo removed)" removed
 
+# A file named in no_minimum_paths is reported however small; another is not.
+printf '[correlation]\nno_minimum_paths = ["%s/tiny-listed*"]\n' "$data" >"$work/no-minimum.toml"
+start_agent --config "$work/no-minimum.toml" ||
+    { echo "FAIL: the agent did not start with no_minimum_paths"; exit 1; }
+"$workload" readsend "$data/tiny-listed.txt" 200 65536 >/dev/null
+"$workload" readsend "$data/tiny-other.txt" 200 65536 >/dev/null
+settle
+csv=$(ft files --path "$data/tiny-listed.txt" --format csv)
+expect "no minimum: listed file reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "no minimum: listed file inferred" "$(printf '%s\n' "$csv" | column transfer.confidence)" \
+    inferred
+expect "no minimum: other file not reported" \
+    "$(ft files --path "$data/tiny-other.txt" --format csv | rows)" 0
+stop_agent
+expect "no minimum agent exit code" "$?" 0
+
 # A configuration file decides what is collected and how the commands print.
 cat >"$work/config.toml" <<CONFIG
 [agent]

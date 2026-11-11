@@ -397,6 +397,8 @@ static bool ingest_file(struct ft_state *st, const struct ft_event *ev)
     }
     f->excluded =
         f->path && matches_any(st->cfg.exclude_paths, st->cfg.exclude_path_count, f->path);
+    f->no_minimum =
+        f->path && matches_any(st->cfg.no_minimum_paths, st->cfg.no_minimum_path_count, f->path);
     return !f->excluded;
 }
 
@@ -453,6 +455,8 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
         t->first_ns = e->first_ns;
         ft_strlcpy(t->comm, p->comm, sizeof(t->comm));
     }
+    /* The path can be learned after the first bytes, so this is refreshed every time. */
+    t->no_minimum = file && file->no_minimum;
     t->last_ns = ev->ts_ns;
     t->bytes += e->bytes;
     t->read_bytes += e->read_bytes;
@@ -737,10 +741,12 @@ bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,
         break;
 
     case FT_METHOD_READ_SEND:
-        if (t->bytes < st->cfg.inferred_min_bytes)
-            return false;
-        if (t->bytes < t->read_bytes / 1000 * st->cfg.inferred_min_permille)
-            return false;
+        if (!t->no_minimum) {
+            if (t->bytes < st->cfg.inferred_min_bytes)
+                return false;
+            if (t->bytes < t->read_bytes / 1000 * st->cfg.inferred_min_permille)
+                return false;
+        }
         evd |= FT_EVD_THREAD_SEQUENCE;
         if (t->alternations >= 2)
             evd |= FT_EVD_REPEATED;

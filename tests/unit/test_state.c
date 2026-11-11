@@ -945,6 +945,67 @@ static void fixture_open_with(struct fixture *f, const struct ft_state_config *c
     f->st->start_ns = f->now;
 }
 
+static bool listed_row(const struct fixture *f, const char *path)
+{
+    for (size_t i = 0; i < f->rows.count; i++) {
+        if (strcmp(f->rows.transfers[i].path, path) == 0)
+            return f->rows.transfers[i].confidence == FT_CONF_INFERRED;
+    }
+    return false;
+}
+
+/* A listed file is reported however few bytes followed its read; the others keep the minimums. */
+static void listed_files_have_no_minimum(void)
+{
+    static const char *const listed[] = {"/etc/host*", "/home/*/.aws/*"};
+    struct ft_state_config cfg;
+    struct fixture f;
+    struct ft_query q;
+
+    ft_state_config_defaults(&cfg);
+    cfg.no_minimum_paths = listed;
+    cfg.no_minimum_path_count = FT_ARRAY_LEN(listed);
+    fixture_open_with(&f, &cfg);
+    emit_exec(&f, PID_B, 1, "python", 2000);
+    emit_file(&f, 11, "/etc/ssl/certs/ca-certificates.crt", false);
+    emit_file(&f, 13, "/etc/hosts", false);
+    emit_file(&f, 14, "/home/dev/.aws/credentials", false);
+    emit_flow(&f, SOCK_A, PID_B, FT_PROTO_TCP, endpoint(192, 0, 2, 10, 443), 90000000, 4096);
+
+    /* Below both minimums: the /etc/hosts case of inference_needs_evidence, listed here. */
+    emit_transfer(&f, SOCK_A, PID_B, 13, FT_METHOD_READ_SEND, 40, 120, 1);
+    emit_transfer(&f, SOCK_A, PID_B, 14, FT_METHOD_READ_SEND, 200, 200, 1);
+    /* Below the percentage and not listed. */
+    emit_transfer(&f, SOCK_A, PID_B, 11, FT_METHOD_READ_SEND, 517, 200000, 1);
+    /* Sent before its path is known: unlisted until then, listed after. */
+    emit_transfer(&f, SOCK_A, PID_B, 15, FT_METHOD_READ_SEND, 30, 30, 1);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    CHECK(listed_row(&f, "/etc/hosts"));
+    CHECK(listed_row(&f, "/home/dev/.aws/credentials"));
+
+    emit_file(&f, 15, "/etc/hostname", false);
+    emit_transfer(&f, SOCK_A, PID_B, 15, FT_METHOD_READ_SEND, 10, 10, 1);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 3);
+    CHECK(listed_row(&f, "/etc/hostname"));
+    CHECK(!listed_row(&f, "/etc/ssl/certs/ca-certificates.crt"));
+    fixture_close(&f);
+
+    /* The list does not lower confidence_threshold = "exact". */
+    cfg.min_confidence = FT_CONF_EXACT;
+    fixture_open_with(&f, &cfg);
+    emit_exec(&f, PID_B, 1, "python", 2000);
+    emit_file(&f, 13, "/etc/hosts", false);
+    emit_flow(&f, SOCK_A, PID_B, FT_PROTO_TCP, endpoint(192, 0, 2, 10, 443), 90000000, 4096);
+    emit_transfer(&f, SOCK_A, PID_B, 13, FT_METHOD_READ_SEND, 40, 120, 1);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+    fixture_close(&f);
+}
+
 static void configured_exclusions(void)
 {
     static const char *const processes[] = {"systemd*", "sshd"};
@@ -1083,6 +1144,7 @@ void test_state(void)
     event_log_keeps_the_most_recent();
     event_floods_stay_in_their_class();
     configured_exclusions();
+    listed_files_have_no_minimum();
     confidence_threshold();
     tables_stay_bounded();
 }

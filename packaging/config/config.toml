@@ -43,6 +43,9 @@
 # confidence_threshold = "inferred"
 # inferred_min_bytes = "1KB"
 # inferred_min_percent = 5
+# Files whose read-write transfers are reported at any size, below the two
+# minimums above, such as "/home/*/.ssh/*". '*' matches any run of characters.
+# no_minimum_paths = []
 
 # Entries per table; the least recently used go first.
 [limits]
