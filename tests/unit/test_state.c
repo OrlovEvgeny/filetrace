@@ -365,6 +365,21 @@ static void filters(void)
     CHECK_STR(f.rows.transfers[0].path, "/tmp/cache.bin");
     CHECK_U64(f.rows.transfers[0].file_size, 32 * 1024 * 1024);
 
+    /* A transfer and a flow belong to the user of the process behind them. */
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.flags = FT_QF_HAS_UID;
+    q.uid = 33;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    q.uid = 1000;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+    ft_query_init(&q, FT_Q_FLOWS);
+    q.flags = FT_QF_HAS_UID;
+    q.uid = 1000;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+
     /* The host bits of a network are left out of the comparison. */
     ft_query_init(&q, FT_Q_TRANSFERS);
     CHECK(ft_addr_parse("198.51.100.0", &q.remote));

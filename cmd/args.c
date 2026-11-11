@@ -447,7 +447,8 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t fo
         {FT_QO_USER, "  --user <user>           Only processes of this user\n"},
         {FT_QO_SCOPE, "  --cgroup <id|dir>       Only processes in this cgroup\n"
                       "  --namespace <inode>     Only processes in this network, PID or mount\n"
-                      "                          namespace\n"},
+                      "                          namespace (the number 'ls -Li /proc/<pid>/ns'\n"
+                      "                          shows)\n"},
         {FT_QO_FILE, "  --path <path>           Only this file ('*' wildcards; alias: --file)\n"},
         {FT_QO_FILE_MATCH, "  --path-regex <regex>    Only files whose path matches this POSIX\n"
                            "                          extended regular expression\n"

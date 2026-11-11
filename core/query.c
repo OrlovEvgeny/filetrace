@@ -71,6 +71,25 @@ static bool match_tuple(const struct ft_query *q, uint16_t proto, const struct f
     return true;
 }
 
+static bool process_in_scope(const struct ft_query *q, const struct ft_process *p)
+{
+    if ((q->flags & FT_QF_HAS_UID) && q->uid != p->uid)
+        return false;
+    if (q->cgroup_id && q->cgroup_id != p->cgroup_id)
+        return false;
+    return !q->ns_inum || q->ns_inum == p->netns || q->ns_inum == p->pidns ||
+           q->ns_inum == p->mntns;
+}
+
+/* A socket or transfer is in scope when the process behind it is. */
+static bool owner_in_scope(const struct ft_state *st, const struct ft_query *q, uint32_t pid)
+{
+    if (!q->cgroup_id && !q->ns_inum && !(q->flags & FT_QF_HAS_UID))
+        return true;
+    const struct ft_process *p = ft_table_find(st->processes, &pid);
+    return p && process_in_scope(q, p);
+}
+
 static bool candidates_init(struct candidates *c, size_t capacity)
 {
     c->items = malloc((capacity ? capacity : 1) * sizeof(*c->items));
@@ -236,12 +255,7 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
             continue;
         if (q->pid && q->pid != p->pid)
             continue;
-        if ((q->flags & FT_QF_HAS_UID) && q->uid != p->uid)
-            continue;
-        if (q->cgroup_id && q->cgroup_id != p->cgroup_id)
-            continue;
-        if (q->ns_inum && q->ns_inum != p->netns && q->ns_inum != p->pidns &&
-            q->ns_inum != p->mntns)
+        if (!process_in_scope(q, p))
             continue;
         if (!match_name(q->process, p->comm))
             continue;
@@ -350,6 +364,8 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
             continue;
         if (!in_span(&sp, s->first_ns, s->last_ns))
             continue;
+        if (!owner_in_scope(st, q, s->pid))
+            continue;
 
         uint64_t key;
         switch (q->sort) {
@@ -433,6 +449,8 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
         if ((q->flags & FT_QF_ACTIVE) && now_ns - f->last_ns > st->cfg.active_window_ns)
             continue;
         if (!in_span(&sp, f->first_ns, f->last_ns))
+            continue;
+        if (!owner_in_scope(st, q, f->pid))
             continue;
 
         uint64_t key;
@@ -681,6 +699,8 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         if (!match_tuple(q, s ? s->proto : 0, s ? &s->local : &unspecified,
                          s ? &s->remote : &unspecified))
             continue;
+        if (!owner_in_scope(st, q, t->pid))
+            continue;
 
         const struct ft_file *f = ft_table_find(st->files, &t->file);
         if ((q->flags & FT_QF_DELETED) && !(f && f->deleted))
@@ -727,6 +747,8 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         if (!in_span(&sp, s->first_ns, s->last_ns))
             continue;
         if (!match_tuple(q, s->proto, &s->local, &s->remote))
+            continue;
+        if (!owner_in_scope(st, q, s->pid))
             continue;
 
         candidates_add(
