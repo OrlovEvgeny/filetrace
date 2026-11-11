@@ -36,8 +36,10 @@ The questions it answers run in both directions:
 Kernel functions are traced through BPF trampolines (fentry/fexit) where the
 kernel can attach them and through kprobes where it cannot, as on arm64 before
 6.4. `filetrace doctor` loads and attaches every probe on the machine it runs
-on and reports which of the two is in use and what the kernel accepted. Other
-kernels and x86-64 are expected to work through CO-RE but are untested.
+on and reports which of the two is in use and what the kernel accepted.
+Continuous integration builds and tests x86-64 and arm64 on the kernel of
+GitHub's Ubuntu 24.04 runners. Other kernels are expected to work through
+CO-RE but are untested.
 
 ## Install
 
