@@ -98,7 +98,7 @@ jobs:
       id-token: write # signs the attestations
       attestations: write # stores the attestations
     outputs:
-      site: ${{ steps.site.outputs.built }}
+      site: ${{ steps.site.outcome == 'success' }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
