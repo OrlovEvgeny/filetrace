@@ -99,3 +99,7 @@ run = "tools/dist/package.sh"
 [tasks."test:package"]
 description = "Install the packages from dist/ in containers and check the result"
 run = "tests/packaging/run.sh"
+
+[tasks."dist:macos"]
+description = "Build the macOS binaries with their libraries linked in into dist/"
+run = "tools/dist/darwin.sh"
