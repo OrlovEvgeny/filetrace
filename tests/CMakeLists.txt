@@ -27,3 +27,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             SKIP_RETURN_CODE 77 TIMEOUT 120 RUN_SERIAL TRUE)
     endforeach()
 endif()
+
+add_test(NAME release-version
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/release/version_test.sh
+            ${CMAKE_SOURCE_DIR}/tools/release/version.sh)
+set_tests_properties(release-version PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
