@@ -16,6 +16,10 @@ installed()
         sed -n 's/^ii  *//p'
 }
 
+# A channel without a release is refused before apt is given its repository.
+expect_exit 1 sh $installer --channel lts
+expect_no_file /etc/apt/sources.list.d/filetrace.sources
+
 sh $installer --version 0.0.0.1
 expect_file /etc/apt/sources.list.d/filetrace.sources
 expect_eq 'the version asked for' 0.0.0.1 "$(installed)"

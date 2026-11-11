@@ -16,6 +16,7 @@ expect_exit 1 sh $installer $method --version 0.0.0.0
 # A candidate is not a version the installer offers.
 expect_exit 1 sh $installer $method --version 0.0.0.2
 expect_exit 1 sh $installer --no-such-option
+expect_exit 1 sh $installer $method --channel lts
 
 sh $installer $method
 for path in /usr/local/bin/filetrace /usr/local/bin/filetrace-agent \

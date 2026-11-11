@@ -78,11 +78,7 @@ package_manager()
 # The newest version of the channel, unless one was asked for.
 resolve_version()
 {
-    if [ -z "$version" ]; then
-        fetch "$repo_url/channels/$channel" "$work/channel" ||
-            die "cannot read the newest $channel version from $repo_url"
-        version=$(cat "$work/channel")
-    fi
+    [ -n "$version" ] || version=$(cat "$work/channel")
     fetch "$repo_url/versions/$version" "$work/tag" || die "version $version is not published"
     tag=$(cat "$work/tag")
 }
@@ -332,6 +328,13 @@ main()
 
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
+
+    # A channel is published with its first release. One that is missing is
+    # refused here, before a repository is configured for it.
+    if [ "$action" = install ] &&
+        ! fetch "$repo_url/channels/$channel" "$work/channel" 2>/dev/null; then
+        die "the $channel channel of $repo_url has no release, or the site cannot be reached"
+    fi
 
     if [ "$action" = uninstall ]; then
         ft_bindir=$prefix/bin
