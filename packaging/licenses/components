@@ -1,0 +1,8 @@
+# pkg-config module | name | license | home page | files with the license text
+musl|musl|MIT|https://musl.libc.org|musl.COPYRIGHT
+libbpf|libbpf|BSD-2-Clause|https://github.com/libbpf/libbpf|libbpf.LICENSE
+libelf|elfutils libelf|LGPL-3.0-or-later|https://sourceware.org/elfutils|lgpl-3.0.txt gpl-3.0.txt
+zlib|zlib|Zlib|https://zlib.net|zlib.LICENSE
+libzstd|Zstandard|BSD-3-Clause|https://github.com/facebook/zstd|zstd.LICENSE
+libprotobuf-c|protobuf-c|BSD-2-Clause|https://github.com/protobuf-c/protobuf-c|protobuf-c.LICENSE
+libnghttp2|nghttp2|MIT|https://nghttp2.org|nghttp2.COPYING
