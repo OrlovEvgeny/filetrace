@@ -319,7 +319,9 @@ int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a)
             ft_strlcpy(caps.rows[f].reason, d->caps.items[f].reason, sizeof(caps.rows[f].reason));
         }
         caps.count = FT_FEAT_COUNT;
-        source = "a check of this machine (no agent is running)";
+        source = err.code == FT_EXIT_PERMISSION
+                     ? "a check of this machine (the agent's socket is not accessible)"
+                     : "a check of this machine (no agent is running)";
         if (d->exit_code == FT_EXIT_PERMISSION || d->exit_code == FT_EXIT_UNSUPPORTED)
             code = d->exit_code;
         free(d);
