@@ -163,3 +163,12 @@ add_executable(filetrace cmd/filetrace.c)
 target_link_libraries(filetrace PRIVATE ft_cli)
 
 install(TARGETS filetrace filetraced RUNTIME DESTINATION bin)
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
