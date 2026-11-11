@@ -13,10 +13,11 @@ pre { background: #f4f4f4; padding: 0.8rem 1rem; overflow-x: auto; }
 <h1>Filetrace downloads</h1>
 <p>Packages and the installer of <a href="https://github.com/OrlovEvgeny/filetrace">Filetrace</a>.
 The installer sets up the repository that fits the system and installs the package:</p>
-<pre>curl -fsSL https://orlovevgeny.github.io/filetrace/install.sh | sudo sh</pre>
-<p>The repositories live under <code>apt/</code>, <code>rpm/</code> and <code>apk/</code>.
-Their metadata is signed with <a href="gpg.key">gpg.key</a>; the apk repository with
-<a href="apk/filetrace.rsa.pub">filetrace.rsa.pub</a>. The
+<pre>curl -fsSL https://filetrace.eorlov.org/install.sh | sudo sh</pre>
+<p>The repositories live under <code>apt/</code>, <code>rpm/</code> and <code>apk/</code>, and the
+files of each release under <code>dist/</code>, in a directory named after its tag.
+The apt and yum metadata is signed with <a href="/gpg.key">gpg.key</a>; the apk repository with
+<a href="/apk/filetrace.rsa.pub">filetrace.rsa.pub</a>. The
 <a href="https://github.com/OrlovEvgeny/filetrace#install">README</a> lists the manual steps for
 each package manager and for Homebrew.</p>
 </body>

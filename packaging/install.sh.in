@@ -1,14 +1,14 @@
 #!/bin/sh
 # Installs Filetrace.
 #
-#   curl -fsSL https://orlovevgeny.github.io/filetrace/install.sh | sudo sh
-#   curl -fsSL https://orlovevgeny.github.io/filetrace/install.sh | sudo sh -s -- --no-start
+#   curl -fsSL https://filetrace.eorlov.org/install.sh | sudo sh
+#   curl -fsSL https://filetrace.eorlov.org/install.sh | sudo sh -s -- --no-start
 #
 # Run with --help for the options.
 set -eu
 
-repo_url=${FILETRACE_REPO_URL:-https://orlovevgeny.github.io/filetrace}
-release_url=${FILETRACE_RELEASE_URL:-https://github.com/OrlovEvgeny/filetrace/releases/download}
+repo_url=${FILETRACE_REPO_URL:-https://filetrace.eorlov.org}
+release_url=${FILETRACE_RELEASE_URL:-$repo_url/dist}
 
 # @lib@
 
