@@ -6,6 +6,7 @@ RUN apt-get update \
         ca-certificates \
         clang \
         cmake \
+        git \
         iproute2 \
         libbpf-dev \
         libclang-rt-dev \
@@ -19,5 +20,8 @@ RUN apt-get update \
         procps \
         zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
+
+# The mounted tree belongs to the host user, which git refuses to read otherwise.
+RUN git config --system --add safe.directory /src
 
 WORKDIR /src
