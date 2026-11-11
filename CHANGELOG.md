@@ -2,6 +2,18 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.4.16 (2026-11-11)
+
+### New Feature
+
+- Derive the script an interpreter runs from its arguments ([d750911](https://github.com/OrlovEvgeny/filetrace/commit/d750911942930edad4c33e03dba9e8f9b0da324c))
+- Keep the command line, directory and script of each process ([56f20aa](https://github.com/OrlovEvgeny/filetrace/commit/56f20aab94f77e20a4cb7f8c34e325d028740b86))
+- Show command line, directory and script in listings ([e9b53f8](https://github.com/OrlovEvgeny/filetrace/commit/e9b53f869ac47d5b1bfd39629c53c30dc1ba1909))
+- Filter processes, transfers and events by script ([8ab3862](https://github.com/OrlovEvgeny/filetrace/commit/8ab38624b22c8da216bf00b87ab4a59685d9cb11))
+- Export what a process runs in OTLP log records ([606ffd4](https://github.com/OrlovEvgeny/filetrace/commit/606ffd4370f126f7fa5967ec96b3f1a15703f9b9))
+- Serve the command line, directory and script over gRPC ([cce3858](https://github.com/OrlovEvgeny/filetrace/commit/cce3858b8dbe1211399557a11556b07aaf376068))
+- Add settings that keep process arguments out ([2bfa362](https://github.com/OrlovEvgeny/filetrace/commit/2bfa36272dd3b4afa2fb0ab906fb7be9f3f4b3f7))
+
 ## 26.11.3.4 (2026-11-11)
 
 ### Bug Fix
