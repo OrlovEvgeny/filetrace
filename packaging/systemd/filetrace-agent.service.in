@@ -1,6 +1,6 @@
 [Unit]
 Description=Filetrace agent
-Documentation=https://github.com/OrlovEvgeny/filetrace
+Documentation=https://filetrace.eorlov.org https://github.com/OrlovEvgeny/filetrace
 ConditionPathExists=/sys/kernel/btf/vmlinux
 StartLimitIntervalSec=300
 StartLimitBurst=5
