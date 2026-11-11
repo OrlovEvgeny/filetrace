@@ -60,6 +60,7 @@ static int take_snapshot(struct ft_session *s, const struct ft_watch_options *op
 
     ft_query_init(&q, FT_Q_PROCESSES);
     q.sort = opt->inbound ? FT_SORT_INBOUND : FT_SORT_OUTBOUND;
+    q.min_bytes = 1;
     q.limit = opt->limit;
     q.pid = opt->pid;
     ft_strlcpy(q.process, opt->process, sizeof(q.process));

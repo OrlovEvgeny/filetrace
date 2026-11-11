@@ -194,6 +194,8 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
             key = p->q_tx;
             break;
         }
+        if (q->min_bytes && (q->sort == FT_SORT_INBOUND ? p->q_rx : p->q_tx) < q->min_bytes)
+            continue;
         candidates_add(&c, (struct candidate){.key = key, .tie = UINT32_MAX - p->pid, .entry = p});
     }
 

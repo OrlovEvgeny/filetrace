@@ -653,6 +653,7 @@ int ft_cmd_top(const struct ft_cli *cli, struct ft_args *a)
     switch (what) {
     case TOP_PROCESSES:
         qa.query.limit = limit;
+        qa.query.min_bytes = 1;
         return run_list(cli, &qa, FT_VIEW_PROCESSES, FT_MSG_ROW_PROCESS, true,
                         "processes with network activity");
     case TOP_FILES:
