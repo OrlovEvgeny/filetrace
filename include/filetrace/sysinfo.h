@@ -20,6 +20,10 @@ struct ft_host_info {
 
 void ft_sysinfo_host(struct ft_host_info *out);
 
+/* Facts about a running process that only the system holds; false when it cannot tell. */
+bool ft_sysinfo_process_cgroup(uint32_t pid, char *buf, size_t size);
+bool ft_sysinfo_process_open_files(uint32_t pid, uint32_t *count);
+
 /* "linux", "macos", "freebsd" or the lowercase system name. */
 const char *ft_platform_name(void);
 

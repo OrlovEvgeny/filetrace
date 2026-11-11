@@ -156,6 +156,7 @@ add_library(ft_cli STATIC
     cmd/args.c
     cmd/diagnostics.c
     cmd/events.c
+    cmd/inspect.c
     cmd/queries.c
     cmd/service.c
     cmd/views.c

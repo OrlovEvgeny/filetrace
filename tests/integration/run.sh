@@ -127,6 +127,7 @@ expect_match "sendfile evidence" "$(printf '%s\n' "$csv" | column transfer.evide
     'direct_file_to_socket_transfer;.*socket_identity;remote_endpoint'
 expect "sendfile incomplete" "$(printf '%s\n' "$csv" | column transfer.incomplete)" false
 first_port=$(field "$report" port)
+first_pid=$(field "$report" pid)
 
 # The same over IPv6.
 report=$("$workload" sendfile "$data/v6.bin" 1000000 ipv6)
@@ -291,6 +292,39 @@ expect_match "events: raw" "$(ft events --type socket_close --limit 1 --raw)" \
 expect "events: unknown type exit code" "$(ft events --type file_open >/dev/null 2>&1; echo $?)" 2
 expect_match "events: unknown type names the known ones" \
     "$(ft events --type file_open 2>&1)" 'file_transfer'
+
+# inspect answers from the file, the process, the address, the socket and the flow.
+out=$(ft inspect file "$data/report.csv" | tr '\n' ' ')
+expect_match "inspect file: identity" "$out" \
+    "Path: +$data/report.csv .*Inode: +$(stat -c %i "$data/report.csv") .*Size: +4\.77 MB"
+expect_match "inspect file: history" "$out" \
+    "TIME +PROCESS +PID +REMOTE +BYTES +METHOD +CONFIDENCE .* ft_workload +$first_pid +127\.0\.0\.1:$first_port"
+expect_match "inspect file: totals" "$out" \
+    'Total sent: +4\.77 MB +Destinations: +1 +Processes: +1 +Transfers: +1'
+expect_match "inspect file: provenance" "$out" 'sendfile: +1 transfer +Exact: +1'
+expect_match "inspect file: says where history starts" "$out" 'History starts at 20'
+expect_match "inspect file: json" "$(ft inspect file "$data/report.csv" --json | tr -d '\n')" \
+    '^\{"kind":"file","path":"[^"]+","totals":\{"bytes_sent":5000000,"transfers":1,"active_transfers":[01],"destinations":1,"processes":1\},"provenance":\{"methods":\{"sendfile":1,"read-write":0\},.*"transfers":\[ *\{"event":"file_transfer".*\],"observed_since":"[^"]+","events_lost":0\}$'
+expect "inspect file: a pattern for several files" \
+    "$(ft inspect file "$data/reuse-*" >/dev/null 2>&1; echo $?)" 2
+expect_match "inspect file: nothing known" "$(ft inspect file "$data/absent.bin")" \
+    '^No transfers of .* have been observed since'
+out=$(ft inspect process "$first_pid" | tr '\n' ' ')
+expect_match "inspect process" "$out" \
+    "Name: +ft_workload +PID: +$first_pid .*Unique files: +1 .*TOP DESTINATIONS .*127\.0\.0\.1 .*FILES SENT .*report\.csv"
+out=$(ft inspect ip 127.0.0.0/8 --limit 500 | tr '\n' ' ')
+expect_match "inspect ip" "$out" 'NETWORK .*Remote: +127\.0\.0\.0/8 .*PROCESSES .*FILES SENT TO IT .*report\.csv'
+expect_match "inspect ip: other networks" "$(ft inspect ip 203.0.113.0/24)" '^No traffic with'
+flow=$(ft flows --pid "$first_pid" --port "$first_port" --format quiet)
+out=$(ft inspect flow "$flow" | tr '\n' ' ')
+expect_match "inspect flow" "$out" \
+    "FLOW .*ID: +$flow .*Protocol: +TCP .*Remote: +127\.0\.0\.1:$first_port .*Sent: +4\.77 MB .*report\.csv"
+socket_id=$(ft flows --pid "$first_pid" --port "$first_port" --format csv | column socket_id)
+out=$(ft inspect socket "$socket_id" | tr '\n' ' ')
+expect_match "inspect socket" "$out" \
+    "SOCKET .*ID: +$socket_id .*State: +closed .*Process: +ft_workload \\(PID $first_pid\\) .*FLOWS .*report\.csv"
+expect "inspect: unknown kind exit code" "$(ft inspect inode 5 >/dev/null 2>&1; echo $?)" 2
+expect "inspect: missing subject exit code" "$(ft inspect file >/dev/null 2>&1; echo $?)" 2
 
 # Following delivers what happens next and ends cleanly on a signal.
 "$bin/filetrace" --socket "$sock" events --follow --type file_transfer,network_send --jsonl \

@@ -125,7 +125,8 @@ static void transfers(void)
                        "\"remote_ip\":\"203.0.113.42\",\"remote_port\":52144},") != nullptr);
     CHECK(strstr(text,
                  "\"transfer\":{\"method\":\"sendfile\",\"bytes_sent\":148293012,"
-                 "\"bytes_per_second\":1258291,\"operations\":1248,\"duration_ms\":8200,"
+                 "\"bytes_per_second\":1258291,\"operations\":1248,"
+                 "\"started\":\"2026-11-10T21:42:03.010Z\",\"duration_ms\":8200,"
                  "\"state\":\"completed\",\"confidence\":\"exact\",\"evidence\":["
                  "\"direct_file_to_socket_transfer\",\"file_identity\","
                  "\"socket_identity\",\"remote_endpoint\"],\"incomplete\":false}}\n") != nullptr);
@@ -153,10 +154,13 @@ static void transfers(void)
                  "event,transfer_id,timestamp,host,platform,process.pid,process.ppid,"
                  "process.name,process.executable,file.path,file.inode,file.device,") == text);
     /* A field containing a comma or a quote is quoted, with quotes doubled. */
-    CHECK(strstr(text, ",nginx,/usr/sbin/nginx,\"/data/export/report, \"\"final\"\".csv\","
-                       "928371,2049,148293012,root,ext4,false,tcp,127,10.0.0.10,443,203.0.113.42,"
-                       "52144,"
-                       "sendfile,148293012,,1258291,1248,8200,completed,exact,") != nullptr);
+    CHECK(
+        strstr(text,
+               ",nginx,/usr/sbin/nginx,\"/data/export/report, \"\"final\"\".csv\","
+               "928371,2049,148293012,root,ext4,false,tcp,127,10.0.0.10,443,203.0.113.42,"
+               "52144,"
+               "sendfile,148293012,,1258291,1248,2026-11-10T21:42:03.010Z,8200,completed,exact,") !=
+        nullptr);
     free(text);
 
     ft_rows_clear(&rows);

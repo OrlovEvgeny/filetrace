@@ -335,7 +335,7 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
             if (q->state != state)
                 continue;
         } else if (state == FT_SOCK_CLOSED && now_ns - s->closed_ns > st->cfg.closed_retention_ns &&
-                   q->since_wall_ns == 0) {
+                   q->since_wall_ns == 0 && q->sock_id == 0) {
             continue;
         }
         if ((q->flags & FT_QF_ACTIVE) && !socket_is_open(st, s, now_ns))

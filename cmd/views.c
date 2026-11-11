@@ -41,16 +41,10 @@ struct field {
     void (*get)(const void *row, struct value *v);
 };
 
-struct column {
-    const char *title;
-    const char *key;
-    bool right;
-};
-
 struct view {
     const struct field *fields;
     size_t nfields;
-    const struct column *columns;
+    const struct ft_view_column *columns;
     size_t ncolumns;
     const char *quiet_key;
     size_t row_size;
@@ -294,7 +288,7 @@ static const struct field process_fields[] = {
     {"network_namespace", 0, p_netns},
 };
 
-static const struct column process_columns[] = {
+static const struct ft_view_column process_columns[] = {
     {"PID", "pid", false},
     {"PROCESS", "name", false},
     {"OUTBOUND", "bytes_sent_per_second", true},
@@ -427,7 +421,7 @@ static const struct field connection_fields[] = {
     {"last_seen", 0, c_last},
 };
 
-static const struct column connection_columns[] = {
+static const struct ft_view_column connection_columns[] = {
     {"PID", "pid", false},           {"PROCESS", "process", false},
     {"PROTOCOL", "protocol", false}, {"LOCAL", "@local", false},
     {"REMOTE", "@remote", false},    {"STATE", "state", false},
@@ -565,7 +559,7 @@ static const struct field flow_fields[] = {
     {"last_seen", 0, f_last},
 };
 
-static const struct column flow_columns[] = {
+static const struct ft_view_column flow_columns[] = {
     {"PID", "pid", false},
     {"PROCESS", "process", false},
     {"PROTOCOL", "protocol", false},
@@ -793,6 +787,12 @@ static void t_ops(const void *row, struct value *v)
     v->absent = r->method == FT_METHOD_NONE;
 }
 
+static void t_started(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    set_time(v, r->first_wall_ns);
+}
+
 static void t_duration(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
@@ -861,6 +861,7 @@ static const struct field transfer_fields[] = {
     {"transfer.bytes_read", 0, t_read_bytes},
     {"transfer.bytes_per_second", 0, t_rate},
     {"transfer.operations", 0, t_ops},
+    {"transfer.started", 0, t_started},
     {"transfer.duration_ms", 0, t_duration},
     {"transfer.state", 0, t_state},
     {"transfer.confidence", 0, t_confidence},
@@ -873,7 +874,7 @@ static const struct field transfer_fields[] = {
     {"@confidence", F_VIRTUAL | F_UPPER, t_confidence_column},
 };
 
-static const struct column file_columns[] = {
+static const struct ft_view_column file_columns[] = {
     {"FILE", "@file", false},
     {"PROCESS", "process.name", false},
     {"DESTINATION", "@destination", false},
@@ -882,7 +883,7 @@ static const struct column file_columns[] = {
     {"CONFIDENCE", "@confidence", false},
 };
 
-static const struct column transfer_columns[] = {
+static const struct ft_view_column transfer_columns[] = {
     {"ID", "transfer_id", false},
     {"PROCESS", "process.name", false},
     {"FILE", "@file", false},
@@ -1012,8 +1013,9 @@ static const char *table_cell(void *ctx, size_t r, size_t c, char *buf, size_t s
     return value_text(t->fields[c], t->value, false, buf, size);
 }
 
-static void render_table(const struct view *view, const struct ft_rows *rows,
-                         const struct ft_output *out, bool rank, void *row, struct value *value)
+static void render_table(const struct view *view, const struct ft_rows *rows, size_t nrows,
+                         const struct ft_view_column *columns, size_t ncolumns, FILE *out,
+                         bool rank, void *row, struct value *value)
 {
     struct ft_column_spec specs[16];
     const struct field *fields[16];
@@ -1021,9 +1023,9 @@ static void render_table(const struct view *view, const struct ft_rows *rows,
 
     if (rank)
         specs[ncols++] = (struct ft_column_spec){"RANK", false};
-    for (size_t i = 0; i < view->ncolumns && ncols < FT_ARRAY_LEN(specs); i++) {
-        fields[i] = find_field(view, view->columns[i].key);
-        specs[ncols++] = (struct ft_column_spec){view->columns[i].title, view->columns[i].right};
+    for (size_t i = 0; i < ncolumns && ncols < FT_ARRAY_LEN(specs); i++) {
+        fields[i] = find_field(view, columns[i].key);
+        specs[ncols++] = (struct ft_column_spec){columns[i].title, columns[i].right};
     }
 
     struct table_ctx ctx = {
@@ -1035,8 +1037,7 @@ static void render_table(const struct view *view, const struct ft_rows *rows,
         .row = row,
         .value = value,
     };
-    ft_table_print(out->stream, specs, ncols, rows->count, table_cell, &ctx,
-                   ft_term_styled(out->stream));
+    ft_table_print(out, specs, ncols, nrows, table_cell, &ctx, ft_term_styled(out));
 }
 
 static void json_value(FILE *o, const struct field *f, struct value *v, char *buf, size_t size)
@@ -1120,42 +1121,107 @@ static void json_object(FILE *o, const struct view *view, const void *row, struc
     fputc('}', o);
 }
 
+constexpr size_t TEXT_SIZE = FT_PATH_MAX + 64;
+
+struct scratch {
+    void *row;
+    struct value *value;
+    char *text;
+};
+
+static bool scratch_open(struct scratch *s, const struct view *view)
+{
+    s->row = malloc(view->row_size);
+    s->value = malloc(sizeof(*s->value));
+    s->text = malloc(TEXT_SIZE);
+    return s->row && s->value && s->text;
+}
+
+static void scratch_close(struct scratch *s)
+{
+    free(s->row);
+    free(s->value);
+    free(s->text);
+}
+
+void ft_view_table(enum ft_view_id id, const struct ft_rows *rows, size_t limit,
+                   const struct ft_view_column *columns, size_t ncolumns, FILE *out)
+{
+    const struct view *view = &views[id];
+    struct scratch s;
+
+    if (scratch_open(&s, view))
+        render_table(view, rows, limit && limit < rows->count ? limit : rows->count, columns,
+                     ncolumns, out, false, s.row, s.value);
+    scratch_close(&s);
+}
+
+static void json_array(const struct view *view, const struct ft_rows *rows, FILE *o,
+                       struct scratch *s)
+{
+    fputc('[', o);
+    for (size_t r = 0; r < rows->count; r++) {
+        ft_rows_get(rows, r, s->row, view->row_size);
+        fputs(r ? ",\n " : "\n ", o);
+        json_object(o, view, s->row, s->value, s->text, TEXT_SIZE);
+    }
+    fputs(rows->count ? "\n]" : "]", o);
+}
+
+void ft_view_json_array(enum ft_view_id id, const struct ft_rows *rows, FILE *out)
+{
+    const struct view *view = &views[id];
+    struct scratch s;
+
+    if (scratch_open(&s, view))
+        json_array(view, rows, out, &s);
+    scratch_close(&s);
+}
+
+void ft_view_json_object(enum ft_view_id id, const struct ft_rows *rows, size_t index, FILE *out)
+{
+    const struct view *view = &views[id];
+    struct scratch s;
+
+    if (scratch_open(&s, view)) {
+        ft_rows_get(rows, index, s.row, view->row_size);
+        json_object(out, view, s.row, s.value, s.text, TEXT_SIZE);
+    }
+    scratch_close(&s);
+}
+
 void ft_view_render(enum ft_view_id id, const struct ft_rows *rows, const struct ft_output *out,
                     bool rank)
 {
     const struct view *view = &views[id];
     FILE *o = out->stream;
-    void *row = malloc(view->row_size);
-    struct value *v = malloc(sizeof(*v));
-    size_t size = FT_PATH_MAX + 64;
-    char *buf = malloc(size);
+    struct scratch s;
 
-    if (!row || !v || !buf) {
-        free(row);
-        free(v);
-        free(buf);
+    if (!scratch_open(&s, view)) {
+        scratch_close(&s);
         return;
     }
+    void *row = s.row;
+    struct value *v = s.value;
+    char *buf = s.text;
+    size_t size = TEXT_SIZE;
 
     switch (out->format) {
     case FT_FMT_TABLE:
-        render_table(view, rows, out, rank, row, v);
+        render_table(view, rows, rows->count, view->columns, view->ncolumns, o, rank, row, v);
         break;
 
     case FT_FMT_JSON:
+        json_array(view, rows, o, &s);
+        fputc('\n', o);
+        break;
+
     case FT_FMT_JSONL:
-        if (out->format == FT_FMT_JSON)
-            fputc('[', o);
         for (size_t r = 0; r < rows->count; r++) {
             ft_rows_get(rows, r, row, view->row_size);
-            if (out->format == FT_FMT_JSON)
-                fputs(r ? ",\n " : "\n ", o);
             json_object(o, view, row, v, buf, size);
-            if (out->format == FT_FMT_JSONL)
-                fputc('\n', o);
+            fputc('\n', o);
         }
-        if (out->format == FT_FMT_JSON)
-            fputs(rows->count ? "\n]\n" : "]\n", o);
         break;
 
     case FT_FMT_CSV: {
@@ -1196,8 +1262,5 @@ void ft_view_render(enum ft_view_id id, const struct ft_rows *rows, const struct
         break;
     }
     }
-
-    free(row);
-    free(v);
-    free(buf);
+    scratch_close(&s);
 }

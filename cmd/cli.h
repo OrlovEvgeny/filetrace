@@ -179,6 +179,20 @@ enum ft_view_id : uint8_t {
 void ft_view_render(enum ft_view_id view, const struct ft_rows *rows, const struct ft_output *out,
                     bool rank);
 
+struct ft_view_column {
+    const char *title;
+    const char *key; /* a field of the view, as in its JSON output; '@' marks table-only ones */
+    bool right;
+};
+
+/* A table of the first limit rows (all of them when 0) with the given columns. */
+void ft_view_table(enum ft_view_id view, const struct ft_rows *rows, size_t limit,
+                   const struct ft_view_column *columns, size_t ncolumns, FILE *out);
+
+/* The rows, or one of them, as the JSON objects that ft_view_render prints. */
+void ft_view_json_array(enum ft_view_id view, const struct ft_rows *rows, FILE *out);
+void ft_view_json_object(enum ft_view_id view, const struct ft_rows *rows, size_t index, FILE *out);
+
 void ft_transfer_id_format(const struct ft_row_transfer *row, char *buf, size_t size);
 
 int ft_cmd_watch(const struct ft_cli *cli, struct ft_args *a);
@@ -189,6 +203,7 @@ int ft_cmd_processes(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_connections(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_flows(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_events(const struct ft_cli *cli, struct ft_args *a);
+int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_stats(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a);

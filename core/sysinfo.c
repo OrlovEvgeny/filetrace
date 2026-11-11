@@ -40,16 +40,11 @@ static uint64_t resident_bytes(void)
 #endif
 }
 
-static uint32_t count_open_fds(void)
+static bool count_entries(const char *dir, uint32_t *count)
 {
-#if defined(__linux__)
-    const char *dir = "/proc/self/fd";
-#else
-    const char *dir = "/dev/fd";
-#endif
     DIR *d = opendir(dir);
     if (!d)
-        return 0;
+        return false;
 
     uint32_t n = 0;
     for (struct dirent *e = readdir(d); e; e = readdir(d)) {
@@ -57,8 +52,63 @@ static uint32_t count_open_fds(void)
             n++;
     }
     closedir(d);
+    *count = n;
+    return true;
+}
+
+static uint32_t count_open_fds(void)
+{
+#if defined(__linux__)
+    const char *dir = "/proc/self/fd";
+#else
+    const char *dir = "/dev/fd";
+#endif
+    uint32_t n = 0;
+    count_entries(dir, &n);
     /* The directory stream itself holds one descriptor. */
     return n ? n - 1 : 0;
+}
+
+bool ft_sysinfo_process_open_files(uint32_t pid, uint32_t *count)
+{
+#if defined(__linux__)
+    char dir[64];
+    snprintf(dir, sizeof(dir), "/proc/%u/fd", pid);
+    return count_entries(dir, count);
+#else
+    (void)pid;
+    (void)count;
+    return false;
+#endif
+}
+
+bool ft_sysinfo_process_cgroup(uint32_t pid, char *buf, size_t size)
+{
+#if defined(__linux__)
+    char path[64];
+    char line[4352];
+    bool found = false;
+
+    snprintf(path, sizeof(path), "/proc/%u/cgroup", pid);
+    FILE *f = fopen(path, "re");
+    if (!f)
+        return false;
+    /* The unified hierarchy is the line "0::<path>". */
+    while (!found && fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "0::", 3) != 0)
+            continue;
+        line[strcspn(line, "\n")] = '\0';
+        ft_strlcpy(buf, line + 3, size);
+        found = true;
+    }
+    fclose(f);
+    return found;
+#else
+    (void)pid;
+    (void)buf;
+    (void)size;
+    return false;
+#endif
 }
 
 void ft_sysinfo_self(struct ft_self_usage *out)

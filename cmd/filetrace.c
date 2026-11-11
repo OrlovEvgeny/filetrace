@@ -218,6 +218,49 @@ static void help_flows(FILE *o)
     fputs(exit_codes, o);
 }
 
+static void help_inspect(FILE *o)
+{
+    fputs("Usage:\n"
+          "  filetrace inspect file <path>\n"
+          "  filetrace inspect process <pid>\n"
+          "  filetrace inspect socket <id>\n"
+          "  filetrace inspect flow <id>\n"
+          "  filetrace inspect ip <address|cidr>\n"
+          "\n"
+          "Everything known about one thing, from whichever side it is approached:\n"
+          "\n"
+          "  file     Who sent this file, to whom, how much and by which method\n"
+          "  process  What this process is sending now, where to, and which files\n"
+          "  socket   One socket: its ends, owner, traffic and the files sent on it\n"
+          "  flow     One process's traffic with one remote endpoint on a socket\n"
+          "  ip       Which processes talk to this address or network, and which\n"
+          "           files were sent to it\n"
+          "\n"
+          "Socket and flow IDs are the SOCKET and FLOW columns of 'connections' and\n"
+          "'flows'. A file is named by its path, with '*' wildcards if they match a\n"
+          "single file.\n"
+          "\n"
+          "Options:\n"
+          "  --since <when>          Only what was active at or after this time (10m,\n"
+          "                          1h, 7d or an RFC 3339 timestamp)\n"
+          "  --limit <n>             Rows per list (default: 20)\n"
+          "  --format table|json     Output format (default: table)\n"
+          "  --json                  Short for --format json\n"
+          "  --output <file>         Write to a file instead of standard output\n"
+          "\n"
+          "History begins when the daemon starts and is kept in memory only; every\n"
+          "report says from when it reaches.\n"
+          "\n"
+          "Examples:\n"
+          "  filetrace inspect file /data/backup.tar.gz\n"
+          "  filetrace inspect process 1245\n"
+          "  filetrace inspect ip 203.0.113.0/24 --since 1h\n"
+          "  filetrace inspect socket 928374 --json\n",
+          o);
+    fputs(confidence_levels, o);
+    fputs(exit_codes, o);
+}
+
 static void help_events(FILE *o)
 {
     fputs("Usage:\n"
@@ -386,6 +429,7 @@ static const struct command commands[] = {
     {"processes", "Inspect process activity", ft_cmd_processes, help_processes},
     {"connections", "Inspect network connections", ft_cmd_connections, help_connections},
     {"flows", "Inspect network flows", ft_cmd_flows, help_flows},
+    {"inspect", "Inspect a file, process, socket, flow or address", ft_cmd_inspect, help_inspect},
     {"events", "Show the collector's raw events", ft_cmd_events, help_events},
     {"stats", "Display collection statistics", ft_cmd_stats, help_stats},
     {"daemon", "Run or control the background daemon", ft_cmd_daemon, help_daemon},
