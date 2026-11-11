@@ -189,12 +189,25 @@ static const struct ft_backend_ops ticking_ops = {
     .close = scripted_close,
 };
 
+/* What /proc would say of the one process the sending backend reports. */
+static bool sending_process_text(uint32_t pid, struct ft_process_text *out)
+{
+    static const char args[] = "/usr/sbin/nginx\0-g\0daemon off;";
+    if (pid != 1842)
+        return false;
+    memcpy(out->args, args, sizeof(args));
+    out->args_len = sizeof(args);
+    ft_strlcpy(out->cwd, "/srv/www", sizeof(out->cwd));
+    return true;
+}
+
 static const struct ft_backend_ops sending_ops = {
     .name = "sending",
     .open = scripted_open,
     .flush = sending_flush,
     .stats = scripted_stats,
     .capabilities = scripted_capabilities,
+    .read_process_text = sending_process_text,
     .close = scripted_close,
 };
 
@@ -721,13 +734,15 @@ static void api_event(void *ctx, const uint8_t *message, size_t size)
         return;
     }
     const Filetrace__V1__TransferEvent *e = w->event;
-    r->events_as_expected = r->events_as_expected && e->sequence > r->last_sequence &&
-                            e->bytes_sent == 100 &&
-                            e->method == FILETRACE__V1__METHOD__METHOD_SENDFILE &&
-                            e->confidence == FILETRACE__V1__CONFIDENCE__CONFIDENCE_EXACT &&
-                            w->missed == 0 && strcmp(e->process->name, "nginx") == 0 &&
-                            strcmp(e->file->path, "/var/www/stream.bin") == 0 &&
-                            strcmp(e->connection->remote->address, "203.0.113.42") == 0;
+    r->events_as_expected =
+        r->events_as_expected && e->sequence > r->last_sequence && e->bytes_sent == 100 &&
+        e->method == FILETRACE__V1__METHOD__METHOD_SENDFILE &&
+        e->confidence == FILETRACE__V1__CONFIDENCE__CONFIDENCE_EXACT && w->missed == 0 &&
+        strcmp(e->process->name, "nginx") == 0 &&
+        strcmp(e->file->path, "/var/www/stream.bin") == 0 &&
+        strcmp(e->process->command_line, "/usr/sbin/nginx -g daemon off;") == 0 &&
+        strcmp(e->process->working_directory, "/srv/www") == 0 &&
+        strcmp(e->connection->remote->address, "203.0.113.42") == 0;
     r->last_sequence = e->sequence;
     r->events++;
     filetrace__v1__watch_transfers_response__free_unpacked(w, nullptr);
@@ -851,6 +866,9 @@ static void answers_grpc_calls(void)
         CHECK_U64(t->process->pid, 1842);
         CHECK_STR(t->process->name, "nginx");
         CHECK_STR(t->process->executable, "/usr/sbin/nginx");
+        CHECK_STR(t->process->command_line, "/usr/sbin/nginx -g daemon off;");
+        CHECK_STR(t->process->working_directory, "/srv/www");
+        CHECK_STR(t->process->script, "");
         CHECK_STR(t->file->path, "/var/www/stream.bin");
         CHECK_U64(t->file->inode, 77);
         CHECK_U64(t->file->size, 4096);
@@ -878,6 +896,15 @@ static void answers_grpc_calls(void)
     CHECK(list != nullptr && list->n_transfers == 0);
     if (list)
         filetrace__v1__list_transfers_response__free_unpacked(list, nullptr);
+
+    /* nginx runs no script. */
+    filter.remote = "203.0.113.0/24";
+    filter.script = "*";
+    list = api_list(client, &filter, &r);
+    CHECK(list != nullptr && list->n_transfers == 0);
+    if (list)
+        filetrace__v1__list_transfers_response__free_unpacked(list, nullptr);
+    filter.script = "";
 
     filter.remote = "the internet";
     list = api_list(client, &filter, &r);
