@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <sched.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -9,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sendfile.h>
+#include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -377,6 +379,44 @@ static void scenario_upload(const char *path, size_t chunk)
     stop_sink(&sink);
 }
 
+static void read_whole(const char *path)
+{
+    int file = open_file(path);
+    char buf[65536];
+    ssize_t n;
+    while ((n = read(file, buf, sizeof(buf))) > 0) {
+    }
+    if (n < 0)
+        die("read");
+    close(file);
+}
+
+/* read <path>: reads the file and sends nothing */
+static void scenario_read(const char *path)
+{
+    read_whole(path);
+    printf("scenario=read pid=%d path=%s\n", (int)getpid(), path);
+}
+
+/*
+ * nsread <dir> <mount point> <name>: reads dir/name through a bind mount of dir on the mount
+ * point in a mount namespace of its own, as a process in a container sees its files.
+ */
+static void scenario_ns_read(const char *dir, const char *mount_point, const char *name)
+{
+    if (unshare(CLONE_NEWNS) != 0)
+        die("unshare");
+    if (mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0)
+        die("mount private");
+    if (mount(dir, mount_point, nullptr, MS_BIND, nullptr) != 0)
+        die("mount bind");
+
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/%s", mount_point, name);
+    read_whole(path);
+    printf("scenario=nsread pid=%d path=%s\n", (int)getpid(), path);
+}
+
 /* readlittle <path> <bytes>: sends only a sliver of what it read */
 static void scenario_read_little(const char *path, size_t size)
 {
@@ -702,6 +742,10 @@ int main(int argc, char **argv)
         scenario_read_recv_elsewhere(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "readbundle") == 0 && argc == 6)
         scenario_read_bundle(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "read") == 0 && argc == 3)
+        scenario_read(argv[2]);
+    else if (strcmp(name, "nsread") == 0 && argc == 5)
+        scenario_ns_read(argv[2], argv[3], argv[4]);
     else if (strcmp(name, "upload") == 0 && argc == 4)
         scenario_upload(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readlittle") == 0 && argc == 4)

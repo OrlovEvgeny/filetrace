@@ -459,13 +459,14 @@ expect "no minimum agent exit code" "$?" 0
 # only when all that was read of them went.
 cat >"$work/background.toml" <<CONFIG
 [correlation]
-background_paths = ["$data/bg-*", "/etc/passwd"]
+background_paths = ["$data/bg-*", "$data/ns-view/*", "/etc/passwd"]
 no_minimum_paths = ["/etc/passwd"]
 CONFIG
 # The agent resolves the patterns to inodes when it starts, so the files exist by then.
 : >"$data/bg-ca.crt"
 : >"$data/bg-gai.conf"
 : >"$data/bg-whole.bin"
+mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
     { echo "FAIL: the agent did not start with background_paths"; exit 1; }
 "$workload" readbundle "$data/up-bundle.bin" 300000 "$data/bg-ca.crt" 200000 >/dev/null
@@ -487,6 +488,28 @@ csv=$(ft files --path /etc/passwd --format csv)
 expect "background: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "background: /etc/passwd upload bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "$(stat -L -c %s /etc/passwd)"
+
+# A listed file made after the agent started is background once a read reports its path.
+head -c 200000 /dev/zero >"$data/bg-late.crt"
+"$workload" read "$data/bg-late.crt" >/dev/null
+settle
+"$workload" readbundle "$data/up-late.bin" 300000 "$data/bg-late.crt" 200000 >/dev/null
+settle
+expect "background: file read before a late bundle bytes" \
+    "$(ft files --path "$data/up-late.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "background: late bundle not reported" \
+    "$(ft files --path "$data/bg-late.crt" --format csv | rows)" 0
+
+# So is one whose path matches only inside another mount namespace, as in a container.
+head -c 200000 /dev/zero >"$data/ns-source/bundle.crt"
+"$workload" nsread "$data/ns-source" "$data/ns-view" bundle.crt >/dev/null
+settle
+"$workload" readbundle "$data/up-ns.bin" 300000 "$data/ns-source/bundle.crt" 200000 >/dev/null
+settle
+expect "background: file read before a namespaced bundle bytes" \
+    "$(ft files --path "$data/up-ns.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "background: namespaced bundle not reported" \
+    "$(ft files --path "$data/ns-*" --format csv | rows)" 0
 stop_agent
 expect "background agent exit code" "$?" 0
 

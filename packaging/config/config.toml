@@ -48,8 +48,9 @@
 # no_minimum_paths = []
 # Files that programs read on their way to a connection, such as CA bundles.
 # Reading one does not make it a candidate for what the thread sends next; it
-# is reported only when a send takes all that was read of it. Files that are
-# replaced are noticed within 30 seconds. [] treats them as any other file.
+# is reported only when a send takes all that was read of it. A file counts
+# once a pattern names it: when the agent starts, every 30 seconds, and after
+# the first read of its path, also inside a container. [] turns this off.
 # background_paths = ["/etc/ssl/certs/*", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/*", "/etc/pki/ca-trust/extracted/*", "/etc/ca-certificates/extracted/*", "/usr/share/ca-certificates/*", "/etc/ssl/openssl.cnf", "/etc/pki/tls/openssl.cnf", "/usr/lib/ssl/openssl.cnf", "/etc/hosts", "/etc/host.conf", "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/passwd", "/etc/group", "/usr/share/zoneinfo/*", "/etc/localtime"]
 
 # Entries per table; the least recently used go first.

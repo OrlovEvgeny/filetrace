@@ -572,6 +572,10 @@ static __always_inline void forget_file(struct inode *inode)
     };
     if (!bpf_map_delete_elem(&known_files, &fk))
         __sync_fetch_and_add(&forgotten_files, 1);
+
+    /* The inode number can be given to an unrelated file next. */
+    struct ft_bpf_background_key bk = {.ino = fk.ino, .dev = fk.dev};
+    bpf_map_delete_elem(&background_files, &bk);
 }
 
 #endif

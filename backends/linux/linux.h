@@ -92,4 +92,11 @@ void ft_linux_fs_type(uint64_t magic, char *buf, size_t size);
 size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t count,
                                 bool *truncated);
 
+/*
+ * Adds a file the kernel reported to the background map when its path matches the patterns:
+ * a file the agent cannot see, such as one inside a container, or one made after the last scan.
+ */
+void ft_linux_background_learn(int map_fd, const char *const *patterns, size_t count, uint64_t ino,
+                               uint32_t dev, const char *path);
+
 #endif

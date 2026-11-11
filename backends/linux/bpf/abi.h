@@ -136,6 +136,12 @@ enum ft_bpf_counter {
     FT_BPF_CNT_MAX = 5,
 };
 
+/* How the agent found a background file: the value stored with its key. */
+enum ft_bpf_background_source {
+    FT_BPF_BACKGROUND_SCANNED = 1, /* a pattern resolved in the agent's own file system view */
+    FT_BPF_BACKGROUND_LEARNED = 2, /* a path the kernel reported, such as one in a container */
+};
+
 /* A file the agent names as background: reading it does not change what a thread sends. */
 struct ft_bpf_background_key {
     __u64 ino;

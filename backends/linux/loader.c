@@ -553,6 +553,10 @@ static void on_file(struct ft_backend *b, const struct ft_bpf_ev_file *e, size_t
             },
     };
     ft_linux_fs_type(e->fs_magic, ev.file.fs_type, sizeof(ev.file.fs_type));
+    if (b->background_fd >= 0 &&
+        !(e->flags & (FT_BPF_FILE_TRUNCATED | FT_BPF_FILE_DETACHED | FT_BPF_FILE_DELETED)))
+        ft_linux_background_learn(b->background_fd, b->cfg.background_paths,
+                                  b->cfg.background_path_count, e->ino, e->dev, b->path);
     emit(b, &ev);
 }
 

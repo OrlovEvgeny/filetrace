@@ -104,6 +104,19 @@ static bool contains(const struct key_set *set, const struct ft_bpf_background_k
     return bsearch(key, set->keys, set->count, sizeof(*key), key_cmp) != nullptr;
 }
 
+void ft_linux_background_learn(int map_fd, const char *const *patterns, size_t count, uint64_t ino,
+                               uint32_t dev, const char *path)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (ft_glob_match(patterns[i], path)) {
+            struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
+            uint8_t learned = FT_BPF_BACKGROUND_LEARNED;
+            bpf_map_update_elem(map_fd, &key, &learned, BPF_NOEXIST);
+            return;
+        }
+    }
+}
+
 size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t count,
                                 bool *truncated)
 {
@@ -122,16 +135,19 @@ size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t 
     bool more = bpf_map_get_next_key(map_fd, nullptr, &key) == 0;
     while (more) {
         more = bpf_map_get_next_key(map_fd, &key, &next) == 0;
-        if (!contains(&set, &key))
+        uint8_t source = 0;
+        bool learned =
+            bpf_map_lookup_elem(map_fd, &key, &source) == 0 && source == FT_BPF_BACKGROUND_LEARNED;
+        if (!learned && !contains(&set, &key))
             bpf_map_delete_elem(map_fd, &key);
         key = next;
     }
-    uint8_t one = 1;
+    uint8_t scanned = FT_BPF_BACKGROUND_SCANNED;
     size_t held = 0;
     for (size_t i = 0; i < set.count; i++) {
         if (i > 0 && key_cmp(&set.keys[i - 1], &set.keys[i]) == 0)
             continue;
-        if (bpf_map_update_elem(map_fd, &set.keys[i], &one, BPF_ANY) == 0)
+        if (bpf_map_update_elem(map_fd, &set.keys[i], &scanned, BPF_ANY) == 0)
             held++;
     }
     *truncated = set.full;
