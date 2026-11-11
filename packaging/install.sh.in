@@ -115,19 +115,21 @@ gpgcheck=1
 repo_gpgcheck=1
 gpgkey=$repo_url/gpg.key
 TEXT
-        "$manager" install -y "filetrace${version:+-$version}"
+        # The package needs nothing else, so no other repository can get in the way.
+        "$manager" install -y --disablerepo='*' --enablerepo=filetrace \
+            "filetrace${version:+-$version}"
         ;;
     zypper)
         rpm --import "$work/gpg.key"
         zypper --non-interactive removerepo filetrace >/dev/null 2>&1 || true
         zypper --non-interactive addrepo --refresh "$repo_url/rpm/$channel/\$basearch" filetrace
-        zypper --non-interactive install "filetrace${version:+=$version}"
+        zypper --non-interactive install --repo filetrace "filetrace${version:+=$version}"
         ;;
     apk)
         fetch "$repo_url/apk/filetrace.rsa.pub" /etc/apk/keys/filetrace.rsa.pub
         grep -qxF "$repo_url/apk/$channel" /etc/apk/repositories ||
             echo "$repo_url/apk/$channel" >>/etc/apk/repositories
-        apk add --update-cache "filetrace${version:+=$version-r0}"
+        apk add --update-cache --upgrade "filetrace${version:+=$version}"
         ;;
     esac
 }
