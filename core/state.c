@@ -21,6 +21,7 @@ void ft_state_config_defaults(struct ft_state_config *cfg)
         .active_window_ns = 5 * FT_NS_PER_SEC,
         .idle_socket_ns = 30 * FT_NS_PER_SEC,
         .closed_retention_ns = 60 * FT_NS_PER_SEC,
+        .command_line_arguments = true,
     };
 }
 
@@ -61,6 +62,12 @@ static void release_file(void *value, void *ctx)
     f->path = nullptr;
 }
 
+static void release_process(void *value, void *ctx)
+{
+    (void)ctx;
+    ft_process_text_clear(value);
+}
+
 struct ft_state *ft_state_create(const struct ft_state_config *cfg)
 {
     struct ft_state *st = calloc(1, sizeof(*st));
@@ -77,8 +84,9 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
                                     sizeof(struct ft_transfer));
     st->series = ft_series_create(cfg->max_metric_series);
     st->record = calloc(1, sizeof(*st->record));
+    st->process_text = malloc(sizeof(*st->process_text));
     bool ok = st->processes && st->sockets && st->flows && st->files && st->transfers &&
-              st->series && st->record;
+              st->series && st->record && st->process_text;
 
     /* Half for what the tool is about, an eighth for the chattiest and least specific. */
     static const size_t eighths[FT_LOG_CLASS_COUNT] = {
@@ -95,6 +103,7 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
         return nullptr;
     }
     ft_table_on_evict(st->files, release_file, nullptr);
+    ft_table_on_evict(st->processes, release_process, nullptr);
     return st;
 }
 
@@ -111,6 +120,7 @@ void ft_state_destroy(struct ft_state *st)
         ft_evlog_destroy(st->logs[i]);
     ft_series_destroy(st->series);
     free(st->record);
+    free(st->process_text);
     free(st);
 }
 
@@ -136,8 +146,10 @@ static struct ft_process *process_record(struct ft_state *st, const struct ft_ev
     struct ft_process *p = ft_table_insert(st->processes, &e->pid, &created);
 
     /* A different start time under the same PID is a different process. */
-    if (!created && !same_start(p->start_ns, e->start_ns))
+    if (!created && !same_start(p->start_ns, e->start_ns)) {
+        ft_process_text_clear(p);
         memset(p, 0, sizeof(*p));
+    }
 
     p->pid = e->pid;
     p->ppid = e->ppid;
@@ -179,6 +191,7 @@ static bool ingest_exec(struct ft_state *st, const struct ft_ev_process *e)
     p->exited = false;
     if (e->exe[0])
         ft_strlcpy(p->exe, e->exe, sizeof(p->exe));
+    ft_process_text_exec(st, p);
     return !p->excluded;
 }
 
@@ -188,6 +201,7 @@ static bool ingest_fork(struct ft_state *st, const struct ft_ev_process *e)
     const struct ft_process *parent = ft_table_find(st->processes, &e->ppid);
     if (!p->exe[0] && parent)
         ft_strlcpy(p->exe, parent->exe, sizeof(p->exe));
+    ft_process_text_inherit(p, parent);
     return !p->excluded;
 }
 
@@ -296,6 +310,7 @@ static bool ingest_flow(struct ft_state *st, const struct ft_event *ev)
     struct ft_process *p = process_ensure(st, e->pid);
     if (p->excluded)
         return false;
+    ft_process_text_refresh(st, p, ev->ts_ns);
 
     struct ft_socket *s = ft_table_insert(st->sockets, &e->sock_id, &created);
     if (created) {
@@ -435,9 +450,10 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     const struct ft_file *file = ft_table_touch(st->files, &e->file);
     if (file && file->excluded)
         return false;
-    const struct ft_process *p = process_ensure(st, e->pid);
+    struct ft_process *p = process_ensure(st, e->pid);
     if (p->excluded)
         return false;
+    ft_process_text_refresh(st, p, ev->ts_ns);
 
     memset(&key, 0, sizeof(key));
     key.sock_id = e->sock_id;
@@ -549,6 +565,17 @@ static void record_owner(struct ft_state *st, struct ft_row_event *r, uint32_t p
     }
 }
 
+/* Follows the record's text with the process's command line, working directory and script. */
+static void record_process_text(struct ft_row_event *r, const struct ft_process *p)
+{
+    if (!p || !(p->command_line || p->cwd || p->script))
+        return;
+    struct ft_process_strings s = {p->command_line, p->cwd, p->script};
+    size_t lead = strnlen(r->text, FT_PATH_MAX - 1) + 1;
+    ft_process_strings_pack(r->text + lead, sizeof(r->text) - lead, &s);
+    r->flags |= FT_EVENT_PROCESS_TEXT;
+}
+
 static void record_process(struct ft_state *st, enum ft_record_type type, const struct ft_event *ev)
 {
     struct ft_row_event *r = record_begin(st, type, ev->ts_ns);
@@ -562,6 +589,7 @@ static void record_process(struct ft_state *st, enum ft_record_type type, const 
         ft_strlcpy(r->comm, p->comm, sizeof(r->comm));
         ft_strlcpy(r->text, p->exe, sizeof(r->text));
     }
+    record_process_text(r, p);
     record_commit(st);
 }
 
@@ -672,6 +700,7 @@ static void record_transfer(struct ft_state *st, const struct ft_event *ev)
     }
     if (f)
         record_file(r, f);
+    record_process_text(r, ft_table_find(st->processes, &e->pid));
     record_commit(st);
 }
 

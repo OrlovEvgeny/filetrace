@@ -72,6 +72,7 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_back
 void ft_linux_diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *out);
 
 bool ft_linux_lookup_process(uint32_t pid, struct ft_ev_process *out);
+bool ft_linux_read_process_text(uint32_t pid, struct ft_process_text *out);
 /* Effective capabilities; CAP_SYS_ADMIN stands in for the other two. */
 struct ft_linux_caps {
     bool sys_admin;

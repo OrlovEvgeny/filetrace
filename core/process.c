@@ -1,7 +1,10 @@
 #include "filetrace/process.h"
 
+#include "filetrace/state.h"
+
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 size_t ft_command_line(const char *args, size_t len, bool arguments, char *out, size_t size)
@@ -344,4 +347,100 @@ bool ft_script_derive(const char *exe, const char *args, size_t len, const char 
     default:
         return false;
     }
+}
+
+/* Keeps value, or nothing when it is empty; on a failed copy the field keeps what it had. */
+static void set_text(char **field, const char *value)
+{
+    if (!value || !value[0]) {
+        free(*field);
+        *field = nullptr;
+        return;
+    }
+    if (*field && strcmp(*field, value) == 0)
+        return;
+    char *copy = strdup(value);
+    if (!copy)
+        return;
+    free(*field);
+    *field = copy;
+}
+
+static uint64_t hash_bytes(const char *p, size_t n)
+{
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < n; i++) {
+        h ^= (unsigned char)p[i];
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+/* A script is derived again only when the arguments change, so it keeps the earliest cwd. */
+static void read_text(struct ft_state *st, struct ft_process *p)
+{
+    struct ft_process_text *t = st->process_text;
+    char line[FT_CMDLINE_MAX];
+    char script[FT_PATH_MAX];
+
+    if (!st->cfg.read_process_text || !t || !p->pid)
+        return;
+    t->args_len = 0;
+    t->cwd[0] = '\0';
+    if (!st->cfg.read_process_text(p->pid, t) || t->args_len == 0)
+        return;
+    if (t->args_len >= sizeof(t->args))
+        t->args_len = sizeof(t->args) - 1;
+    t->args[t->args_len] = '\0';
+    t->cwd[sizeof(t->cwd) - 1] = '\0';
+
+    set_text(&p->cwd, t->cwd);
+    uint64_t hash = hash_bytes(t->args, t->args_len);
+    if (p->command_line && hash == p->args_hash)
+        return;
+    p->args_hash = hash;
+    ft_command_line(t->args, t->args_len, st->cfg.command_line_arguments, line, sizeof(line));
+    set_text(&p->command_line, line);
+    bool known = ft_script_derive(p->exe, t->args, t->args_len, t->cwd, script, sizeof(script));
+    set_text(&p->script, known ? script : nullptr);
+}
+
+void ft_process_text_exec(struct ft_state *st, struct ft_process *p)
+{
+    ft_process_text_clear(p);
+    read_text(st, p);
+}
+
+void ft_process_text_refresh(struct ft_state *st, struct ft_process *p, uint64_t now_ns)
+{
+    constexpr uint64_t REFRESH_NS = 10 * FT_NS_PER_SEC;
+
+    /* An exited process's ID may already belong to another. */
+    if (p->exited || (p->text_ns && now_ns < p->text_ns + REFRESH_NS))
+        return;
+    p->text_ns = now_ns ? now_ns : 1;
+    read_text(st, p);
+}
+
+void ft_process_text_inherit(struct ft_process *child, const struct ft_process *parent)
+{
+    if (child->command_line || !parent)
+        return;
+    set_text(&child->command_line, parent->command_line);
+    set_text(&child->cwd, parent->cwd);
+    set_text(&child->script, parent->script);
+    child->args_hash = parent->args_hash;
+    child->text_ns = 0;
+}
+
+void ft_process_text_clear(struct ft_process *p)
+{
+    free(p->command_line);
+    free(p->cwd);
+    free(p->script);
+    p->command_line = nullptr;
+    p->cwd = nullptr;
+    p->script = nullptr;
+    p->text_ns = 0;
+    p->args_hash = 0;
 }

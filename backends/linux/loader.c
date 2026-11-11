@@ -875,6 +875,7 @@ static const struct ft_backend_ops ops = {
     .stats = backend_stats,
     .capabilities = backend_capabilities,
     .lookup_process = ft_linux_lookup_process,
+    .read_process_text = ft_linux_read_process_text,
     .close = backend_close,
 };
 

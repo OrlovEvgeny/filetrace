@@ -3,6 +3,7 @@
 
 #include "filetrace/capabilities.h"
 #include "filetrace/event.h"
+#include "filetrace/process.h"
 
 /* How kernel functions are instrumented, where a platform offers a choice. */
 enum ft_probes : uint8_t {
@@ -94,6 +95,9 @@ struct ft_backend_ops {
     void (*capabilities)(struct ft_backend *b, struct ft_capabilities *out);
 
     bool (*lookup_process)(uint32_t pid, struct ft_ev_process *out);
+
+    /* Optional: a process's arguments and working directory. */
+    bool (*read_process_text)(uint32_t pid, struct ft_process_text *out);
 
     void (*close)(struct ft_backend *b);
 };

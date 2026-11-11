@@ -3,6 +3,7 @@
 
 #include "filetrace/event.h"
 #include "filetrace/metrics.h"
+#include "filetrace/process.h"
 #include "filetrace/table.h"
 #include "filetrace/wire.h"
 
@@ -45,6 +46,10 @@ struct ft_state_config {
 
     /* Describes a process that was running before observation started. */
     bool (*lookup_process)(uint32_t pid, struct ft_ev_process *out);
+
+    /* Reads a process's arguments and working directory; without it they stay unknown. */
+    bool (*read_process_text)(uint32_t pid, struct ft_process_text *out);
+    bool command_line_arguments; /* false: a command line keeps only the program */
 };
 
 void ft_state_config_defaults(struct ft_state_config *cfg);
@@ -80,6 +85,11 @@ struct ft_process {
     bool excluded;
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
+    char *command_line; /* nullptr while unknown, as are cwd and script */
+    char *cwd;
+    char *script;
+    uint64_t text_ns;   /* when they were read during traffic; 0: not since the last exec or fork */
+    uint64_t args_hash; /* of the arguments they were made from */
 
     /* Per-query working values. */
     uint64_t q_tx;
@@ -213,7 +223,8 @@ struct ft_state {
     struct ft_table *transfers; /* key: struct ft_transfer_key */
     struct ft_evlog *logs[FT_LOG_CLASS_COUNT];
     struct ft_series *series;
-    struct ft_row_event *record; /* the record being made */
+    struct ft_row_event *record;          /* the record being made */
+    struct ft_process_text *process_text; /* what read_process_text last read */
     ft_record_fn *on_record;
     void *on_record_ctx;
 
@@ -240,6 +251,17 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev);
 
 /* Forgets processes that exited without ever touching the network. */
 void ft_state_sweep(struct ft_state *st, uint64_t now_ns);
+
+/* Reads a process's command line and working directory as it starts a program. */
+void ft_process_text_exec(struct ft_state *st, struct ft_process *p);
+
+/* Reads them again for a process with traffic: first after an exec or fork, then now and then. */
+void ft_process_text_refresh(struct ft_state *st, struct ft_process *p, uint64_t now_ns);
+
+/* A forked child has its parent's until its own are read. */
+void ft_process_text_inherit(struct ft_process *child, const struct ft_process *parent);
+
+void ft_process_text_clear(struct ft_process *p);
 
 /* Returns false for an association that is not reported. */
 bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,

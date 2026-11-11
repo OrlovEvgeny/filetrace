@@ -529,6 +529,8 @@ static bool agent_open(struct agent *d, struct ft_error *err)
     struct ft_state_config state_cfg = cfg->state_cfg;
     if (!state_cfg.lookup_process)
         state_cfg.lookup_process = cfg->backend->lookup_process;
+    if (!state_cfg.read_process_text)
+        state_cfg.read_process_text = cfg->backend->read_process_text;
     d->state = ft_state_create(&state_cfg);
     d->live = malloc(sizeof(*d->live));
     if (!d->state || !d->live) {

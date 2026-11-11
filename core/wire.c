@@ -14,14 +14,98 @@ void ft_query_init(struct ft_query *q, enum ft_query_kind kind)
     q->confidence = FT_CONF_ANY;
 }
 
+size_t ft_process_strings_pack(char *buf, size_t size, const struct ft_process_strings *s)
+{
+    const char *parts[] = {s->command_line, s->cwd, s->script};
+    static const size_t caps[] = {FT_CMDLINE_MAX, FT_PATH_MAX, FT_PATH_MAX};
+    size_t used = 0;
+
+    for (size_t i = 0; i < FT_ARRAY_LEN(parts) && used < size; i++) {
+        const char *part = parts[i] ? parts[i] : "";
+        size_t len = strnlen(part, caps[i] - 1);
+        if (len > size - used - 1)
+            len = size - used - 1;
+        memcpy(buf + used, part, len);
+        buf[used + len] = '\0';
+        used += len + 1;
+    }
+    return used;
+}
+
+/* Finds the strings ft_process_strings_pack wrote; returns the bytes they take. */
+static size_t unpack(const char *buf, size_t size, struct ft_process_strings *out)
+{
+    const char **parts[] = {&out->command_line, &out->cwd, &out->script};
+    size_t used = 0;
+
+    for (size_t i = 0; i < FT_ARRAY_LEN(parts); i++) {
+        size_t len = used < size ? strnlen(buf + used, size - used) : 0;
+        if (used >= size || used + len == size) {
+            *parts[i] = "";
+            continue;
+        }
+        *parts[i] = buf + used;
+        used += len + 1;
+    }
+    return used;
+}
+
+static size_t lead_size(const char *text)
+{
+    return strnlen(text, FT_PATH_MAX - 1) + 1;
+}
+
+void ft_row_process_strings(const struct ft_row_process *row, struct ft_process_strings *out)
+{
+    unpack(row->text, sizeof(row->text), out);
+}
+
+void ft_row_transfer_strings(const struct ft_row_transfer *row, struct ft_process_strings *out)
+{
+    size_t lead = lead_size(row->path);
+
+    if (row->flags & FT_XFER_PROCESS_TEXT)
+        unpack(row->path + lead, sizeof(row->path) - lead, out);
+    else
+        *out = (struct ft_process_strings){"", "", ""};
+}
+
+void ft_row_event_strings(const struct ft_row_event *row, struct ft_process_strings *out)
+{
+    size_t lead = lead_size(row->text);
+
+    if (row->flags & FT_EVENT_PROCESS_TEXT)
+        unpack(row->text + lead, sizeof(row->text) - lead, out);
+    else
+        *out = (struct ft_process_strings){"", "", ""};
+}
+
+size_t ft_row_process_size(const struct ft_row_process *row)
+{
+    struct ft_process_strings ignored;
+    return offsetof(struct ft_row_process, text) + unpack(row->text, sizeof(row->text), &ignored);
+}
+
 size_t ft_row_transfer_size(const struct ft_row_transfer *row)
 {
-    return offsetof(struct ft_row_transfer, path) + strnlen(row->path, FT_PATH_MAX - 1) + 1;
+    struct ft_process_strings ignored;
+    size_t lead = lead_size(row->path);
+    size_t size = offsetof(struct ft_row_transfer, path) + lead;
+
+    if (row->flags & FT_XFER_PROCESS_TEXT)
+        size += unpack(row->path + lead, sizeof(row->path) - lead, &ignored);
+    return size;
 }
 
 size_t ft_row_event_size(const struct ft_row_event *row)
 {
-    return offsetof(struct ft_row_event, text) + strnlen(row->text, FT_PATH_MAX - 1) + 1;
+    struct ft_process_strings ignored;
+    size_t lead = lead_size(row->text);
+    size_t size = offsetof(struct ft_row_event, text) + lead;
+
+    if (row->flags & FT_EVENT_PROCESS_TEXT)
+        size += unpack(row->text + lead, sizeof(row->text) - lead, &ignored);
+    return size;
 }
 
 static const char *const record_type_names[FT_REC_TYPE_COUNT] = {

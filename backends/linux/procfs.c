@@ -1,5 +1,7 @@
 #include "backends/linux/linux.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,6 +82,34 @@ bool ft_linux_lookup_process(uint32_t pid, struct ft_ev_process *out)
     out->mntns = namespace_inode(pid, "mnt");
     out->netns = namespace_inode(pid, "net");
     return true;
+}
+
+bool ft_linux_read_process_text(uint32_t pid, struct ft_process_text *out)
+{
+    char path[64];
+    size_t len = 0;
+
+    snprintf(path, sizeof(path), "/proc/%" PRIu32 "/cmdline", pid);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return false;
+    while (len < sizeof(out->args) - 1) {
+        ssize_t n = read(fd, out->args + len, sizeof(out->args) - 1 - len);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        len += (size_t)n;
+    }
+    close(fd);
+    out->args[len] = '\0';
+    out->args_len = len;
+
+    /* Reading another user's working directory takes CAP_SYS_PTRACE. */
+    snprintf(path, sizeof(path), "/proc/%" PRIu32 "/cwd", pid);
+    ssize_t n = readlink(path, out->cwd, sizeof(out->cwd) - 1);
+    out->cwd[n > 0 ? n : 0] = '\0';
+    return len > 0;
 }
 
 void ft_linux_held_capabilities(struct ft_linux_caps *out)

@@ -300,9 +300,11 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
     }
 
     size_t n = candidates_finish(&c, q);
-    for (size_t i = 0; i < n; i++) {
+    struct ft_row_process *row = malloc(sizeof(*row));
+    for (size_t i = 0; row && i < n; i++) {
         const struct ft_process *p = c.items[i].entry;
-        struct ft_row_process row = {
+        struct ft_process_strings text = {p->command_line, p->cwd, p->script};
+        *row = (struct ft_row_process){
             .start_wall_ns = ft_clock_mono_to_wall(p->start_ns),
             .exit_wall_ns = ft_clock_mono_to_wall(p->exit_ns),
             .tx_bytes = p->q_tx,
@@ -324,13 +326,17 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
             .exit_status = p->exit_status,
             .flags = p->exited ? FT_PROC_EXITED : 0,
         };
-        ft_strlcpy(row.comm, p->comm, sizeof(row.comm));
-        ft_strlcpy(row.exe, p->exe, sizeof(row.exe));
-        emit(ctx, FT_MSG_ROW_PROCESS, &row, sizeof(row));
+        ft_strlcpy(row->comm, p->comm, sizeof(row->comm));
+        ft_strlcpy(row->exe, p->exe, sizeof(row->exe));
+        size_t size = offsetof(struct ft_row_process, text) +
+                      ft_process_strings_pack(row->text, sizeof(row->text), &text);
+        emit(ctx, FT_MSG_ROW_PROCESS, row, size);
     }
-    end->rows = (uint32_t)n;
+    bool ok = row != nullptr || n == 0;
+    end->rows = ok ? (uint32_t)n : 0;
+    free(row);
     free(c.items);
-    return true;
+    return ok;
 }
 
 static void query_connections(struct ft_state *st, const struct ft_query *q, uint64_t now_ns,
@@ -632,6 +638,12 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
     if (p) {
         row->ppid = p->ppid;
         ft_strlcpy(row->exe, p->exe, sizeof(row->exe));
+    }
+    if (p && (p->command_line || p->cwd || p->script)) {
+        struct ft_process_strings text = {p->command_line, p->cwd, p->script};
+        size_t lead = strnlen(row->path, FT_PATH_MAX - 1) + 1;
+        ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+        row->flags |= FT_XFER_PROCESS_TEXT;
     }
     emit(ctx, FT_MSG_ROW_TRANSFER, row, ft_row_transfer_size(row));
 }

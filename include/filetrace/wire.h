@@ -5,7 +5,7 @@
 
 /* Frames use host byte order: both ends of the socket run on the same host. */
 #define FT_WIRE_MAGIC 0x43525446u /* "FTRC" */
-#define FT_WIRE_VERSION 3
+#define FT_WIRE_VERSION 4
 #define FT_WIRE_MAX_PAYLOAD (64u * 1024u)
 
 enum ft_msg_type : uint16_t {
@@ -102,6 +102,16 @@ void ft_query_init(struct ft_query *q, enum ft_query_kind kind);
 
 #define FT_PROC_EXITED 0x1u
 
+/* A process's command line, working directory and script, each followed by its terminator. */
+#define FT_PROCESS_TEXT_MAX (FT_CMDLINE_MAX + 2 * FT_PATH_MAX)
+
+/* Each one is "" when it is not known. */
+struct ft_process_strings {
+    const char *command_line;
+    const char *cwd;
+    const char *script;
+};
+
 struct ft_row_process {
     uint64_t start_wall_ns;
     uint64_t exit_wall_ns;
@@ -125,6 +135,7 @@ struct ft_row_process {
     uint32_t flags;
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
+    char text[FT_PROCESS_TEXT_MAX]; /* sent up to its last terminator */
 };
 
 struct ft_row_connection {
@@ -170,6 +181,7 @@ struct ft_row_flow {
 #define FT_XFER_PATH_KNOWN 0x08u
 #define FT_XFER_FILE_DELETED 0x10u
 #define FT_XFER_PATH_TRUNCATED 0x20u
+#define FT_XFER_PROCESS_TEXT 0x40u /* the process's strings follow the path */
 
 struct ft_row_transfer {
     uint64_t id;
@@ -198,7 +210,7 @@ struct ft_row_transfer {
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
     char fs_type[FT_FS_TYPE_MAX];
-    char path[FT_PATH_MAX]; /* sent up to and including its terminator */
+    char path[FT_PATH_MAX + FT_PROCESS_TEXT_MAX]; /* sent up to its last terminator */
 };
 
 struct ft_table_usage {
@@ -276,6 +288,7 @@ enum ft_record_type : uint8_t {
 
 #define FT_EVENT_FILE_DELETED 0x1u
 #define FT_EVENT_HAS_CONFIDENCE 0x2u
+#define FT_EVENT_PROCESS_TEXT 0x4u /* the process's strings follow the text */
 
 /* loss_kind of an EVENT_LOSS record made for a follower that read too slowly. */
 #define FT_EVENT_LOSS_READER 0xffu
@@ -303,7 +316,8 @@ struct ft_row_event {
     struct ft_endpoint local;
     struct ft_endpoint remote;
     char comm[FT_COMM_MAX];
-    char text[FT_PATH_MAX]; /* file path or executable; sent up to its terminator */
+    /* A file path or an executable, then any process strings; sent up to its last terminator. */
+    char text[FT_PATH_MAX + FT_PROCESS_TEXT_MAX];
 };
 
 struct ft_msg_end {
@@ -320,9 +334,17 @@ struct ft_msg_error {
     char msg[508];
 };
 
-/* Payload size of the row: everything up to its path's terminator. */
+/* Payload size of the row: everything up to its last string's terminator. */
+size_t ft_row_process_size(const struct ft_row_process *row);
 size_t ft_row_transfer_size(const struct ft_row_transfer *row);
 size_t ft_row_event_size(const struct ft_row_event *row);
+
+/* Writes the three strings one after another, each cut to its size; returns the bytes used. */
+size_t ft_process_strings_pack(char *buf, size_t size, const struct ft_process_strings *s);
+
+void ft_row_process_strings(const struct ft_row_process *row, struct ft_process_strings *out);
+void ft_row_transfer_strings(const struct ft_row_transfer *row, struct ft_process_strings *out);
+void ft_row_event_strings(const struct ft_row_event *row, struct ft_process_strings *out);
 
 const char *ft_record_type_name(enum ft_record_type type);
 bool ft_record_type_parse(const char *text, enum ft_record_type *type);
