@@ -2,7 +2,9 @@
 # usage: package.sh [<output directory>]
 # Turns every tree under dist/stage into release archives in dist/, or in the
 # directory given: a tarball per platform, plus deb, rpm and apk packages for
-# Linux. FILETRACE_VERSION overrides the version git reports.
+# Linux. FILETRACE_VERSION overrides the version git reports. The rpm and apk
+# packages are signed when FILETRACE_GPG_KEY_FILE and FILETRACE_APK_KEY_FILE
+# name the private keys.
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -11,6 +13,16 @@ cd "$root"
 version=${FILETRACE_VERSION:-$(tools/release/version.sh current)}
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
 export SOURCE_DATE_EPOCH
+
+# absolute <path>: nfpm runs in another directory than the caller.
+absolute()
+{
+    [ -n "$1" ] || return 0
+    printf '%s/%s\n' "$(CDPATH='' cd -- "$(dirname -- "$1")" && pwd)" "$(basename -- "$1")"
+}
+FILETRACE_GPG_KEY_FILE=$(absolute "${FILETRACE_GPG_KEY_FILE:-}")
+FILETRACE_APK_KEY_FILE=$(absolute "${FILETRACE_APK_KEY_FILE:-}")
+export FILETRACE_GPG_KEY_FILE FILETRACE_APK_KEY_FILE
 
 stages=$root/dist/stage
 dist=$root/dist

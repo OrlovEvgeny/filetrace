@@ -92,10 +92,16 @@ overrides:
       postinstall: scripts/postinstall.apk
       preremove: scripts/preremove.apk
 
+# A package is signed when its key file is named; see tools/release/keys.sh.
 apk:
   scripts:
     postupgrade: scripts/postupgrade.apk
+  signature:
+    key_file: ${FILETRACE_APK_KEY_FILE}
+    key_name: filetrace
 
 rpm:
   summary: File-to-network observability
   group: Applications/System
+  signature:
+    key_file: ${FILETRACE_GPG_KEY_FILE}
