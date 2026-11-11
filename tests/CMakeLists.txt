@@ -39,3 +39,8 @@ add_test(NAME release-version
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/release/version_test.sh
             ${CMAKE_SOURCE_DIR}/tools/release/version.sh)
 set_tests_properties(release-version PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
+add_test(NAME release-formula
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/release/formula_test.sh
+            ${CMAKE_SOURCE_DIR}/tools/release/formula.sh)
+set_tests_properties(release-formula PROPERTIES TIMEOUT 60)
