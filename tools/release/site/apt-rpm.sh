@@ -85,7 +85,10 @@ for channel in $channels; do
         mkdir -p "$target"
         for package in /releases/*/filetrace-*."$arch".rpm; do
             [ -f "$package" ] || continue
-            ! in_channel "$channel" "$package" || cp "$package" "$target/"
+            in_channel "$channel" "$package" || continue
+            cp "$package" "$target/"
+            # createrepo_c records this time, and a new one would rename the index.
+            touch -d "@$(rpm -qp --qf '%{BUILDTIME}' "$package" 2>/dev/null)" "$target/${package##*/}"
         done
         # gzip is the one compression every yum, dnf and zypper reads.
         createrepo_c --quiet --general-compress-type gz "$target"
