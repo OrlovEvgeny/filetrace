@@ -58,6 +58,7 @@ enum ft_sort : uint16_t {
     FT_SORT_BYTES,
     FT_SORT_RECENT,
     FT_SORT_PID,
+    FT_SORT_RATE,
 };
 
 struct ft_query {
@@ -93,6 +94,8 @@ struct ft_row_process {
     uint64_t exit_wall_ns;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    uint64_t tx_rate; /* bytes per second over the last one to two seconds */
+    uint64_t rx_rate;
     uint64_t cgroup_id;
     uint32_t pid;
     uint32_t ppid;
@@ -117,6 +120,8 @@ struct ft_row_connection {
     uint64_t closed_wall_ns;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    uint64_t tx_rate;
+    uint64_t rx_rate;
     uint32_t pid;
     uint16_t proto;
     uint8_t state;
@@ -132,6 +137,8 @@ struct ft_row_flow {
     uint64_t last_wall_ns;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    uint64_t tx_rate;
+    uint64_t rx_rate;
     uint32_t tx_ops;
     uint32_t rx_ops;
     uint32_t pid;
@@ -156,6 +163,7 @@ struct ft_row_transfer {
     uint64_t last_wall_ns;
     uint64_t bytes;
     uint64_t read_bytes;
+    uint64_t rate;      /* bytes per second over the last one to two seconds */
     uint64_t file_size; /* when the file was first seen */
     uint64_t dev;
     uint64_t ino;
@@ -201,6 +209,8 @@ struct ft_row_stats {
     uint64_t queue_peak_bytes; /* largest backlog seen at a flush */
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    uint64_t tx_rate;
+    uint64_t rx_rate;
     uint64_t loss[4]; /* indexed by enum ft_loss_kind */
     uint64_t last_loss_wall_ns;
     uint64_t candidates_rejected; /* inferred associations below the thresholds */

@@ -30,6 +30,13 @@ void ft_format_bytes(uint64_t bytes, char *buf, size_t size)
         snprintf(buf, size, "%.0f %s", value, units[unit]);
 }
 
+void ft_format_rate(uint64_t bytes_per_second, char *buf, size_t size)
+{
+    ft_format_bytes(bytes_per_second, buf, size);
+    size_t len = strlen(buf);
+    snprintf(buf + len, size - len, "/s");
+}
+
 void ft_format_duration(uint64_t ns, char *buf, size_t size)
 {
     uint64_t s = ns / FT_NS_PER_SEC;

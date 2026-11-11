@@ -18,6 +18,11 @@ static void bytes(void)
     CHECK_STR(buf, "1.42 GB");
     ft_format_bytes(440401920, buf, sizeof(buf));
     CHECK_STR(buf, "420 MB");
+
+    ft_format_rate(512, buf, sizeof(buf));
+    CHECK_STR(buf, "512 B/s");
+    ft_format_rate(1258291, buf, sizeof(buf));
+    CHECK_STR(buf, "1.20 MB/s");
 }
 
 static void sizes(void)

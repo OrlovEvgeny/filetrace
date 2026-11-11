@@ -28,6 +28,16 @@ struct ft_state_config {
 
 void ft_state_config_defaults(struct ft_state_config *cfg);
 
+/* Bytes in the current and the previous second, for a rate over the last one to two. */
+struct ft_rate {
+    uint64_t second;
+    uint64_t current;
+    uint64_t previous;
+};
+
+void ft_rate_add(struct ft_rate *r, uint64_t now_ns, uint64_t bytes);
+uint64_t ft_rate_per_second(const struct ft_rate *r, uint64_t now_ns);
+
 struct ft_process {
     uint32_t pid;
     uint32_t ppid;
@@ -42,6 +52,8 @@ struct ft_process {
     uint64_t last_ns;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    struct ft_rate tx_rate;
+    struct ft_rate rx_rate;
     int32_t exit_status;
     bool exited;
     char comm[FT_COMM_MAX];
@@ -50,6 +62,8 @@ struct ft_process {
     /* Per-query working values. */
     uint64_t q_tx;
     uint64_t q_rx;
+    uint64_t q_tx_rate;
+    uint64_t q_rx_rate;
     uint32_t q_connections;
     uint32_t q_transfers;
     uint32_t q_own_connections;
@@ -68,6 +82,8 @@ struct ft_socket {
     uint64_t closed_ns;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    struct ft_rate tx_rate;
+    struct ft_rate rx_rate;
     bool many_remotes;
     char comm[FT_COMM_MAX];
 
@@ -92,6 +108,8 @@ struct ft_flow {
     uint64_t rx_bytes;
     uint64_t tx_ops;
     uint64_t rx_ops;
+    struct ft_rate tx_rate;
+    struct ft_rate rx_rate;
     char comm[FT_COMM_MAX];
 };
 
@@ -128,6 +146,7 @@ struct ft_transfer {
     uint64_t read_bytes;
     uint64_t ops;
     uint64_t alternations;
+    struct ft_rate rate;
     char comm[FT_COMM_MAX];
 };
 
@@ -152,6 +171,8 @@ struct ft_state {
     uint64_t events;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    struct ft_rate tx_rate;
+    struct ft_rate rx_rate;
     uint64_t loss[FT_LOSS_KIND_COUNT];
     uint64_t last_loss_ns;
     struct ft_loss_window loss_windows[FT_LOSS_WINDOWS];

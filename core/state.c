@@ -19,6 +19,35 @@ void ft_state_config_defaults(struct ft_state_config *cfg)
     };
 }
 
+void ft_rate_add(struct ft_rate *r, uint64_t now_ns, uint64_t bytes)
+{
+    uint64_t second = now_ns / FT_NS_PER_SEC;
+
+    if (second != r->second) {
+        r->previous = second == r->second + 1 ? r->current : 0;
+        r->current = 0;
+        r->second = second;
+    }
+    r->current += bytes;
+}
+
+uint64_t ft_rate_per_second(const struct ft_rate *r, uint64_t now_ns)
+{
+    uint64_t second = now_ns / FT_NS_PER_SEC;
+    uint64_t bytes;
+
+    if (r->second == second)
+        bytes = r->previous + r->current;
+    else if (r->second + 1 == second)
+        bytes = r->current;
+    else
+        return 0;
+
+    /* The window is the whole previous second plus what has passed of this one. */
+    uint64_t window_ns = FT_NS_PER_SEC + now_ns % FT_NS_PER_SEC;
+    return (uint64_t)((long double)bytes * (long double)FT_NS_PER_SEC / (long double)window_ns);
+}
+
 static void release_file(void *value, void *ctx)
 {
     (void)ctx;
@@ -229,6 +258,8 @@ static void ingest_flow(struct ft_state *st, const struct ft_event *ev)
     s->last_ns = ev->ts_ns;
     s->tx_bytes += e->tx_bytes;
     s->rx_bytes += e->rx_bytes;
+    ft_rate_add(&s->tx_rate, ev->ts_ns, e->tx_bytes);
+    ft_rate_add(&s->rx_rate, ev->ts_ns, e->rx_bytes);
     socket_set_owner(st, s, e->pid);
 
     struct ft_flow_key key;
@@ -252,14 +283,20 @@ static void ingest_flow(struct ft_state *st, const struct ft_event *ev)
     f->rx_bytes += e->rx_bytes;
     f->tx_ops += e->tx_ops;
     f->rx_ops += e->rx_ops;
+    ft_rate_add(&f->tx_rate, ev->ts_ns, e->tx_bytes);
+    ft_rate_add(&f->rx_rate, ev->ts_ns, e->rx_bytes);
 
     struct ft_process *p = process_ensure(st, e->pid);
     p->tx_bytes += e->tx_bytes;
     p->rx_bytes += e->rx_bytes;
     p->last_ns = ev->ts_ns;
+    ft_rate_add(&p->tx_rate, ev->ts_ns, e->tx_bytes);
+    ft_rate_add(&p->rx_rate, ev->ts_ns, e->rx_bytes);
 
     st->tx_bytes += e->tx_bytes;
     st->rx_bytes += e->rx_bytes;
+    ft_rate_add(&st->tx_rate, ev->ts_ns, e->tx_bytes);
+    ft_rate_add(&st->rx_rate, ev->ts_ns, e->rx_bytes);
 }
 
 static void ingest_file(struct ft_state *st, const struct ft_event *ev)
@@ -318,6 +355,7 @@ static void ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     t->read_bytes += e->read_bytes;
     t->ops += e->ops;
     t->alternations += e->alternations;
+    ft_rate_add(&t->rate, ev->ts_ns, e->bytes);
 
     /* Keep the file's metadata for as long as transfers refer to it. */
     ft_table_touch(st->files, &e->file);

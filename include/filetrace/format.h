@@ -6,6 +6,9 @@
 /* "512 B", "12.0 KB", "1.42 GB"; units are powers of 1024. */
 void ft_format_bytes(uint64_t bytes, char *buf, size_t size);
 
+/* "512 B/s", "1.20 MB/s". */
+void ft_format_rate(uint64_t bytes_per_second, char *buf, size_t size);
+
 /* "42s", "3h 42m", "2d 4h". */
 void ft_format_duration(uint64_t ns, char *buf, size_t size);
 

@@ -15,27 +15,29 @@ constexpr uint32_t SORT_BIT_CONNECTIONS = 1u << FT_SORT_CONNECTIONS;
 constexpr uint32_t SORT_BIT_BYTES = 1u << FT_SORT_BYTES;
 constexpr uint32_t SORT_BIT_RECENT = 1u << FT_SORT_RECENT;
 constexpr uint32_t SORT_BIT_PID = 1u << FT_SORT_PID;
+constexpr uint32_t SORT_BIT_RATE = 1u << FT_SORT_RATE;
 
 constexpr uint32_t OPTS_PROCESSES = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
                                     FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
-constexpr uint32_t SORTS_PROCESSES =
-    SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_CONNECTIONS | SORT_BIT_RECENT | SORT_BIT_PID;
+constexpr uint32_t SORTS_PROCESSES = SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_RATE |
+                                     SORT_BIT_CONNECTIONS | SORT_BIT_RECENT | SORT_BIT_PID;
 
 constexpr uint32_t OPTS_NETWORK = FT_QO_PID | FT_QO_PROCESS | FT_QO_REMOTE | FT_QO_LOCAL |
                                   FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_FAMILY | FT_QO_TIME |
                                   FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
 constexpr uint32_t OPTS_CONNECTIONS = OPTS_NETWORK | FT_QO_STATE;
 constexpr uint32_t SORTS_CONNECTIONS =
-    SORT_BIT_RECENT | SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_PID;
+    SORT_BIT_RECENT | SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_RATE | SORT_BIT_PID;
 constexpr uint32_t OPTS_FLOWS = OPTS_NETWORK | FT_QO_MIN_BYTES;
-constexpr uint32_t SORTS_FLOWS =
-    SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_BYTES | SORT_BIT_RECENT | SORT_BIT_PID;
+constexpr uint32_t SORTS_FLOWS = SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_BYTES |
+                                 SORT_BIT_RATE | SORT_BIT_RECENT | SORT_BIT_PID;
 
 constexpr uint32_t OPTS_TRANSFERS = FT_QO_PID | FT_QO_PROCESS | FT_QO_FILE | FT_QO_REMOTE |
                                     FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_CONFIDENCE |
                                     FT_QO_METHOD | FT_QO_MIN_BYTES | FT_QO_ACTIVITY | FT_QO_TIME |
                                     FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
-constexpr uint32_t SORTS_TRANSFERS = SORT_BIT_RECENT | SORT_BIT_BYTES | SORT_BIT_PID;
+constexpr uint32_t SORTS_TRANSFERS =
+    SORT_BIT_RECENT | SORT_BIT_BYTES | SORT_BIT_RATE | SORT_BIT_PID;
 
 static void print_footer(const struct ft_output *out, const struct ft_rows *rows,
                          const struct ft_msg_end *end, const char *what, bool incomplete)
@@ -768,9 +770,11 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
     if (all) {
         fputs("NETWORK\n", o);
         ft_format_bytes(s->tx_bytes, a, sizeof(a));
-        fprintf(o, "%-18s%s\n", "Outbound:", a);
+        ft_format_rate(s->tx_rate, b, sizeof(b));
+        fprintf(o, "%-18s%s (%s)\n", "Outbound:", a, b);
         ft_format_bytes(s->rx_bytes, a, sizeof(a));
-        fprintf(o, "%-18s%s\n", "Inbound:", a);
+        ft_format_rate(s->rx_rate, b, sizeof(b));
+        fprintf(o, "%-18s%s (%s)\n", "Inbound:", a, b);
         fprintf(o, "%-18s%u\n", "Open sockets:", s->open_sockets);
         fprintf(o, "%-18s%u\n", "Active flows:", s->active_flows);
         fprintf(o, "%-18s%u\n\n", "Active transfers:", s->active_transfers);
@@ -821,8 +825,10 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
     usage_json(o, "transfers", &s->transfers, true);
     fprintf(o,
             "},\"network\":{\"outbound_bytes\":%" PRIu64 ",\"inbound_bytes\":%" PRIu64
+            ",\"outbound_bytes_per_second\":%" PRIu64 ",\"inbound_bytes_per_second\":%" PRIu64
             ",\"open_sockets\":%u,\"active_flows\":%u,\"active_transfers\":%u}}\n",
-            s->tx_bytes, s->rx_bytes, s->open_sockets, s->active_flows, s->active_transfers);
+            s->tx_bytes, s->rx_bytes, s->tx_rate, s->rx_rate, s->open_sockets, s->active_flows,
+            s->active_transfers);
 }
 
 int ft_cmd_stats(const struct ft_cli *cli, struct ft_args *a)

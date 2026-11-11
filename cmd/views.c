@@ -15,6 +15,7 @@ enum vtype : uint8_t {
     V_STR,
     V_UINT,
     V_BYTES,
+    V_RATE,
     V_TIME,
     V_BOOL,
     V_LIST,
@@ -72,6 +73,12 @@ static void set_bytes(struct value *v, uint64_t u)
 {
     v->type = V_BYTES;
     v->u = u;
+}
+
+static void set_rate(struct value *v, uint64_t bytes_per_second)
+{
+    v->type = V_RATE;
+    v->u = bytes_per_second;
 }
 
 static void set_time(struct value *v, uint64_t wall_ns)
@@ -188,6 +195,18 @@ static void p_rx(const void *row, struct value *v)
     set_bytes(v, r->rx_bytes);
 }
 
+static void p_tx_rate(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    set_rate(v, r->tx_rate);
+}
+
+static void p_rx_rate(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    set_rate(v, r->rx_rate);
+}
+
 static void p_conns(const void *row, struct value *v)
 {
     ROW(ft_row_process);
@@ -250,6 +269,8 @@ static const struct field process_fields[] = {
     {"executable", 0, p_exe},
     {"outbound_bytes", 0, p_tx},
     {"inbound_bytes", 0, p_rx},
+    {"outbound_bytes_per_second", 0, p_tx_rate},
+    {"inbound_bytes_per_second", 0, p_rx_rate},
     {"connections", 0, p_conns},
     {"transfers", 0, p_transfers},
     {"started", 0, p_started},
@@ -342,6 +363,18 @@ static void c_rx(const void *row, struct value *v)
     set_bytes(v, r->rx_bytes);
 }
 
+static void c_tx_rate(const void *row, struct value *v)
+{
+    ROW(ft_row_connection);
+    set_rate(v, r->tx_rate);
+}
+
+static void c_rx_rate(const void *row, struct value *v)
+{
+    ROW(ft_row_connection);
+    set_rate(v, r->rx_rate);
+}
+
 static void c_sock(const void *row, struct value *v)
 {
     ROW(ft_row_connection);
@@ -361,11 +394,23 @@ static void c_last(const void *row, struct value *v)
 }
 
 static const struct field connection_fields[] = {
-    {"socket_id", 0, c_sock},      {"protocol", F_UPPER, c_proto}, {"pid", 0, c_pid},
-    {"process", 0, c_process},     {"@local", F_VIRTUAL, c_local}, {"@remote", F_VIRTUAL, c_remote},
-    {"local_address", 0, c_laddr}, {"local_port", 0, c_lport},     {"remote_address", 0, c_raddr},
-    {"remote_port", 0, c_rport},   {"state", F_UPPER, c_state},    {"sent_bytes", 0, c_tx},
-    {"received_bytes", 0, c_rx},   {"first_seen", 0, c_first},     {"last_seen", 0, c_last},
+    {"socket_id", 0, c_sock},
+    {"protocol", F_UPPER, c_proto},
+    {"pid", 0, c_pid},
+    {"process", 0, c_process},
+    {"@local", F_VIRTUAL, c_local},
+    {"@remote", F_VIRTUAL, c_remote},
+    {"local_address", 0, c_laddr},
+    {"local_port", 0, c_lport},
+    {"remote_address", 0, c_raddr},
+    {"remote_port", 0, c_rport},
+    {"state", F_UPPER, c_state},
+    {"sent_bytes", 0, c_tx},
+    {"received_bytes", 0, c_rx},
+    {"sent_bytes_per_second", 0, c_tx_rate},
+    {"received_bytes_per_second", 0, c_rx_rate},
+    {"first_seen", 0, c_first},
+    {"last_seen", 0, c_last},
 };
 
 static const struct column connection_columns[] = {
@@ -398,6 +443,18 @@ static void f_rx(const void *row, struct value *v)
     ROW(ft_row_flow);
     set_bytes(v, r->rx_bytes);
 }
+static void f_tx_rate(const void *row, struct value *v)
+{
+    ROW(ft_row_flow);
+    set_rate(v, r->tx_rate);
+}
+
+static void f_rx_rate(const void *row, struct value *v)
+{
+    ROW(ft_row_flow);
+    set_rate(v, r->rx_rate);
+}
+
 static void f_txops(const void *row, struct value *v)
 {
     ROW(ft_row_flow);
@@ -476,6 +533,8 @@ static const struct field flow_fields[] = {
     {"remote_port", 0, f_rport},
     {"sent_bytes", 0, f_tx},
     {"received_bytes", 0, f_rx},
+    {"sent_bytes_per_second", 0, f_tx_rate},
+    {"received_bytes_per_second", 0, f_rx_rate},
     {"send_operations", 0, f_txops},
     {"receive_operations", 0, f_rxops},
     {"first_seen", 0, f_first},
@@ -684,6 +743,12 @@ static void t_read_bytes(const void *row, struct value *v)
     v->absent = r->method != FT_METHOD_READ_SEND;
 }
 
+static void t_rate(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    set_rate(v, r->rate);
+}
+
 static void t_ops(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
@@ -757,6 +822,7 @@ static const struct field transfer_fields[] = {
     {"transfer.method", 0, t_method},
     {"transfer.bytes", 0, t_bytes},
     {"transfer.bytes_read", 0, t_read_bytes},
+    {"transfer.bytes_per_second", 0, t_rate},
     {"transfer.operations", 0, t_ops},
     {"transfer.duration_ms", 0, t_duration},
     {"transfer.state", 0, t_state},
@@ -846,6 +912,12 @@ static const char *value_text(const struct field *f, struct value *v, bool exact
         else
             ft_format_bytes(v->u, buf, size);
         return buf;
+    case V_RATE:
+        if (exact)
+            snprintf(buf, size, "%" PRIu64, v->u);
+        else
+            ft_format_rate(v->u, buf, size);
+        return buf;
     case V_TIME:
         if (exact)
             ft_format_time_rfc3339(v->u, buf, size);
@@ -931,6 +1003,7 @@ static void json_value(FILE *o, const struct field *f, struct value *v, char *bu
     switch (v->type) {
     case V_UINT:
     case V_BYTES:
+    case V_RATE:
         fprintf(o, "%" PRIu64, v->u);
         break;
     case V_BOOL:

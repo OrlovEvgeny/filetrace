@@ -53,6 +53,7 @@ static void transfers(void)
     row->first_wall_ns = when - 8200 * FT_NS_PER_MS;
     row->last_wall_ns = when;
     row->bytes = 148293012;
+    row->rate = 1258291;
     row->dev = 2049;
     row->ino = 928371;
     row->file_size = 148293012;
@@ -123,9 +124,9 @@ static void transfers(void)
     CHECK(strstr(text, "\"network\":{\"protocol\":\"tcp\",\"socket_id\":\"sk_7f\","
                        "\"local_address\":\"10.0.0.10\",\"local_port\":443,"
                        "\"remote_address\":\"203.0.113.42\",\"remote_port\":52144},") != nullptr);
-    CHECK(strstr(text,
-                 "\"transfer\":{\"method\":\"sendfile\",\"bytes\":148293012,"
-                 "\"operations\":1248,\"duration_ms\":8200,\"state\":\"completed\"},") != nullptr);
+    CHECK(strstr(text, "\"transfer\":{\"method\":\"sendfile\",\"bytes\":148293012,"
+                       "\"bytes_per_second\":1258291,\"operations\":1248,\"duration_ms\":8200,"
+                       "\"state\":\"completed\"},") != nullptr);
     CHECK(strstr(text,
                  "\"attribution\":{\"confidence\":\"exact\",\"evidence\":["
                  "\"direct_file_to_socket_transfer\",\"file_identity\","
@@ -156,7 +157,7 @@ static void transfers(void)
     CHECK(strstr(text, ",nginx,/usr/sbin/nginx,\"/data/export/report, \"\"final\"\".csv\","
                        "928371,2049,148293012,root,ext4,false,tcp,sk_7f,10.0.0.10,443,203.0.113.42,"
                        "52144,"
-                       "sendfile,148293012,,1248,8200,completed,exact,") != nullptr);
+                       "sendfile,148293012,,1258291,1248,8200,completed,exact,") != nullptr);
     free(text);
 
     ft_rows_clear(&rows);
@@ -173,6 +174,7 @@ static void processes(void)
     struct ft_row_process row = {
         .tx_bytes = 1524713390,
         .rx_bytes = 85983232,
+        .tx_rate = 13002342,
         .pid = 1842,
         .ppid = 1,
         .uid = 4'000'000'000u,
@@ -193,7 +195,8 @@ static void processes(void)
     text = render(FT_VIEW_PROCESSES, &rows, FT_FMT_JSONL, false);
     CHECK_STR(text, "{\"pid\":1842,\"ppid\":1,\"name\":\"nginx\",\"user\":\"4000000000\","
                     "\"uid\":4000000000,\"gid\":0,\"outbound_bytes\":1524713390,"
-                    "\"inbound_bytes\":85983232,\"connections\":12,\"transfers\":0,"
+                    "\"inbound_bytes\":85983232,\"outbound_bytes_per_second\":13002342,"
+                    "\"inbound_bytes_per_second\":0,\"connections\":12,\"transfers\":0,"
                     "\"status\":\"running\"}\n");
     free(text);
 
@@ -228,7 +231,8 @@ static void connections(void)
     CHECK_STR(text, "{\"socket_id\":\"sk_12\",\"protocol\":\"udp\",\"pid\":3821,"
                     "\"process\":\"python\",\"local_address\":\"2001:db8::1\","
                     "\"local_port\":53001,\"state\":\"active\",\"sent_bytes\":0,"
-                    "\"received_bytes\":0}\n");
+                    "\"received_bytes\":0,\"sent_bytes_per_second\":0,"
+                    "\"received_bytes_per_second\":0}\n");
     free(text);
     ft_rows_free(&rows);
 }

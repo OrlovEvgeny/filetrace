@@ -104,6 +104,8 @@ static void prepare_processes(struct ft_state *st, const struct ft_query *q, uin
          p = ft_table_next(st->processes, p)) {
         p->q_tx = p->tx_bytes;
         p->q_rx = p->rx_bytes;
+        p->q_tx_rate = ft_rate_per_second(&p->tx_rate, now_ns);
+        p->q_rx_rate = ft_rate_per_second(&p->rx_rate, now_ns);
         p->q_connections = 0;
         p->q_transfers = 0;
     }
@@ -140,6 +142,8 @@ static void prepare_processes(struct ft_state *st, const struct ft_query *q, uin
                 break;
             a->q_tx += c->tx_bytes;
             a->q_rx += c->rx_bytes;
+            a->q_tx_rate += ft_rate_per_second(&c->tx_rate, now_ns);
+            a->q_rx_rate += ft_rate_per_second(&c->rx_rate, now_ns);
             a->q_connections += c->q_own_connections;
             a->q_transfers += c->q_own_transfers;
             parent = a->ppid;
@@ -191,6 +195,9 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
         case FT_SORT_RECENT:
             key = p->last_ns;
             break;
+        case FT_SORT_RATE:
+            key = p->q_tx_rate;
+            break;
         default:
             key = p->q_tx;
             break;
@@ -208,6 +215,8 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
             .exit_wall_ns = ft_clock_mono_to_wall(p->exit_ns),
             .tx_bytes = p->q_tx,
             .rx_bytes = p->q_rx,
+            .tx_rate = p->q_tx_rate,
+            .rx_rate = p->q_rx_rate,
             .cgroup_id = p->cgroup_id,
             .pid = p->pid,
             .ppid = p->ppid,
@@ -271,6 +280,9 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
         case FT_SORT_PID:
             key = UINT32_MAX - s->pid;
             break;
+        case FT_SORT_RATE:
+            key = ft_rate_per_second(&s->tx_rate, now_ns) + ft_rate_per_second(&s->rx_rate, now_ns);
+            break;
         default:
             key = s->last_ns;
             break;
@@ -288,6 +300,8 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
             .closed_wall_ns = ft_clock_mono_to_wall(s->closed_ns),
             .tx_bytes = s->tx_bytes,
             .rx_bytes = s->rx_bytes,
+            .tx_rate = ft_rate_per_second(&s->tx_rate, now_ns),
+            .rx_rate = ft_rate_per_second(&s->rx_rate, now_ns),
             .pid = s->pid,
             .proto = s->proto,
             .state = ft_state_socket_state(st, s, now_ns),
@@ -338,6 +352,9 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
         case FT_SORT_BYTES:
             key = f->tx_bytes + f->rx_bytes;
             break;
+        case FT_SORT_RATE:
+            key = ft_rate_per_second(&f->tx_rate, now_ns) + ft_rate_per_second(&f->rx_rate, now_ns);
+            break;
         default:
             key = f->tx_bytes;
             break;
@@ -354,6 +371,8 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
             .last_wall_ns = ft_clock_mono_to_wall(f->last_ns),
             .tx_bytes = f->tx_bytes,
             .rx_bytes = f->rx_bytes,
+            .tx_rate = ft_rate_per_second(&f->tx_rate, now_ns),
+            .rx_rate = ft_rate_per_second(&f->rx_rate, now_ns),
             .tx_ops = (uint32_t)(f->tx_ops > UINT32_MAX ? UINT32_MAX : f->tx_ops),
             .rx_ops = (uint32_t)(f->rx_ops > UINT32_MAX ? UINT32_MAX : f->rx_ops),
             .pid = f->pid,
@@ -382,13 +401,15 @@ static bool match_activity(const struct ft_query *q, bool active)
     return true;
 }
 
-static uint64_t transfer_sort_key(const struct ft_query *q, uint64_t bytes, uint64_t last_ns,
-                                  uint32_t pid)
+static uint64_t transfer_sort_key(const struct ft_query *q, uint64_t bytes, uint64_t rate,
+                                  uint64_t last_ns, uint32_t pid)
 {
     switch (q->sort) {
     case FT_SORT_BYTES:
     case FT_SORT_OUTBOUND:
         return bytes;
+    case FT_SORT_RATE:
+        return rate;
     case FT_SORT_PID:
         return UINT32_MAX - pid;
     default:
@@ -411,6 +432,7 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
         row->first_wall_ns = ft_clock_mono_to_wall(s->first_ns);
         row->last_wall_ns = ft_clock_mono_to_wall(s->last_ns);
         row->bytes = cand->bytes;
+        row->rate = ft_rate_per_second(&s->tx_rate, now_ns);
         row->confidence = FT_CONF_UNKNOWN;
         row->method = FT_METHOD_NONE;
         if (transfer_is_active(st, s->last_ns, now_ns))
@@ -431,6 +453,7 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
         row->last_wall_ns = ft_clock_mono_to_wall(t->last_ns);
         row->bytes = t->bytes;
         row->read_bytes = t->read_bytes;
+        row->rate = ft_rate_per_second(&t->rate, now_ns);
         row->dev = t->file.dev;
         row->ino = t->file.ino;
         row->ops = (uint32_t)(t->ops > UINT32_MAX ? UINT32_MAX : t->ops);
@@ -529,11 +552,13 @@ static void query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         if (q->path[0] && !(f && f->path && ft_glob_match(q->path, f->path)))
             continue;
 
-        candidates_add(&c, (struct candidate){
-                               .key = transfer_sort_key(q, t->bytes, t->last_ns, t->pid),
-                               .tie = t->id,
-                               .entry = t,
-                           });
+        candidates_add(
+            &c, (struct candidate){
+                    .key = transfer_sort_key(q, t->bytes, ft_rate_per_second(&t->rate, now_ns),
+                                             t->last_ns, t->pid),
+                    .tie = t->id,
+                    .entry = t,
+                });
     }
 
     bool unknown_wanted = with_unknown && !q->path[0] && !(q->flags & FT_QF_DELETED) &&
@@ -558,13 +583,15 @@ static void query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         if (!match_tuple(q, s->proto, &s->local, &s->remote))
             continue;
 
-        candidates_add(&c, (struct candidate){
-                               .key = transfer_sort_key(q, bytes, s->last_ns, s->pid),
-                               .tie = s->id,
-                               .bytes = bytes,
-                               .entry = s,
-                               .unattributed = true,
-                           });
+        candidates_add(
+            &c, (struct candidate){
+                    .key = transfer_sort_key(q, bytes, ft_rate_per_second(&s->tx_rate, now_ns),
+                                             s->last_ns, s->pid),
+                    .tie = s->id,
+                    .bytes = bytes,
+                    .entry = s,
+                    .unattributed = true,
+                });
     }
 
     size_t n = candidates_finish(&c, q);
@@ -624,6 +651,8 @@ void ft_state_fill_stats(struct ft_state *st, uint64_t now_ns, struct ft_row_sta
     row->events_processed = st->events;
     row->tx_bytes = st->tx_bytes;
     row->rx_bytes = st->rx_bytes;
+    row->tx_rate = ft_rate_per_second(&st->tx_rate, now_ns);
+    row->rx_rate = ft_rate_per_second(&st->rx_rate, now_ns);
     row->last_loss_wall_ns = ft_clock_mono_to_wall(st->last_loss_ns);
     for (size_t i = 0; i < FT_LOSS_KIND_COUNT && i < FT_ARRAY_LEN(row->loss); i++) {
         row->loss[i] = st->loss[i];

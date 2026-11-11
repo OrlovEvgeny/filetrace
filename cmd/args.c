@@ -116,9 +116,13 @@ static const struct {
     const char *name;
     enum ft_sort sort;
 } sort_names[] = {
-    {"outbound", FT_SORT_OUTBOUND},       {"inbound", FT_SORT_INBOUND},
-    {"connections", FT_SORT_CONNECTIONS}, {"bytes", FT_SORT_BYTES},
-    {"recent", FT_SORT_RECENT},           {"pid", FT_SORT_PID},
+    {"outbound", FT_SORT_OUTBOUND},
+    {"inbound", FT_SORT_INBOUND},
+    {"connections", FT_SORT_CONNECTIONS},
+    {"bytes", FT_SORT_BYTES},
+    {"recent", FT_SORT_RECENT},
+    {"pid", FT_SORT_PID},
+    {"rate", FT_SORT_RATE},
 };
 
 void ft_query_args_init(struct ft_query_args *qa, const char *command, enum ft_query_kind kind,

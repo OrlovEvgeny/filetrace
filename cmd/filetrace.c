@@ -94,7 +94,8 @@ static void help_top(FILE *o)
 static void help_transfer_options(FILE *o)
 {
     ft_query_args_help(o, TRANSFER_OPTS,
-                       SORT(FT_SORT_RECENT) | SORT(FT_SORT_BYTES) | SORT(FT_SORT_PID));
+                       SORT(FT_SORT_RECENT) | SORT(FT_SORT_BYTES) | SORT(FT_SORT_RATE) |
+                           SORT(FT_SORT_PID));
 }
 
 static void help_files(FILE *o)
@@ -163,8 +164,8 @@ static void help_processes(FILE *o)
     ft_query_args_help(o,
                        FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE | FT_QO_TIME |
                            FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT,
-                       SORT(FT_SORT_OUTBOUND) | SORT(FT_SORT_INBOUND) | SORT(FT_SORT_CONNECTIONS) |
-                           SORT(FT_SORT_RECENT) | SORT(FT_SORT_PID));
+                       SORT(FT_SORT_OUTBOUND) | SORT(FT_SORT_INBOUND) | SORT(FT_SORT_RATE) |
+                           SORT(FT_SORT_CONNECTIONS) | SORT(FT_SORT_RECENT) | SORT(FT_SORT_PID));
     fputs("\nExamples:\n"
           "  filetrace processes --sort outbound\n"
           "  filetrace processes --name nginx --include-children\n"
@@ -189,7 +190,7 @@ static void help_connections(FILE *o)
           o);
     ft_query_args_help(o, NETWORK_OPTS | FT_QO_STATE,
                        SORT(FT_SORT_RECENT) | SORT(FT_SORT_OUTBOUND) | SORT(FT_SORT_INBOUND) |
-                           SORT(FT_SORT_PID));
+                           SORT(FT_SORT_RATE) | SORT(FT_SORT_PID));
     fputs("\nExamples:\n"
           "  filetrace connections --protocol tcp\n"
           "  filetrace connections --remote 203.0.113.42\n"
@@ -217,7 +218,7 @@ static void help_flows(FILE *o)
           o);
     ft_query_args_help(o, NETWORK_OPTS | FT_QO_MIN_BYTES,
                        SORT(FT_SORT_OUTBOUND) | SORT(FT_SORT_INBOUND) | SORT(FT_SORT_BYTES) |
-                           SORT(FT_SORT_RECENT) | SORT(FT_SORT_PID));
+                           SORT(FT_SORT_RATE) | SORT(FT_SORT_RECENT) | SORT(FT_SORT_PID));
     fputs("\nExamples:\n"
           "  filetrace flows --group-by remote\n"
           "  filetrace flows --pid 1842 --min-bytes 10MB\n"

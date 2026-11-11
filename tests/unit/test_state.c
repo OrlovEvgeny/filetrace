@@ -588,6 +588,62 @@ static void reused_inode_is_another_file(void)
     fixture_close(&f);
 }
 
+static void rates_cover_recent_seconds(void)
+{
+    struct fixture f;
+    struct ft_query q;
+    struct ft_row_stats stats = {0};
+
+    fixture_open(&f);
+    f.now = 1000 * FT_NS_PER_SEC + 500 * FT_NS_PER_MS;
+    emit_exec(&f, PID_A, 1, "nginx", 900);
+    emit_file(&f, 11, "/data/steady.bin", false);
+    emit_file(&f, 12, "/data/finished.bin", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 1, 443), 3'000'000, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 3'000'000, 0, 0);
+
+    /* Half a second into the current second, the window is a second and a half. */
+    ft_query_init(&q, FT_Q_PROCESSES);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.processes[0].tx_rate, 2'000'000);
+    CHECK_U64(f.rows.processes[0].rx_rate, 0);
+
+    f.now = 1001 * FT_NS_PER_SEC;
+    ft_query_init(&q, FT_Q_FLOWS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.flows[0].tx_rate, 3'000'000);
+    ft_query_init(&q, FT_Q_CONNECTIONS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.connections[0].tx_rate, 3'000'000);
+    ft_state_fill_stats(f.st, f.now, &stats);
+    CHECK_U64(stats.tx_rate, 3'000'000);
+
+    /* A larger transfer that has gone quiet ranks below one still moving. */
+    emit_flow(&f, SOCK_B, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 2, 443), 9'000'000, 0);
+    emit_transfer(&f, SOCK_B, PID_A, 12, FT_METHOD_SENDFILE, 9'000'000, 0, 0);
+    f.now = 1003 * FT_NS_PER_SEC;
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 1, 443), 1'000'000, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 1'000'000, 0, 0);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.sort = FT_SORT_RATE;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    CHECK_STR(f.rows.transfers[0].path, "/data/steady.bin");
+    CHECK_U64(f.rows.transfers[0].rate, 1'000'000);
+    CHECK_U64(f.rows.transfers[1].rate, 0);
+    q.sort = FT_SORT_BYTES;
+    run_query(&f, &q);
+    CHECK_STR(f.rows.transfers[0].path, "/data/finished.bin");
+
+    f.now = 1006 * FT_NS_PER_SEC;
+    ft_query_init(&q, FT_Q_PROCESSES);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.processes[0].tx_rate, 0);
+    fixture_close(&f);
+}
+
 static void tables_stay_bounded(void)
 {
     struct ft_state_config cfg;
@@ -631,5 +687,6 @@ void test_state(void)
     sockets_and_flows();
     loss_is_reported();
     reused_inode_is_another_file();
+    rates_cover_recent_seconds();
     tables_stay_bounded();
 }
