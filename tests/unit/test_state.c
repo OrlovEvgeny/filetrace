@@ -220,7 +220,7 @@ static void inference_needs_evidence(void)
     emit_transfer(&f, SOCK_A, PID_B, 11, FT_METHOD_READ_SEND, 517, 200000, 1);
     /* A handful of bytes after a tiny read: below the size threshold. */
     emit_transfer(&f, SOCK_A, PID_B, 13, FT_METHOD_READ_SEND, 40, 120, 1);
-    /* Read and sent in step, many times over. */
+    /* Every read was followed by a send of the same size, many times over. */
     emit_transfer(&f, SOCK_A, PID_B, 12, FT_METHOD_READ_SEND, 89128960, 89128960, 1360);
 
     ft_query_init(&q, FT_Q_TRANSFERS);

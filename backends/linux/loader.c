@@ -586,7 +586,7 @@ static void backend_flush(struct ft_backend *b)
         b->queue_peak_bytes = queued;
     ring_buffer__consume(b->ring);
 
-    /* Emptying a counter map walks all of its buckets, so skip it while nothing was added. */
+    /* Emptying a counter map walks all of its buckets; skip it while it received no entries. */
     read_counters(b, totals);
     if (totals[FT_BPF_CNT_AGG_INSERTS] != b->counters[FT_BPF_CNT_AGG_INSERTS])
         drain_counters(b);
