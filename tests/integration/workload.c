@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 [[noreturn]] static void die(const char *what)
@@ -187,6 +188,29 @@ static void scenario_sendfile(const char *path, size_t size, bool ipv6)
     close(sock);
     close(file);
     report("sendfile", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/* steady <path> <bytes> <seconds>: announced first, then sent evenly over that time */
+static void scenario_steady(const char *path, size_t size, size_t seconds)
+{
+    constexpr size_t SLICES_PER_SECOND = 20;
+    struct timespec pause = {.tv_nsec = 1'000'000'000 / SLICES_PER_SECOND};
+    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    size_t slices = seconds ? seconds * SLICES_PER_SECOND : 1;
+
+    make_file(path, size);
+    int file = open_file(path);
+    int sock = connect_sink(&sink);
+    report("steady", path, size, sink.port);
+    fflush(stdout);
+    for (size_t i = 0; i < slices; i++) {
+        sendfile_span(sock, file, size / slices * i,
+                      i + 1 == slices ? size : size / slices * (i + 1));
+        nanosleep(&pause, nullptr);
+    }
+    close(sock);
+    close(file);
     stop_sink(&sink);
 }
 
@@ -544,6 +568,8 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
     if (strcmp(name, "sendfile") == 0 && argc >= 4)
         scenario_sendfile(argv[2], arg_size(argv[3]), argc > 4 && strcmp(argv[4], "ipv6") == 0);
+    else if (strcmp(name, "steady") == 0 && argc == 5)
+        scenario_steady(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readsend") == 0 && argc == 5)
         scenario_readsend(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readthenrecv") == 0 && argc == 4)

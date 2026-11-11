@@ -326,6 +326,32 @@ expect_match "inspect socket" "$out" \
 expect "inspect: unknown kind exit code" "$(ft inspect inode 5 >/dev/null 2>&1; echo $?)" 2
 expect "inspect: missing subject exit code" "$(ft inspect file >/dev/null 2>&1; echo $?)" 2
 
+# A transfer in progress has a rate, and watch shows it.
+"$workload" steady "$data/steady.bin" 40000000 4 >"$work/steady.txt" &
+steady_job=$!
+sleep 2.2
+steady_pid=$(field "$(cat "$work/steady.txt")" pid)
+csv=$(ft files --path "$data/steady.bin" --active --format csv)
+expect_match "steady transfer: rate near 10 MB/s" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_per_second |
+        awk '{ print ($1 > 6000000 && $1 < 14000000) ? "near" : "off: " $1 }')" '^near$'
+expect_match "steady transfer: process rate" \
+    "$(ft processes --pid "$steady_pid" --format csv | column bytes_sent_per_second |
+        awk '{ print ($1 > 6000000 && $1 < 14000000) ? "near" : "off: " $1 }')" '^near$'
+expect "steady transfer: sorted first by rate" \
+    "$(ft files --sort rate --limit 1 --format quiet)" "$data/steady.bin"
+out=$(timeout -s INT 1.2 "$bin/filetrace" --socket "$sock" watch --no-ui --interval 500ms)
+expect_match "watch: header" "$out" '^FILETRACE  .* Linux [0-9]+\.[0-9]+  LIVE$'
+expect_match "watch: counters" "$(printf '%s\n' "$out" | tr '\n' '|')" \
+    '\|[0-9]+ +[0-9]+ +[0-9.]+ [KM]B/s\|Transfers +Processes +Outbound\|'
+expect_match "watch: transfer row" "$out" \
+    "^ft_workload $steady_pid +.*steady\.bin +127\.0\.0\.1 +sendfile +[0-9.]+ MB/s +EXACT$"
+expect_match "watch: confidence line" "$out" 'EXACT: [1-9][0-9]* +[^ ]+ INFERRED: [0-9]+ +LOST: 0$'
+out=$(timeout -s INT 1.2 "$bin/filetrace" --socket "$sock" watch --no-ui --interval 500ms \
+    --remote 203.0.113.0/24)
+expect_match "watch: a filter that matches nothing" "$out" 'No file transfers in progress'
+wait "$steady_job"
+
 # Following delivers what happens next and ends cleanly on a signal.
 "$bin/filetrace" --socket "$sock" events --follow --type file_transfer,network_send --jsonl \
     >"$work/follow.jsonl" &
@@ -381,8 +407,8 @@ expect "minimal daemon exit code" "$?" 0
 # Without a daemon, watch collects for as long as it runs.
 out=$(timeout -s INT 3 "$bin/filetrace" --socket "$work/absent.sock" watch --no-ui \
     --interval 500ms 2>"$work/watch.err")
-expect_match "watch output" "$out" 'TOP OUTBOUND PROCESSES'
 expect_match "watch output" "$out" 'ACTIVE FILE TRANSFERS'
+expect_match "watch output" "$out" '^PROCESSES$'
 expect_match "watch notice" "$(cat "$work/watch.err")" 'monitoring in the foreground'
 
 echo "$checks checks, $failures failed"

@@ -977,10 +977,18 @@ void ft_state_fill_stats(struct ft_state *st, uint64_t now_ns, struct ft_row_sta
          t = ft_table_next(st->transfers, t)) {
         enum ft_confidence conf;
         uint32_t evidence;
-        if (!ft_state_classify(st, t, &conf, &evidence))
+        if (!ft_state_classify(st, t, &conf, &evidence)) {
             row->candidates_rejected++;
-        else if (transfer_is_active(st, t->last_ns, now_ns))
+        } else if (transfer_is_active(st, t->last_ns, now_ns)) {
             row->active_transfers++;
+            if (conf < FT_ARRAY_LEN(row->active_by_confidence))
+                row->active_by_confidence[conf]++;
+        }
+    }
+    for (struct ft_process *p = ft_table_first(st->processes); p;
+         p = ft_table_next(st->processes, p)) {
+        if (p->last_ns && transfer_is_active(st, p->last_ns, now_ns))
+            row->active_processes++;
     }
 
     /* Recent loss keeps the collector flagged until a clean interval has passed. */

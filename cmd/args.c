@@ -293,7 +293,11 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
     if (OPTION(FT_QO_PROTOCOL, "--protocol")) {
         if (r < 0)
             return -1;
-        return ft_proto_parse(v, &q->proto) ? 1 : bad_value(qa, "--protocol", v, "tcp or udp");
+        if (strcmp(v, "all") == 0) {
+            q->proto = 0;
+            return 1;
+        }
+        return ft_proto_parse(v, &q->proto) ? 1 : bad_value(qa, "--protocol", v, "tcp, udp or all");
     }
     if (OPTION(FT_QO_TIME, "--since")) {
         if (r < 0)
@@ -313,8 +317,12 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         enum ft_confidence c;
         if (r < 0)
             return -1;
+        if (strcmp(v, "all") == 0) {
+            q->confidence = FT_CONF_ANY;
+            return 1;
+        }
         if (!ft_confidence_parse(v, &c))
-            return bad_value(qa, "--confidence", v, "exact, strong, inferred or unknown");
+            return bad_value(qa, "--confidence", v, "exact, strong, inferred, unknown or all");
         q->confidence = c;
         if (c == FT_CONF_UNKNOWN)
             q->flags |= FT_QF_INCLUDE_UNKNOWN;
@@ -456,14 +464,14 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t fo
         {FT_QO_REMOTE, "  --remote <ip|cidr>      Only this remote address or network\n"},
         {FT_QO_LOCAL, "  --local <ip|cidr>       Only this local address or network\n"},
         {FT_QO_PORT, "  --port <port>           Only this local or remote port\n"},
-        {FT_QO_PROTOCOL, "  --protocol tcp|udp      Only this protocol\n"},
+        {FT_QO_PROTOCOL, "  --protocol tcp|udp|all  Only this protocol (default: all)\n"},
         {FT_QO_FAMILY, "  --family ipv4|ipv6      Only this address family\n"},
         {FT_QO_STATE, "  --state <state>         connecting, established, listening, closed,\n"
                       "                          active or idle\n"},
         {FT_QO_METHOD,
          "  --method <method>       sendfile or read-write; splice, mmap and io_uring\n"
          "                          are accepted but not observed by this build\n"},
-        {FT_QO_CONFIDENCE, "  --confidence <level>    exact, strong, inferred or unknown\n"},
+        {FT_QO_CONFIDENCE, "  --confidence <level>    exact, strong, inferred, unknown or all\n"},
         {FT_QO_MIN_BYTES, "  --min-bytes <size>      At least this many bytes (1KB, 100MB, 1GB)\n"},
         {FT_QO_ACTIVITY, "  --active                Only records still in progress\n"
                          "  --completed             Only records that are no longer in progress\n"},

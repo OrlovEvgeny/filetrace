@@ -110,6 +110,12 @@ constexpr uint32_t FT_OPTS_TRANSFERS =
     FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_CONFIDENCE | FT_QO_METHOD |
     FT_QO_MIN_BYTES | FT_QO_ACTIVITY | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
 
+constexpr uint32_t FT_OPTS_WATCH = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
+                                   FT_QO_FILE | FT_QO_REMOTE | FT_QO_PROTOCOL | FT_QO_CONFIDENCE |
+                                   FT_QO_MIN_BYTES | FT_QO_SORT | FT_QO_LIMIT;
+constexpr uint32_t FT_SORTS_WATCH = FT_SORT_BIT(FT_SORT_RATE) | FT_SORT_BIT(FT_SORT_BYTES) |
+                                    FT_SORT_BIT(FT_SORT_PROCESS) | FT_SORT_BIT(FT_SORT_FILE);
+
 constexpr uint32_t FT_OPTS_EVENTS = FT_QO_PID | FT_QO_PROCESS | FT_QO_FILE | FT_QO_REMOTE |
                                     FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_FAMILY |
                                     FT_QO_TIME | FT_QO_LIMIT | FT_QO_OUTPUT;

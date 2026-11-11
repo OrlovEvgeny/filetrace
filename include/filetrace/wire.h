@@ -241,10 +241,11 @@ struct ft_row_stats {
     uint32_t open_fds;
     uint32_t active_flows;
     uint32_t active_transfers;
+    uint32_t active_by_confidence[4]; /* the active transfers, by enum ft_confidence */
+    uint32_t active_processes;        /* processes with traffic in the last few seconds */
     uint32_t open_sockets;
     uint32_t health;
     uint32_t pid;
-    uint32_t pad;
     char backend[48];
     char mode[16];
     char version[16];

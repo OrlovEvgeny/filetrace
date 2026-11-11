@@ -28,14 +28,20 @@ void ft_table_print(FILE *out, const struct ft_column_spec *cols, size_t ncols, 
 /* Display width of UTF-8 text, counting each code point as one column. */
 size_t ft_text_width(const char *s);
 
+enum ft_watch_direction : uint8_t {
+    FT_WATCH_OUTBOUND,
+    FT_WATCH_INBOUND,
+    FT_WATCH_BOTH,
+};
+
 struct ft_watch_options {
     uint64_t interval_ns;
-    uint32_t pid;
-    uint16_t proto;
-    uint32_t limit;
-    bool inbound; /* rank processes by received bytes */
-    bool plain;   /* append snapshots instead of drawing a dashboard */
-    char process[64];
+    enum ft_watch_direction direction; /* which traffic ranks processes and connections */
+    bool plain;                        /* append snapshots instead of drawing a dashboard */
+
+    /* The filters shared by every view, the order of the transfers, and the rows per
+       table (limit 0: as many as fit). */
+    struct ft_query filter;
 };
 
 int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt);

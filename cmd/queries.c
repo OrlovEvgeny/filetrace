@@ -904,63 +904,67 @@ int ft_cmd_stats(const struct ft_cli *cli, struct ft_args *a)
 
 int ft_cmd_watch(const struct ft_cli *cli, struct ft_args *a)
 {
-    struct ft_watch_options opt = {.interval_ns = FT_NS_PER_SEC, .limit = 10};
+    struct ft_watch_options *opt = calloc(1, sizeof(*opt));
+    struct ft_query_args *qa = calloc(1, sizeof(*qa));
+    int code = FT_EXIT_OK;
     const char *v;
     int r;
 
-    while (!ft_args_done(a)) {
-        if ((r = ft_args_value(a, "--interval", &v)) != 0) {
+    if (!opt || !qa) {
+        free(opt);
+        free(qa);
+        return FT_EXIT_ERROR;
+    }
+    opt->interval_ns = FT_NS_PER_SEC;
+    ft_query_args_init(qa, "watch", FT_Q_TRANSFERS, FT_OPTS_WATCH, FT_SORTS_WATCH);
+
+    while (code == FT_EXIT_OK && !ft_args_done(a)) {
+        r = ft_query_args_parse(qa, a);
+        if (r < 0) {
+            code = FT_EXIT_USAGE;
+        } else if (r > 0) {
+            continue;
+        } else if ((r = ft_args_value(a, "--interval", &v)) != 0) {
             if (r < 0)
-                return FT_EXIT_USAGE;
-            if (!ft_parse_duration(v, &opt.interval_ns) || opt.interval_ns < 100 * FT_NS_PER_MS)
-                return ft_usage_error("watch",
+                code = FT_EXIT_USAGE;
+            else if (!ft_parse_duration(v, &opt->interval_ns) ||
+                     opt->interval_ns < 100 * FT_NS_PER_MS)
+                code = ft_usage_error("watch",
                                       "invalid value '%s' for --interval (expected at least "
                                       "100ms)",
                                       v);
-        } else if ((r = ft_args_value(a, "--pid", &v)) != 0) {
-            if (r < 0)
-                return FT_EXIT_USAGE;
-            if (!ft_parse_u32(v, &opt.pid) || opt.pid == 0)
-                return ft_usage_error("watch", "invalid value '%s' for --pid", v);
-        } else if ((r = ft_args_value(a, "--process", &v)) != 0) {
-            if (r < 0)
-                return FT_EXIT_USAGE;
-            if (strlen(v) >= sizeof(opt.process))
-                return ft_usage_error("watch", "the process name is too long");
-            ft_strlcpy(opt.process, v, sizeof(opt.process));
-        } else if ((r = ft_args_value(a, "--protocol", &v)) != 0) {
-            if (r < 0)
-                return FT_EXIT_USAGE;
-            if (!ft_proto_parse(v, &opt.proto))
-                return ft_usage_error("watch",
-                                      "invalid value '%s' for --protocol (expected tcp or udp)", v);
         } else if ((r = ft_args_value(a, "--direction", &v)) != 0) {
             if (r < 0)
-                return FT_EXIT_USAGE;
-            if (strcmp(v, "inbound") == 0)
-                opt.inbound = true;
-            else if (strcmp(v, "outbound") != 0)
-                return ft_usage_error("watch",
-                                      "invalid value '%s' for --direction (expected inbound or "
-                                      "outbound)",
+                code = FT_EXIT_USAGE;
+            else if (strcmp(v, "outbound") == 0)
+                opt->direction = FT_WATCH_OUTBOUND;
+            else if (strcmp(v, "inbound") == 0)
+                opt->direction = FT_WATCH_INBOUND;
+            else if (strcmp(v, "both") == 0)
+                opt->direction = FT_WATCH_BOTH;
+            else
+                code = ft_usage_error("watch",
+                                      "invalid value '%s' for --direction (expected inbound, "
+                                      "outbound or both)",
                                       v);
-        } else if ((r = ft_args_value(a, "--limit", &v)) != 0) {
-            if (r < 0)
-                return FT_EXIT_USAGE;
-            if (!ft_parse_u32(v, &opt.limit) || opt.limit == 0)
-                return ft_usage_error("watch", "invalid value '%s' for --limit", v);
         } else if (ft_args_flag(a, "--no-ui")) {
-            opt.plain = true;
+            opt->plain = true;
         } else {
-            return unknown_argument("watch", a);
+            code = unknown_argument("watch", a);
         }
     }
 
-    struct ft_session session;
-    int code = ft_session_open(cli, true, &session);
-    if (code != FT_EXIT_OK)
-        return code;
-    code = ft_watch_run(&session, &opt);
-    ft_session_close(&session);
+    if (code == FT_EXIT_OK) {
+        struct ft_session session;
+
+        opt->filter = qa->query;
+        code = ft_session_open(cli, true, &session);
+        if (code == FT_EXIT_OK) {
+            code = ft_watch_run(&session, opt);
+            ft_session_close(&session);
+        }
+    }
+    free(opt);
+    free(qa);
     return code;
 }

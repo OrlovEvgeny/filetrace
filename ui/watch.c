@@ -12,7 +12,37 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Style marks inside composed text; none of them takes a column. */
 constexpr char HEADING = '\x01'; /* first byte of a line drawn emphasised */
+constexpr char BOLD = '\x02';
+constexpr char PLAIN = '\x03';
+constexpr char GREEN = '\x04';
+constexpr char YELLOW = '\x05';
+constexpr char RED = '\x06';
+constexpr char DIM = '\x07';
+
+static bool is_style_mark(char c)
+{
+    return c >= HEADING && c <= DIM;
+}
+
+static const char *style_sequence(char mark)
+{
+    switch (mark) {
+    case BOLD:
+        return FT_STYLE_BOLD;
+    case GREEN:
+        return "\033[32m";
+    case YELLOW:
+        return "\033[33m";
+    case RED:
+        return "\033[31m";
+    case DIM:
+        return FT_STYLE_DIM;
+    default:
+        return FT_STYLE_RESET;
+    }
+}
 
 static volatile sig_atomic_t quit_requested;
 static volatile sig_atomic_t resized;
@@ -29,10 +59,17 @@ static void on_resize(int signo)
     resized = 1;
 }
 
+enum view : uint8_t {
+    VIEW_FILES,
+    VIEW_PROCESSES,
+    VIEW_NETWORK,
+};
+
 struct snapshot {
     struct ft_row_stats stats;
-    struct ft_rows processes;
     struct ft_rows transfers;
+    struct ft_rows processes;
+    struct ft_rows connections;
 };
 
 struct frame {
@@ -47,65 +84,65 @@ static void stats_collect(void *ctx, uint16_t type, const void *payload, size_t 
         memcpy(row, payload, size < sizeof(*row) ? size : sizeof(*row));
 }
 
-static int take_snapshot(struct ft_session *s, const struct ft_watch_options *opt,
-                         struct snapshot *snap, struct ft_error *err)
+static void scope_from(struct ft_query *q, const struct ft_query *filter)
 {
-    struct ft_query q;
-
-    ft_query_init(&q, FT_Q_STATS);
-    memset(&snap->stats, 0, sizeof(snap->stats));
-    int code = ft_client_query(s->client, &q, stats_collect, &snap->stats, nullptr, err);
-    if (code != FT_EXIT_OK)
-        return code;
-
-    ft_query_init(&q, FT_Q_PROCESSES);
-    q.sort = opt->inbound ? FT_SORT_INBOUND : FT_SORT_OUTBOUND;
-    q.min_bytes = 1;
-    q.limit = opt->limit;
-    q.pid = opt->pid;
-    ft_strlcpy(q.process, opt->process, sizeof(q.process));
-    ft_rows_clear(&snap->processes);
-    code = ft_client_query(s->client, &q, ft_rows_collect, &snap->processes, nullptr, err);
-    if (code != FT_EXIT_OK)
-        return code;
-
-    ft_query_init(&q, FT_Q_TRANSFERS);
-    q.sort = FT_SORT_BYTES;
-    q.flags = FT_QF_ACTIVE;
-    q.limit = opt->limit;
-    q.pid = opt->pid;
-    q.proto = opt->proto;
-    ft_strlcpy(q.process, opt->process, sizeof(q.process));
-    ft_rows_clear(&snap->transfers);
-    return ft_client_query(s->client, &q, ft_rows_collect, &snap->transfers, nullptr, err);
+    q->pid = filter->pid;
+    q->uid = filter->uid;
+    q->flags |= filter->flags & FT_QF_HAS_UID;
+    q->cgroup_id = filter->cgroup_id;
+    q->ns_inum = filter->ns_inum;
+    ft_strlcpy(q->process, filter->process, sizeof(q->process));
 }
 
-struct process_table {
-    const struct ft_rows *rows;
-    bool inbound;
-};
-
-static const char *process_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
+static int take_snapshot(struct ft_session *s, const struct ft_watch_options *opt, enum view view,
+                         bool every_view, uint32_t limit, struct snapshot *snap,
+                         struct ft_error *err)
 {
-    const struct process_table *t = ctx;
-    struct ft_row_process row;
+    const struct ft_query *filter = &opt->filter;
+    struct ft_query *q = malloc(sizeof(*q));
+    int code;
 
-    ft_rows_get(t->rows, r, &row, sizeof(row));
-    switch (c) {
-    case 0:
-        snprintf(buf, size, "%" PRIu32, row.pid);
-        break;
-    case 1:
-        snprintf(buf, size, "%s", row.comm[0] ? row.comm : "-");
-        break;
-    case 2:
-        ft_format_bytes(t->inbound ? row.rx_bytes : row.tx_bytes, buf, size);
-        break;
-    default:
-        snprintf(buf, size, "%" PRIu32, row.connections);
-        break;
+    if (!q)
+        return ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+
+    ft_query_init(q, FT_Q_STATS);
+    memset(&snap->stats, 0, sizeof(snap->stats));
+    code = ft_client_query(s->client, q, stats_collect, &snap->stats, nullptr, err);
+
+    if (code == FT_EXIT_OK && (every_view || view == VIEW_FILES)) {
+        *q = *filter;
+        q->kind = FT_Q_TRANSFERS;
+        q->flags |= FT_QF_ACTIVE;
+        q->sort = filter->sort ? filter->sort : FT_SORT_RATE;
+        q->limit = limit;
+        ft_rows_clear(&snap->transfers);
+        code = ft_client_query(s->client, q, ft_rows_collect, &snap->transfers, nullptr, err);
     }
-    return buf;
+    if (code == FT_EXIT_OK && (every_view || view == VIEW_PROCESSES)) {
+        ft_query_init(q, FT_Q_PROCESSES);
+        scope_from(q, filter);
+        q->sort = opt->direction == FT_WATCH_INBOUND ? FT_SORT_INBOUND : FT_SORT_OUTBOUND;
+        q->min_bytes = filter->min_bytes;
+        q->limit = limit;
+        ft_rows_clear(&snap->processes);
+        code = ft_client_query(s->client, q, ft_rows_collect, &snap->processes, nullptr, err);
+    }
+    if (code == FT_EXIT_OK && view == VIEW_NETWORK && !every_view) {
+        ft_query_init(q, FT_Q_CONNECTIONS);
+        scope_from(q, filter);
+        q->flags |= FT_QF_ACTIVE;
+        q->proto = filter->proto;
+        q->remote = filter->remote;
+        q->remote_host_bits = filter->remote_host_bits;
+        q->sort = opt->direction == FT_WATCH_OUTBOUND  ? FT_SORT_OUTBOUND
+                  : opt->direction == FT_WATCH_INBOUND ? FT_SORT_INBOUND
+                                                       : FT_SORT_RATE;
+        q->limit = limit;
+        ft_rows_clear(&snap->connections);
+        code = ft_client_query(s->client, q, ft_rows_collect, &snap->connections, nullptr, err);
+    }
+    free(q);
+    return code;
 }
 
 struct transfer_table {
@@ -125,13 +162,18 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
         t->loaded = r;
     }
     switch (c) {
-    case 0: {
+    case 0:
+        snprintf(buf, size, "%s %" PRIu32, row->comm[0] ? row->comm : "-", row->pid);
+        break;
+    case 1: {
         const char *deleted = (row->flags & FT_XFER_FILE_DELETED) ? " (deleted)" : "";
         if (row->flags & FT_XFER_PATH_KNOWN)
             snprintf(buf, size, "%s%s", row->path, deleted);
-        else
+        else if (row->flags & FT_XFER_FILE_KNOWN)
             snprintf(buf, size, "(device %" PRIu64 " inode %" PRIu64 ")%s", row->dev, row->ino,
                      deleted);
+        else
+            snprintf(buf, size, "unknown");
         /* Keep the end of a long path: the file name matters most. */
         size_t len = strlen(buf);
         if (len > t->path_width && t->path_width > 3) {
@@ -143,17 +185,15 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
         }
         break;
     }
-    case 1:
-        snprintf(buf, size, "%s", row->comm[0] ? row->comm : "-");
-        break;
     case 2:
-        if (row->remote.family == 0 && row->remote.port == 0)
-            snprintf(buf, size, "*");
-        else
-            ft_endpoint_format(&row->remote, buf, size);
+        ft_addr_format(&row->remote, buf, size);
         break;
     case 3:
-        ft_format_bytes(row->bytes, buf, size);
+        snprintf(buf, size, "%s",
+                 row->method == FT_METHOD_NONE ? "-" : ft_method_name((enum ft_method)row->method));
+        break;
+    case 4:
+        ft_format_rate(row->rate, buf, size);
         break;
     default: {
         const char *name = ft_confidence_name((enum ft_confidence)row->confidence);
@@ -169,85 +209,272 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
     return buf;
 }
 
+static void transfers_table(FILE *o, const struct ft_rows *rows, int cols)
+{
+    static const struct ft_column_spec columns[] = {
+        {"PROCESS", false}, {"FILE", false}, {"DESTINATION", false},
+        {"METHOD", false},  {"RATE", true},  {"CONFIDENCE", false},
+    };
+    struct ft_row_transfer *row = malloc(sizeof(*row));
+    struct transfer_table table = {
+        .rows = rows,
+        .row = row,
+        .loaded = SIZE_MAX,
+        .path_width = cols > 100 ? (size_t)cols - 72 : 28,
+    };
+
+    if (row && rows->count)
+        ft_table_print(o, columns, FT_ARRAY_LEN(columns), rows->count, transfer_cell, &table,
+                       false);
+    else
+        fputs("No file transfers in progress.\n", o);
+    free(row);
+}
+
+struct process_table {
+    const struct ft_rows *rows;
+    enum ft_watch_direction direction;
+};
+
+static const char *process_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
+{
+    const struct process_table *t = ctx;
+    struct ft_row_process row;
+    bool inbound = t->direction == FT_WATCH_INBOUND;
+
+    ft_rows_get(t->rows, r, &row, sizeof(row));
+    switch (c) {
+    case 0:
+        snprintf(buf, size, "%" PRIu32, row.pid);
+        break;
+    case 1:
+        snprintf(buf, size, "%s", row.comm[0] ? row.comm : "-");
+        break;
+    case 2:
+        ft_format_rate(inbound ? row.rx_rate : row.tx_rate, buf, size);
+        break;
+    case 3:
+        snprintf(buf, size, "%" PRIu32, row.files);
+        break;
+    case 4:
+        snprintf(buf, size, "%" PRIu32, row.connections);
+        break;
+    case 5:
+        if (t->direction == FT_WATCH_BOTH)
+            ft_format_rate(row.rx_rate, buf, size);
+        else
+            ft_format_bytes(inbound ? row.rx_bytes : row.tx_bytes, buf, size);
+        break;
+    default:
+        ft_format_bytes(row.tx_bytes + row.rx_bytes, buf, size);
+        break;
+    }
+    return buf;
+}
+
+static void processes_table(FILE *o, const struct ft_rows *rows, enum ft_watch_direction direction)
+{
+    static const struct ft_column_spec outbound[] = {
+        {"PID", false},  {"PROCESS", false},    {"OUTBOUND", true},
+        {"FILES", true}, {"CONNECTIONS", true}, {"SENT", true},
+    };
+    static const struct ft_column_spec inbound[] = {
+        {"PID", false},  {"PROCESS", false},    {"INBOUND", true},
+        {"FILES", true}, {"CONNECTIONS", true}, {"RECEIVED", true},
+    };
+    static const struct ft_column_spec both[] = {
+        {"PID", false},        {"PROCESS", false}, {"OUTBOUND", true}, {"FILES", true},
+        {"CONNECTIONS", true}, {"INBOUND", true},  {"TOTAL", true},
+    };
+    struct process_table table = {rows, direction};
+
+    if (rows->count == 0)
+        fputs("No network activity observed yet.\n", o);
+    else if (direction == FT_WATCH_BOTH)
+        ft_table_print(o, both, FT_ARRAY_LEN(both), rows->count, process_cell, &table, false);
+    else
+        ft_table_print(o, direction == FT_WATCH_INBOUND ? inbound : outbound,
+                       FT_ARRAY_LEN(outbound), rows->count, process_cell, &table, false);
+}
+
+static const char *connection_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
+{
+    const struct ft_rows *rows = ctx;
+    struct ft_row_connection row;
+    char scratch[8];
+
+    ft_rows_get(rows, r, &row, sizeof(row));
+    switch (c) {
+    case 0:
+        if (row.pid)
+            snprintf(buf, size, "%" PRIu32, row.pid);
+        else
+            snprintf(buf, size, "-");
+        break;
+    case 1:
+        snprintf(buf, size, "%s", row.comm[0] ? row.comm : "-");
+        break;
+    case 2: {
+        size_t i = 0;
+        for (const char *p = ft_proto_name(row.proto, scratch); *p && i + 1 < size; p++)
+            buf[i++] = (char)(*p - ('a' <= *p && *p <= 'z' ? 32 : 0));
+        buf[i] = '\0';
+        break;
+    }
+    case 3:
+    case 4: {
+        const struct ft_endpoint *ep = c == 3 ? &row.local : &row.remote;
+        if (ep->family == 0 && ep->port == 0)
+            snprintf(buf, size, "*");
+        else
+            ft_endpoint_format(ep, buf, size);
+        break;
+    }
+    case 5:
+        ft_format_rate(row.tx_rate, buf, size);
+        break;
+    default:
+        ft_format_rate(row.rx_rate, buf, size);
+        break;
+    }
+    return buf;
+}
+
+static void connections_table(FILE *o, const struct ft_rows *rows)
+{
+    static const struct ft_column_spec columns[] = {
+        {"PID", false},    {"PROCESS", false}, {"PROTOCOL", false}, {"LOCAL", false},
+        {"REMOTE", false}, {"OUTBOUND", true}, {"INBOUND", true},
+    };
+
+    if (rows->count)
+        ft_table_print(o, columns, FT_ARRAY_LEN(columns), rows->count, connection_cell,
+                       (void *)(uintptr_t)rows, false);
+    else
+        fputs("No open connections.\n", o);
+}
+
+static void counters(FILE *o, const struct ft_row_stats *st, enum ft_watch_direction direction)
+{
+    const char *labels[4] = {"Transfers", "Processes"};
+    char values[4][32];
+    size_t n = 2;
+
+    snprintf(values[0], sizeof(values[0]), "%u", st->active_transfers);
+    snprintf(values[1], sizeof(values[1]), "%u", st->active_processes);
+    if (direction != FT_WATCH_INBOUND) {
+        ft_format_rate(st->tx_rate, values[n], sizeof(values[n]));
+        labels[n++] = "Outbound";
+    }
+    if (direction != FT_WATCH_OUTBOUND) {
+        ft_format_rate(st->rx_rate, values[n], sizeof(values[n]));
+        labels[n++] = "Inbound";
+    }
+
+    fprintf(o, "\n%c", BOLD);
+    for (size_t i = 0; i < n; i++)
+        fprintf(o, i + 1 < n ? "%-14s" : "%s", values[i]);
+    fprintf(o, "%c\n%c", PLAIN, DIM);
+    for (size_t i = 0; i < n; i++)
+        fprintf(o, i + 1 < n ? "%-14s" : "%s", labels[i]);
+    fprintf(o, "%c\n", PLAIN);
+}
+
+static void confidence_line(FILE *o, const struct ft_row_stats *st)
+{
+    char lost[32];
+
+    ft_format_count(st->events_dropped, lost, sizeof(lost));
+    fprintf(o, "\n%c●%c EXACT: %u   %c●%c INFERRED: %u   ", GREEN, PLAIN,
+            st->active_by_confidence[FT_CONF_EXACT], YELLOW, PLAIN,
+            st->active_by_confidence[FT_CONF_INFERRED]);
+    if (st->active_by_confidence[FT_CONF_STRONG])
+        fprintf(o, "STRONG: %u   ", st->active_by_confidence[FT_CONF_STRONG]);
+    if (st->events_dropped)
+        fprintf(o, "%cLOST: %s%c\n", RED, lost, PLAIN);
+    else
+        fprintf(o, "LOST: %s\n", lost);
+}
+
+static void key(FILE *o, const char *label, const char *name, bool current)
+{
+    if (current)
+        fprintf(o, "%c[%s] %s%c  ", BOLD, label, name, PLAIN);
+    else
+        fprintf(o, "[%s] %s  ", label, name);
+}
+
+static void help_screen(FILE *o)
+{
+    fprintf(o,
+            "\n%cKEYS\n"
+            "f      File transfers in progress\n"
+            "p      Processes, by the rate they send at\n"
+            "n      Network: open connections\n"
+            "space  Pause or resume refreshing\n"
+            "?      Show or hide this help\n"
+            "q      Quit\n"
+            "\n%cCOLUMNS\n"
+            "RATE, OUTBOUND, INBOUND\n"
+            "            Bytes per second over the last one to two seconds, counted\n"
+            "            where the local socket accepts or delivers them.\n"
+            "METHOD      sendfile: the kernel moved the file to the socket itself.\n"
+            "            read-write: a thread read the file, then sent.\n"
+            "CONFIDENCE  EXACT for sendfile. INFERRED for read-write: the payload\n"
+            "            cannot be proven to come only from that file.\n"
+            "            A '*' marks a transfer during which events were lost.\n"
+            "LOST        Events the collector could not record since it started.\n"
+            "\nPress ? to return\n",
+            HEADING, HEADING);
+}
+
 static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_options *opt,
-                    const struct ft_host_info *host, int cols, bool paused, bool help)
+                    const struct ft_host_info *host, enum view view, bool every_view, int cols,
+                    bool paused, bool help)
 {
     const struct ft_row_stats *st = &snap->stats;
-    char a[32];
-    char b[32];
     unsigned major = 0;
     unsigned minor = 0;
 
     sscanf(host->release, "%u.%u", &major, &minor);
-    fprintf(o, "%cFILETRACE  |  %s  |  %s %u.%u  |  %s\n", HEADING, host->hostname,
-            strcmp(host->system, "Darwin") == 0 ? "macOS" : host->system, major, minor,
-            paused                       ? "Paused"
-            : st->health == FT_HEALTH_OK ? "Monitoring"
-                                         : "Degraded");
-    if (st->events_dropped) {
-        ft_format_count(st->events_dropped, a, sizeof(a));
-        fprintf(o, "WARNING: %s events lost; attribution may be incomplete.\n", a);
-    }
+    fprintf(o, "%cFILETRACE%c  %s · %s %u.%u  ", BOLD, PLAIN, host->hostname,
+            strcmp(host->system, "Darwin") == 0 ? "macOS" : host->system, major, minor);
+    if (paused)
+        fprintf(o, "%cPAUSED%c\n", YELLOW, PLAIN);
+    else if (st->health != FT_HEALTH_OK)
+        fprintf(o, "%cDEGRADED%c\n", RED, PLAIN);
+    else
+        fprintf(o, "%cLIVE%c\n", GREEN, PLAIN);
 
-    ft_format_bytes(st->tx_bytes, a, sizeof(a));
-    ft_format_bytes(st->rx_bytes, b, sizeof(b));
-    fprintf(o, "\n%c%-16s%-16s%-19s%s\n", HEADING, "OUTBOUND", "INBOUND", "ACTIVE FLOWS",
-            "EVENTS/S");
-    fprintf(o, "%-16s%-16s%-19u%" PRIu64 "\n", a, b, st->active_flows,
-            st->events_per_sec_milli / 1000);
-
+    counters(o, st, opt->direction);
     if (help) {
-        fprintf(o,
-                "\n%cKEYS\n"
-                "q      Quit\n"
-                "p      Pause or resume refreshing\n"
-                "?      Show or hide this help\n"
-                "\n%cCOLUMNS\n"
-                "SENT        Bytes the local socket accepted, not bytes the remote\n"
-                "            end acknowledged.\n"
-                "CONFIDENCE  EXACT: the kernel moved the file to the socket itself.\n"
-                "            INFERRED: a thread read the file, then sent; the payload\n"
-                "            cannot be proven to come only from that file.\n"
-                "            A '*' marks a transfer during which events were lost.\n",
-                HEADING, HEADING);
-        fprintf(o, "\nPress ? to return\n");
+        help_screen(o);
         return;
     }
 
-    static const struct ft_column_spec out_cols[] = {
-        {"PID", false}, {"PROCESS", false}, {"SENT", true}, {"CONNECTIONS", true}};
-    static const struct ft_column_spec in_cols[] = {
-        {"PID", false}, {"PROCESS", false}, {"RECEIVED", true}, {"CONNECTIONS", true}};
-    struct process_table pt = {&snap->processes, opt->inbound};
+    if (every_view || view == VIEW_FILES) {
+        fprintf(o, "\n%cACTIVE FILE TRANSFERS\n", HEADING);
+        transfers_table(o, &snap->transfers, cols);
+    }
+    if (every_view || view == VIEW_PROCESSES) {
+        fprintf(o, "\n%cPROCESSES\n", HEADING);
+        processes_table(o, &snap->processes, opt->direction);
+    }
+    if (!every_view && view == VIEW_NETWORK) {
+        fprintf(o, "\n%cCONNECTIONS\n", HEADING);
+        connections_table(o, &snap->connections);
+    }
 
-    fprintf(o, "\n%cTOP %s PROCESSES\n", HEADING, opt->inbound ? "INBOUND" : "OUTBOUND");
-    if (snap->processes.count)
-        ft_table_print(o, opt->inbound ? in_cols : out_cols, 4, snap->processes.count, process_cell,
-                       &pt, false);
-    else
-        fputs("No network activity observed yet.\n", o);
-
-    static const struct ft_column_spec xfer_cols[] = {{"FILE", false},
-                                                      {"PROCESS", false},
-                                                      {"REMOTE", false},
-                                                      {"SENT", true},
-                                                      {"CONFIDENCE", false}};
-    struct ft_row_transfer *row = malloc(sizeof(*row));
-    struct transfer_table tt = {
-        .rows = &snap->transfers,
-        .row = row,
-        .loaded = SIZE_MAX,
-        .path_width = cols > 110 ? (size_t)cols - 70 : 40,
-    };
-
-    fprintf(o, "\n%cACTIVE FILE TRANSFERS\n", HEADING);
-    if (row && snap->transfers.count)
-        ft_table_print(o, xfer_cols, 5, snap->transfers.count, transfer_cell, &tt, false);
-    else
-        fputs("No file transfers in progress.\n", o);
-    free(row);
-
-    fprintf(o, "\nPress q to quit | ? for help\n");
+    confidence_line(o, st);
+    if (every_view)
+        return;
+    key(o, "F", "Files", view == VIEW_FILES);
+    key(o, "P", "Processes", view == VIEW_PROCESSES);
+    key(o, "N", "Network", view == VIEW_NETWORK);
+    key(o, "Space", "Pause", paused);
+    key(o, "?", "Help", false);
+    key(o, "Q", "Quit", false);
+    fputc('\n', o);
 }
 
 static void frame_free(struct frame *f)
@@ -273,11 +500,12 @@ static bool frame_build(struct frame *f, char *text, int rows, int cols)
         if (end)
             *end = '\0';
 
-        bool heading = line[0] == HEADING;
         size_t width = 0;
-        char *cut = line + (heading ? 1 : 0);
+        char *cut = line;
         for (; *cut; cut++) {
-            if (((unsigned char)*cut & 0xc0) != 0x80 && ++width > (size_t)cols)
+            if (is_style_mark(*cut) || ((unsigned char)*cut & 0xc0) == 0x80)
+                continue;
+            if (++width > (size_t)cols)
                 break;
         }
         *cut = '\0';
@@ -291,6 +519,22 @@ static bool frame_build(struct frame *f, char *text, int rows, int cols)
     return true;
 }
 
+static void write_line(const char *line, bool styled)
+{
+    bool heading = line[0] == HEADING;
+
+    if (heading && styled)
+        fputs(FT_STYLE_BOLD, stdout);
+    for (const char *p = line + (heading ? 1 : 0); *p; p++) {
+        if (!is_style_mark(*p))
+            fputc(*p, stdout);
+        else if (styled)
+            fputs(style_sequence(*p), stdout);
+    }
+    if (styled)
+        fputs(FT_STYLE_RESET, stdout);
+}
+
 /* Rewrites only the lines that differ from the frame on screen. */
 static void frame_draw(const struct frame *next, const struct frame *shown, bool styled)
 {
@@ -299,10 +543,7 @@ static void frame_draw(const struct frame *next, const struct frame *shown, bool
         if (i < shown->count && strcmp(line, shown->lines[i]) == 0)
             continue;
         printf("\033[%zu;1H", i + 1);
-        if (line[0] == HEADING)
-            printf("%s%s%s", styled ? FT_STYLE_BOLD : "", line + 1, styled ? FT_STYLE_RESET : "");
-        else
-            fputs(line, stdout);
+        write_line(line, styled);
         fputs("\033[K", stdout);
     }
     for (size_t i = next->count; i < shown->count; i++)
@@ -312,29 +553,50 @@ static void frame_draw(const struct frame *next, const struct frame *shown, bool
 
 static void print_plain(char *text)
 {
-    for (char *p = text; *p; p++) {
-        if (*p != HEADING)
-            fputc(*p, stdout);
+    for (char *line = text; line && *line;) {
+        char *end = strchr(line, '\n');
+        if (end)
+            *end = '\0';
+        write_line(line, false);
+        fputc('\n', stdout);
+        line = end ? end + 1 : nullptr;
     }
     fputc('\n', stdout);
     fflush(stdout);
 }
 
-int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt)
+/* Rows left for a table once the lines around it are drawn. */
+static uint32_t table_rows(const struct ft_watch_options *opt, int rows)
 {
+    constexpr int SURROUNDING_LINES = 12;
+    constexpr uint32_t PLAIN_ROWS = 10;
+    int room = rows - SURROUNDING_LINES;
+    uint32_t fit = room > 1 ? (uint32_t)room : 1;
+
+    if (opt->plain)
+        return opt->filter.limit ? opt->filter.limit : PLAIN_ROWS;
+    return opt->filter.limit && opt->filter.limit < fit ? opt->filter.limit : fit;
+}
+
+int ft_watch_run(struct ft_session *s, const struct ft_watch_options *given)
+{
+    struct ft_watch_options opt = *given;
     struct snapshot snap = {0};
     struct frame shown = {0};
     struct ft_host_info host;
     struct ft_error err = {0};
-    bool dashboard = !opt->plain && isatty(STDOUT_FILENO) && isatty(STDIN_FILENO);
+    bool dashboard = !opt.plain && isatty(STDOUT_FILENO) && isatty(STDIN_FILENO);
     bool styled = ft_term_styled(stdout);
+    enum view view = VIEW_FILES;
     bool paused = false;
     bool help = false;
     int code = FT_EXIT_OK;
 
+    opt.plain = !dashboard;
     ft_sysinfo_host(&host);
-    ft_rows_init(&snap.processes, FT_MSG_ROW_PROCESS);
     ft_rows_init(&snap.transfers, FT_MSG_ROW_TRANSFER);
+    ft_rows_init(&snap.processes, FT_MSG_ROW_PROCESS);
+    ft_rows_init(&snap.connections, FT_MSG_ROW_CONNECTION);
 
     struct sigaction quit = {.sa_handler = on_quit};
     struct sigaction winch = {.sa_handler = on_resize};
@@ -355,13 +617,13 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt)
         int rows = 24;
         int cols = 200;
 
+        if (dashboard)
+            ft_term_size(&rows, &cols);
         if (!paused) {
-            code = take_snapshot(s, opt, &snap, &err);
+            code = take_snapshot(s, &opt, view, !dashboard, table_rows(&opt, rows), &snap, &err);
             if (code != FT_EXIT_OK)
                 break;
         }
-        if (dashboard)
-            ft_term_size(&rows, &cols);
 
         char *text = nullptr;
         size_t text_size = 0;
@@ -370,7 +632,7 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt)
             code = FT_EXIT_ERROR;
             break;
         }
-        compose(mem, &snap, opt, &host, cols, paused, help);
+        compose(mem, &snap, &opt, &host, view, !dashboard, cols, paused, help);
         fclose(mem);
 
         if (dashboard) {
@@ -397,19 +659,44 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt)
 
         if (dashboard) {
             struct pollfd pfd = {.fd = STDIN_FILENO, .events = POLLIN};
-            int ready = poll(&pfd, 1, (int)(opt->interval_ns / FT_NS_PER_MS));
-            char key;
-            if (ready > 0 && read(STDIN_FILENO, &key, 1) == 1) {
-                if (key == 'q' || key == 'Q' || key == 3)
+            int ready = poll(&pfd, 1, (int)(opt.interval_ns / FT_NS_PER_MS));
+            char pressed;
+            if (ready > 0 && read(STDIN_FILENO, &pressed, 1) == 1) {
+                switch (pressed) {
+                case 'q':
+                case 'Q':
+                case 3:
+                    quit_requested = 1;
                     break;
-                if (key == 'p' || key == 'P')
+                case 'f':
+                case 'F':
+                    view = VIEW_FILES;
+                    help = false;
+                    break;
+                case 'p':
+                case 'P':
+                    view = VIEW_PROCESSES;
+                    help = false;
+                    break;
+                case 'n':
+                case 'N':
+                    view = VIEW_NETWORK;
+                    help = false;
+                    break;
+                case ' ':
                     paused = !paused;
-                if (key == '?' || key == 'h')
+                    break;
+                case '?':
+                case 'h':
                     help = !help;
+                    break;
+                default:
+                    break;
+                }
             }
         } else {
-            struct timespec ts = {(time_t)(opt->interval_ns / FT_NS_PER_SEC),
-                                  (long)(opt->interval_ns % FT_NS_PER_SEC)};
+            struct timespec ts = {(time_t)(opt.interval_ns / FT_NS_PER_SEC),
+                                  (long)(opt.interval_ns % FT_NS_PER_SEC)};
             nanosleep(&ts, nullptr);
         }
     }
@@ -425,7 +712,8 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt)
         code = FT_EXIT_PARTIAL;
 
     frame_free(&shown);
-    ft_rows_free(&snap.processes);
     ft_rows_free(&snap.transfers);
+    ft_rows_free(&snap.processes);
+    ft_rows_free(&snap.connections);
     return code;
 }
