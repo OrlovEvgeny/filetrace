@@ -54,7 +54,7 @@ run = [
 
 [tasks."lint:shell"]
 description = "Lint the shell scripts"
-run = "git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning"
+run = "tools/lint/shell.sh"
 
 [tasks."lint:commits"]
 description = "Check the commit subjects on this branch"
@@ -95,3 +95,7 @@ run = "tools/dev/linux.sh sh -c 'ctest --test-dir build/dist-linux-$(dpkg --prin
 [tasks.package]
 description = "Pack the staged binaries into tarballs and deb, rpm and apk packages"
 run = "tools/dist/package.sh"
+
+[tasks."test:package"]
+description = "Install the packages from dist/ in containers and check the result"
+run = "tests/packaging/run.sh"
