@@ -35,6 +35,7 @@ struct ft_process {
     uint32_t gid;
     uint32_t pidns;
     uint32_t mntns;
+    uint32_t netns;
     uint64_t cgroup_id;
     uint64_t start_ns;
     uint64_t exit_ns;
@@ -99,6 +100,8 @@ struct ft_file {
     uint32_t generation;
     uint32_t mnt_id;
     uint32_t mntns;
+    uint32_t uid;
+    uint64_t size;
     uint64_t first_ns;
     char fs_type[FT_FS_TYPE_MAX];
     bool deleted;

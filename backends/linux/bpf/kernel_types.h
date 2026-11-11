@@ -24,6 +24,7 @@ typedef __s64 s64;
 
 typedef int pid_t;
 typedef u32 dev_t;
+typedef u32 uid_t;
 typedef u16 umode_t;
 typedef long long loff_t;
 typedef unsigned long size_t;
@@ -76,6 +77,10 @@ enum bpf_map_type {
 };
 
 struct net;
+
+typedef struct {
+    uid_t val;
+} kuid_t;
 struct pt_regs;
 
 #pragma clang attribute push(__attribute__((preserve_access_index)), apply_to = record)
@@ -100,9 +105,14 @@ struct mnt_namespace {
     struct ns_common ns;
 };
 
+struct net {
+    struct ns_common ns;
+};
+
 struct nsproxy {
     struct mnt_namespace *mnt_ns;
     struct pid_namespace *pid_ns_for_children;
+    struct net *net_ns;
 };
 
 struct signal_struct {
@@ -156,6 +166,7 @@ struct inode {
     umode_t i_mode;
     unsigned long i_ino;
     unsigned int i_nlink;
+    kuid_t i_uid;
     u32 i_generation;
     loff_t i_size;
     struct super_block *i_sb;

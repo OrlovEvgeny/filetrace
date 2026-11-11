@@ -64,6 +64,8 @@ static void scripted_flush(struct ft_backend *b)
     ev = (struct ft_event){.type = FT_EVENT_FILE_SEEN, .ts_ns = now};
     ev.file.id = (struct ft_file_id){.dev = 2049, .ino = 928371};
     ev.file.path = "/data/export/report, \"final\".csv";
+    ev.file.size = 148293012;
+    ev.file.uid = 33;
     scripted_emit(b, &ev);
 
     ev = (struct ft_event){.type = FT_EVENT_FLOW, .ts_ns = now};
@@ -228,6 +230,8 @@ static void serves_queries_over_a_socket(void)
     CHECK_U64(r.transfer->remote.port, 52144);
     CHECK_STR(r.transfer->comm, "nginx");
     CHECK_STR(r.transfer->path, "/data/export/report, \"final\".csv");
+    CHECK_U64(r.transfer->file_size, 148293012);
+    CHECK_U64(r.transfer->file_uid, 33);
     CHECK(end.observed_since_wall_ns != 0);
     CHECK_U64(end.lost_events, 0);
 

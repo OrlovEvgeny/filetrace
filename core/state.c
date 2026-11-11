@@ -83,6 +83,7 @@ static struct ft_process *process_record(struct ft_state *st, const struct ft_ev
     p->gid = e->gid;
     p->pidns = e->pidns;
     p->mntns = e->mntns;
+    p->netns = e->netns;
     p->cgroup_id = e->cgroup_id;
     p->start_ns = e->start_ns;
     ft_strlcpy(p->comm, e->comm, sizeof(p->comm));
@@ -274,6 +275,8 @@ static void ingest_file(struct ft_state *st, const struct ft_event *ev)
     f->generation = e->generation;
     f->mnt_id = e->mnt_id;
     f->mntns = e->mntns;
+    f->uid = e->uid;
+    f->size = e->size;
     f->deleted = e->deleted;
     f->path_truncated = e->path_truncated;
     ft_strlcpy(f->fs_type, e->fs_type, sizeof(f->fs_type));

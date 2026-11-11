@@ -168,8 +168,8 @@ static __always_inline void fill_proc(struct ft_bpf_ev_proc *e, struct task_stru
     e->gid = (__u32)(ids >> 32);
     e->pidns = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, ns.inum);
     e->mntns = BPF_CORE_READ(task, nsproxy, mnt_ns, ns.inum);
+    e->netns = BPF_CORE_READ(task, nsproxy, net_ns, ns.inum);
     e->exit_code = 0;
-    e->pad = 0;
     BPF_CORE_READ_STR_INTO(&e->comm, task, comm);
 }
 
@@ -419,7 +419,8 @@ static __always_inline int emit_file(struct file *file, struct inode *inode,
     s->ev.dev = fk->dev;
     s->ev.gen = fk->gen;
     s->ev.instance = instance;
-    s->ev.pad = 0;
+    s->ev.size = (__u64)BPF_CORE_READ(inode, i_size);
+    s->ev.uid = BPF_CORE_READ(inode, i_uid.val);
     s->ev.depth = w.depth;
     s->ev.flags = w.flags;
 

@@ -233,6 +233,13 @@ static void p_mntns(const void *row, struct value *v)
     v->absent = r->mntns == 0;
 }
 
+static void p_netns(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    set_uint(v, r->netns);
+    v->absent = r->netns == 0;
+}
+
 static const struct field process_fields[] = {
     {"pid", 0, p_pid},
     {"ppid", 0, p_ppid},
@@ -250,6 +257,7 @@ static const struct field process_fields[] = {
     {"cgroup_id", 0, p_cgroup},
     {"pid_namespace", 0, p_pidns},
     {"mount_namespace", 0, p_mntns},
+    {"network_namespace", 0, p_netns},
 };
 
 static const struct column process_columns[] = {
@@ -566,6 +574,20 @@ static void t_device(const void *row, struct value *v)
     v->absent = !(r->flags & FT_XFER_FILE_KNOWN);
 }
 
+static void t_file_size(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    set_bytes(v, r->file_size);
+    v->absent = !(r->flags & FT_XFER_PATH_KNOWN);
+}
+
+static void t_file_owner(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    set_user(v, r->file_uid);
+    v->absent = !(r->flags & FT_XFER_PATH_KNOWN);
+}
+
 static void t_fs(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
@@ -722,6 +744,8 @@ static const struct field transfer_fields[] = {
     {"file.path", 0, t_path},
     {"file.inode", 0, t_inode},
     {"file.device", 0, t_device},
+    {"file.size", 0, t_file_size},
+    {"file.owner", 0, t_file_owner},
     {"file.filesystem", 0, t_fs},
     {"file.deleted", 0, t_deleted},
     {"network.protocol", 0, t_proto},

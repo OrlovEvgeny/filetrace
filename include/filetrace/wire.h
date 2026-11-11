@@ -5,7 +5,7 @@
 
 /* Frames use host byte order: both ends of the socket run on the same host. */
 #define FT_WIRE_MAGIC 0x43525446u /* "FTRC" */
-#define FT_WIRE_VERSION 1
+#define FT_WIRE_VERSION 2
 #define FT_WIRE_MAX_PAYLOAD (64u * 1024u)
 
 enum ft_msg_type : uint16_t {
@@ -100,10 +100,12 @@ struct ft_row_process {
     uint32_t gid;
     uint32_t pidns;
     uint32_t mntns;
+    uint32_t netns;
     uint32_t connections; /* sockets currently open or active */
     uint32_t files_sent;  /* distinct files in attributed transfers */
     int32_t exit_status;
     uint32_t flags;
+    uint32_t pad;
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
 };
@@ -154,8 +156,10 @@ struct ft_row_transfer {
     uint64_t last_wall_ns;
     uint64_t bytes;
     uint64_t read_bytes;
+    uint64_t file_size; /* when the file was first seen */
     uint64_t dev;
     uint64_t ino;
+    uint32_t file_uid;
     uint32_t gen;
     uint32_t ops;
     uint32_t alternations;

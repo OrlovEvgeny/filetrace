@@ -308,7 +308,7 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
             return -1;
         return ft_parse_u32(v, &q->ns_inum) && q->ns_inum
                    ? 1
-                   : bad_value(qa, "--namespace", v, "a PID or mount namespace inode number");
+                   : bad_value(qa, "--namespace", v, "a namespace inode number");
     }
     if (OPTION(FT_QO_SORT, "--sort")) {
         if (r < 0)
@@ -368,7 +368,8 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
          "  --process <name>        Only processes with this name ('*' wildcards)\n"},
         {FT_QO_USER, "  --user <user>           Only processes of this user\n"},
         {FT_QO_SCOPE, "  --cgroup <id|dir>       Only processes in this cgroup\n"
-                      "  --namespace <inode>     Only processes in this PID or mount namespace\n"},
+                      "  --namespace <inode>     Only processes in this network, PID or mount\n"
+                      "                          namespace\n"},
         {FT_QO_FILE, "  --path <path>           Only this file ('*' wildcards; alias: --file)\n"},
         {FT_QO_REMOTE, "  --remote <ip>           Only this remote address\n"},
         {FT_QO_LOCAL, "  --local <ip>            Only this local address\n"},

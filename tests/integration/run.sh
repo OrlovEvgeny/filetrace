@@ -120,6 +120,9 @@ expect "sendfile inode" "$(printf '%s\n' "$csv" | column file.inode)" \
     "$(stat -c %i "$data/report.csv")"
 expect "sendfile device" "$(printf '%s\n' "$csv" | column file.device)" \
     "$(stat -c %d "$data/report.csv")"
+expect "sendfile file size" "$(printf '%s\n' "$csv" | column file.size)" 5000000
+expect "sendfile file owner" "$(printf '%s\n' "$csv" | column file.owner)" \
+    "$(stat -c %U "$data/report.csv")"
 expect_match "sendfile evidence" "$(printf '%s\n' "$csv" | column attribution.evidence)" \
     'direct_file_to_socket_transfer;.*socket_identity;remote_endpoint'
 expect "sendfile incomplete" "$(printf '%s\n' "$csv" | column attribution.incomplete)" false
@@ -243,6 +246,9 @@ parent=$(field "$report" parent)
 child=$(field "$report" child)
 csv=$(ft processes --pid "$child" --format csv)
 expect "child outbound" "$(printf '%s\n' "$csv" | column outbound_bytes)" 700000
+netns=$(stat -Lc %i /proc/self/ns/net)
+expect "child network namespace" "$(printf '%s\n' "$csv" | column network_namespace)" "$netns"
+expect "namespace filter" "$(ft processes --pid "$child" --namespace "$netns" --format csv | rows)" 1
 expect "child parent" "$(printf '%s\n' "$csv" | column ppid)" "$parent"
 expect "child name" "$(printf '%s\n' "$csv" | column name)" ft_workload
 expect "child status" "$(printf '%s\n' "$csv" | column status)" exited

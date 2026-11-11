@@ -167,7 +167,8 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
             continue;
         if (q->cgroup_id && q->cgroup_id != p->cgroup_id)
             continue;
-        if (q->ns_inum && q->ns_inum != p->pidns && q->ns_inum != p->mntns)
+        if (q->ns_inum && q->ns_inum != p->netns && q->ns_inum != p->pidns &&
+            q->ns_inum != p->mntns)
             continue;
         if (!match_name(q->process, p->comm))
             continue;
@@ -214,6 +215,7 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
             .gid = p->gid,
             .pidns = p->pidns,
             .mntns = p->mntns,
+            .netns = p->netns,
             .connections = p->q_connections,
             .files_sent = p->q_transfers,
             .exit_status = p->exit_status,
@@ -446,6 +448,8 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
         const struct ft_file *f = ft_table_find(st->files, &t->file);
         if (f) {
             row->gen = f->generation;
+            row->file_size = f->size;
+            row->file_uid = f->uid;
             ft_strlcpy(row->fs_type, f->fs_type, sizeof(row->fs_type));
             if (f->deleted)
                 row->flags |= FT_XFER_FILE_DELETED;

@@ -422,6 +422,7 @@ static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, con
                 .cgroup_id = e->cgroup_id,
                 .pidns = e->pidns,
                 .mntns = e->mntns,
+                .netns = e->netns,
                 .exit_status = e->exit_code,
             },
     };
@@ -514,6 +515,8 @@ static void on_file(struct ft_backend *b, const struct ft_bpf_ev_file *e, size_t
                 .generation = e->gen,
                 .mnt_id = e->mnt_id,
                 .mntns = e->mntns,
+                .size = e->size,
+                .uid = e->uid,
                 .deleted = (e->flags & FT_BPF_FILE_DELETED) != 0,
                 .path_truncated = (e->flags & FT_BPF_FILE_TRUNCATED) != 0,
                 .path = b->path,

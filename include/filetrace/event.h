@@ -24,6 +24,7 @@ struct ft_ev_process {
     uint64_t cgroup_id;
     uint32_t pidns;
     uint32_t mntns;
+    uint32_t netns;
     int32_t exit_status; /* wait(2) status encoding */
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
@@ -43,6 +44,8 @@ struct ft_ev_file {
     uint32_t generation;
     uint32_t mnt_id;
     uint32_t mntns;
+    uint32_t uid;  /* owner */
+    uint64_t size; /* when the file was first seen */
     char fs_type[FT_FS_TYPE_MAX];
     bool deleted;
     bool path_truncated;

@@ -78,6 +78,7 @@ bool ft_linux_lookup_process(uint32_t pid, struct ft_ev_process *out)
 
     out->pidns = namespace_inode(pid, "pid");
     out->mntns = namespace_inode(pid, "mnt");
+    out->netns = namespace_inode(pid, "net");
     return true;
 }
 

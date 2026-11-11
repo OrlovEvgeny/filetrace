@@ -55,6 +55,7 @@ static void transfers(void)
     row->bytes = 148293012;
     row->dev = 2049;
     row->ino = 928371;
+    row->file_size = 148293012;
     row->ops = 1248;
     row->pid = 1842;
     row->ppid = 1;
@@ -116,7 +117,8 @@ static void transfers(void)
     CHECK(strstr(text, "\"process\":{\"pid\":1842,\"ppid\":1,\"name\":\"nginx\","
                        "\"executable\":\"/usr/sbin/nginx\"},") != nullptr);
     CHECK(strstr(text, "\"file\":{\"path\":\"/data/export/report, \\\"final\\\".csv\","
-                       "\"inode\":928371,\"device\":2049,\"filesystem\":\"ext4\","
+                       "\"inode\":928371,\"device\":2049,\"size\":148293012,"
+                       "\"owner\":\"root\",\"filesystem\":\"ext4\","
                        "\"deleted\":false},") != nullptr);
     CHECK(strstr(text, "\"network\":{\"protocol\":\"tcp\",\"socket_id\":\"sk_7f\","
                        "\"local_address\":\"10.0.0.10\",\"local_port\":443,"
@@ -152,7 +154,8 @@ static void transfers(void)
                  "process.name,process.executable,file.path,file.inode,file.device,") == text);
     /* A field containing a comma or a quote is quoted, with quotes doubled. */
     CHECK(strstr(text, ",nginx,/usr/sbin/nginx,\"/data/export/report, \"\"final\"\".csv\","
-                       "928371,2049,ext4,false,tcp,sk_7f,10.0.0.10,443,203.0.113.42,52144,"
+                       "928371,2049,148293012,root,ext4,false,tcp,sk_7f,10.0.0.10,443,203.0.113.42,"
+                       "52144,"
                        "sendfile,148293012,,1248,8200,completed,exact,") != nullptr);
     free(text);
 

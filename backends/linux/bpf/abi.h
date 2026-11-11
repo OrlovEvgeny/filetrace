@@ -31,8 +31,8 @@ struct ft_bpf_ev_proc {
     __u32 gid;
     __u32 pidns;
     __u32 mntns;
+    __u32 netns;
     __s32 exit_code;
-    __u32 pad;
     char comm[FT_BPF_COMM_LEN];
 };
 
@@ -65,7 +65,8 @@ struct ft_bpf_ev_file {
     struct ft_bpf_ev_hdr hdr;
     __u64 ino;
     __u64 fs_magic;
-    __u32 dev; /* kernel dev_t encoding */
+    __u64 size; /* when the event was recorded */
+    __u32 dev;  /* kernel dev_t encoding */
     __u32 gen;
     __u32 instance; /* tells apart successive files that were given the same inode number */
     __u32 mnt_id;
@@ -73,7 +74,7 @@ struct ft_bpf_ev_file {
     __u32 path_len;
     __u16 depth;
     __u16 flags;
-    __u32 pad;
+    __u32 uid; /* owner */
 };
 
 enum ft_bpf_agg_kind {
