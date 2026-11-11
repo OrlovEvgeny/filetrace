@@ -195,6 +195,48 @@ bool ft_addr_parse(const char *text, struct ft_endpoint *ep)
     return false;
 }
 
+bool ft_prefix_parse(const char *text, struct ft_endpoint *net, uint8_t *bits)
+{
+    char addr[INET6_ADDRSTRLEN];
+    const char *slash = strchr(text, '/');
+    size_t len = slash ? (size_t)(slash - text) : strlen(text);
+
+    if (len == 0 || len >= sizeof(addr))
+        return false;
+    memcpy(addr, text, len);
+    addr[len] = '\0';
+    if (!ft_addr_parse(addr, net))
+        return false;
+
+    unsigned width = net->family == 6 ? 128 : 32;
+    if (!slash) {
+        *bits = (uint8_t)width;
+        return true;
+    }
+
+    char *end;
+    unsigned long n = strtoul(slash + 1, &end, 10);
+    if (slash[1] < '0' || slash[1] > '9' || *end != '\0' || n > width)
+        return false;
+    *bits = (uint8_t)n;
+    return true;
+}
+
+bool ft_addr_in_prefix(const struct ft_endpoint *net, uint8_t bits, const struct ft_endpoint *ep)
+{
+    size_t whole = bits / 8;
+    unsigned rest = bits % 8;
+
+    if (net->family != ep->family || whole > sizeof(net->addr))
+        return false;
+    if (memcmp(net->addr, ep->addr, whole) != 0)
+        return false;
+    if (rest == 0)
+        return true;
+    unsigned mask = 0xffu << (8 - rest) & 0xffu;
+    return ((unsigned)(net->addr[whole] ^ ep->addr[whole]) & mask) == 0;
+}
+
 bool ft_addr_is_set(const struct ft_endpoint *ep)
 {
     return ep->family != 0;

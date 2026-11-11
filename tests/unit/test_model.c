@@ -47,6 +47,44 @@ static void endpoints(void)
     CHECK(!ft_addr_parse("10.0.0.256", &parsed));
 }
 
+static void prefixes(void)
+{
+    struct ft_endpoint net;
+    struct ft_endpoint ep;
+    uint8_t bits = 0;
+
+    CHECK(ft_prefix_parse("203.0.113.0/24", &net, &bits));
+    CHECK_U64(bits, 24);
+    CHECK(ft_addr_parse("203.0.113.42", &ep));
+    CHECK(ft_addr_in_prefix(&net, bits, &ep));
+    CHECK(ft_addr_parse("203.0.114.42", &ep));
+    CHECK(!ft_addr_in_prefix(&net, bits, &ep));
+
+    /* A prefix that ends inside a byte compares only its leading bits. */
+    CHECK(ft_prefix_parse("10.64.0.0/10", &net, &bits));
+    CHECK(ft_addr_parse("10.127.255.255", &ep));
+    CHECK(ft_addr_in_prefix(&net, bits, &ep));
+    CHECK(ft_addr_parse("10.128.0.0", &ep));
+    CHECK(!ft_addr_in_prefix(&net, bits, &ep));
+
+    CHECK(ft_prefix_parse("192.0.2.10", &net, &bits));
+    CHECK_U64(bits, 32);
+    CHECK(ft_prefix_parse("2001:db8::/32", &net, &bits));
+    CHECK_U64(bits, 32);
+    CHECK(ft_addr_parse("2001:db8:ffff::1", &ep));
+    CHECK(ft_addr_in_prefix(&net, bits, &ep));
+    CHECK(ft_addr_parse("203.0.113.42", &ep));
+    CHECK(!ft_addr_in_prefix(&net, bits, &ep));
+
+    CHECK(ft_prefix_parse("0.0.0.0/0", &net, &bits));
+    CHECK(ft_addr_in_prefix(&net, bits, &ep));
+
+    CHECK(!ft_prefix_parse("203.0.113.0/33", &net, &bits));
+    CHECK(!ft_prefix_parse("203.0.113.0/", &net, &bits));
+    CHECK(!ft_prefix_parse("203.0.113.0/2x", &net, &bits));
+    CHECK(!ft_prefix_parse("/24", &net, &bits));
+}
+
 static void names(void)
 {
     enum ft_confidence conf;
@@ -99,6 +137,7 @@ static void evidence(void)
 void test_model(void)
 {
     endpoints();
+    prefixes();
     names();
     evidence();
 }

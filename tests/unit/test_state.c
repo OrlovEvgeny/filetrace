@@ -332,6 +332,16 @@ static void filters(void)
     CHECK_U64(f.rows.count, 1);
     CHECK_U64(f.rows.transfers[0].pid, PID_B);
 
+    /* The host bits of a network are left out of the comparison. */
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    CHECK(ft_addr_parse("198.51.100.0", &q.remote));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+    q.remote_host_bits = 8;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.transfers[0].pid, PID_A);
+
     ft_query_init(&q, FT_Q_TRANSFERS);
     q.flags = FT_QF_DELETED;
     run_query(&f, &q);

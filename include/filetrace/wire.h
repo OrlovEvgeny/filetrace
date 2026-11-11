@@ -69,12 +69,15 @@ struct ft_query {
     uint32_t pid;   /* 0: any */
     uint32_t uid;   /* with FT_QF_HAS_UID */
     uint32_t ns_inum;
-    uint16_t proto;         /* 0: any */
-    uint16_t port;          /* 0: any; matches either end */
-    uint8_t family;         /* 0: any, 4 or 6 */
-    uint8_t state;          /* enum ft_sock_state or FT_SOCK_ANY */
-    uint8_t method;         /* enum ft_method or FT_METHOD_ANY */
-    uint8_t confidence;     /* enum ft_confidence or FT_CONF_ANY */
+    uint16_t proto;           /* 0: any */
+    uint16_t port;            /* 0: any; matches either end */
+    uint8_t family;           /* 0: any, 4 or 6 */
+    uint8_t state;            /* enum ft_sock_state or FT_SOCK_ANY */
+    uint8_t method;           /* enum ft_method or FT_METHOD_ANY */
+    uint8_t confidence;       /* enum ft_confidence or FT_CONF_ANY */
+    uint8_t remote_host_bits; /* low-order address bits left out of the comparison */
+    uint8_t local_host_bits;
+    uint8_t pad[6];
     uint64_t since_wall_ns; /* 0: unbounded */
     uint64_t until_wall_ns; /* 0: unbounded */
     uint64_t min_bytes;

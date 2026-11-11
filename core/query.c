@@ -42,9 +42,13 @@ static bool match_name(const char *pattern, const char *name)
     return pattern[0] == '\0' || ft_glob_match(pattern, name);
 }
 
-static bool match_addr(const struct ft_endpoint *filter, const struct ft_endpoint *ep)
+static bool match_addr(const struct ft_endpoint *filter, uint8_t host_bits,
+                       const struct ft_endpoint *ep)
 {
-    return filter->family == 0 || ft_addr_equal(filter, ep);
+    if (filter->family == 0)
+        return true;
+    unsigned width = filter->family == 6 ? 128 : 32;
+    return ft_addr_in_prefix(filter, (uint8_t)(host_bits >= width ? 0 : width - host_bits), ep);
 }
 
 static bool match_tuple(const struct ft_query *q, uint16_t proto, const struct ft_endpoint *local,
@@ -52,7 +56,8 @@ static bool match_tuple(const struct ft_query *q, uint16_t proto, const struct f
 {
     if (q->proto && q->proto != proto)
         return false;
-    if (!match_addr(&q->remote, remote) || !match_addr(&q->local, local))
+    if (!match_addr(&q->remote, q->remote_host_bits, remote) ||
+        !match_addr(&q->local, q->local_host_bits, local))
         return false;
     if (q->port && q->port != local->port && q->port != remote->port)
         return false;

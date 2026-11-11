@@ -89,6 +89,11 @@ bool ft_proto_parse(const char *text, uint16_t *proto);
 void ft_endpoint_set(struct ft_endpoint *ep, bool ipv6, const uint8_t raw[static 16],
                      uint16_t port);
 bool ft_addr_parse(const char *text, struct ft_endpoint *ep);
+
+/* "203.0.113.0/24", "2001:db8::/32" or a single address; bits is the prefix length. */
+bool ft_prefix_parse(const char *text, struct ft_endpoint *net, uint8_t *bits);
+bool ft_addr_in_prefix(const struct ft_endpoint *net, uint8_t bits, const struct ft_endpoint *ep);
+
 bool ft_addr_is_set(const struct ft_endpoint *ep);
 bool ft_addr_equal(const struct ft_endpoint *a, const struct ft_endpoint *b);
 void ft_addr_format(const struct ft_endpoint *ep, char *buf, size_t size);

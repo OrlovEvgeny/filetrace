@@ -166,6 +166,15 @@ static bool parse_cgroup(const char *text, uint64_t *id)
     return true;
 }
 
+static bool parse_network(const char *text, struct ft_endpoint *net, uint8_t *host_bits)
+{
+    uint8_t bits;
+    if (!ft_prefix_parse(text, net, &bits))
+        return false;
+    *host_bits = (uint8_t)((net->family == 6 ? 128 : 32) - bits);
+    return true;
+}
+
 static bool parse_when(const char *text, uint64_t *wall_ns)
 {
     uint64_t ago;
@@ -209,12 +218,16 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
     if (OPTION(FT_QO_REMOTE, "--remote")) {
         if (r < 0)
             return -1;
-        return ft_addr_parse(v, &q->remote) ? 1 : bad_value(qa, "--remote", v, "an IP address");
+        return parse_network(v, &q->remote, &q->remote_host_bits)
+                   ? 1
+                   : bad_value(qa, "--remote", v, "an IP address or CIDR network");
     }
     if (OPTION(FT_QO_LOCAL, "--local")) {
         if (r < 0)
             return -1;
-        return ft_addr_parse(v, &q->local) ? 1 : bad_value(qa, "--local", v, "an IP address");
+        return parse_network(v, &q->local, &q->local_host_bits)
+                   ? 1
+                   : bad_value(qa, "--local", v, "an IP address or CIDR network");
     }
     if (OPTION(FT_QO_PROTOCOL, "--protocol")) {
         if (r < 0)
@@ -375,8 +388,8 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
                       "  --namespace <inode>     Only processes in this network, PID or mount\n"
                       "                          namespace\n"},
         {FT_QO_FILE, "  --path <path>           Only this file ('*' wildcards; alias: --file)\n"},
-        {FT_QO_REMOTE, "  --remote <ip>           Only this remote address\n"},
-        {FT_QO_LOCAL, "  --local <ip>            Only this local address\n"},
+        {FT_QO_REMOTE, "  --remote <ip|cidr>      Only this remote address or network\n"},
+        {FT_QO_LOCAL, "  --local <ip|cidr>       Only this local address or network\n"},
         {FT_QO_PORT, "  --port <port>           Only this local or remote port\n"},
         {FT_QO_PROTOCOL, "  --protocol tcp|udp      Only this protocol\n"},
         {FT_QO_FAMILY, "  --family ipv4|ipv6      Only this address family\n"},
