@@ -1,7 +1,7 @@
 #!/bin/sh
 # usage: help_test.sh <filetrace> <filetrace-agent>
 # Checks that the help texts name the options, defaults and exit codes the
-# commands have, and that an option no help names is refused.
+# commands have.
 set -eu
 
 cli=$1
@@ -54,17 +54,6 @@ has "stats says --interval implies --watch" "$work/stats" \
     "Repeat at this interval (default: 1s); implies"
 has "filetrace-agent lists exit code 8" "$work/filetrace-agent" \
     "8 the metrics page cannot listen"
-
-# An option the help does not name is refused before the agent is asked.
-for command in files transfers; do
-    checks=$((checks + 1))
-    code=0
-    "$cli" --socket "$work/none.sock" "$command" --no-such-option >/dev/null 2>&1 || code=$?
-    if [ "$code" -ne 2 ]; then
-        printf 'FAIL %s refuses --no-such-option\n  exit code: %s, expected 2\n' "$command" "$code" >&2
-        failures=$((failures + 1))
-    fi
-done
 
 note="Byte counts cover a record's whole observed lifetime"
 before "top lists --limit with the other options" "$work/top" "--limit <n>" "$note"

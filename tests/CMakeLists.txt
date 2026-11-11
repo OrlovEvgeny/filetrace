@@ -40,6 +40,10 @@ add_test(NAME cli-help
             $<TARGET_FILE:filetrace> $<TARGET_FILE:filetrace-agent>)
 set_tests_properties(cli-help PROPERTIES TIMEOUT 60)
 
+add_test(NAME cli-arguments
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/cli/arguments_test.sh $<TARGET_FILE:filetrace>)
+set_tests_properties(cli-arguments PROPERTIES TIMEOUT 60)
+
 add_test(NAME cli-fallback
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/cli/fallback_test.sh $<TARGET_FILE:filetrace>)
 set_tests_properties(cli-fallback PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
