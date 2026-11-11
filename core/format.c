@@ -274,3 +274,48 @@ bool ft_glob_match(const char *pattern, const char *text)
         pattern++;
     return *pattern == '\0';
 }
+
+/* Length of the well-formed sequence at p, or 0. */
+static size_t utf8_sequence(const unsigned char *p)
+{
+    unsigned char lead = p[0];
+    size_t len = lead < 0x80   ? 1
+                 : lead < 0xc2 ? 0
+                 : lead < 0xe0 ? 2
+                 : lead < 0xf0 ? 3
+                 : lead < 0xf5 ? 4
+                               : 0;
+
+    for (size_t i = 1; i < len; i++) {
+        if ((p[i] & 0xc0) != 0x80)
+            return 0;
+    }
+    /* Overlong forms, surrogates and code points past U+10FFFF. */
+    if ((lead == 0xe0 && p[1] < 0xa0) || (lead == 0xed && p[1] > 0x9f) ||
+        (lead == 0xf0 && p[1] < 0x90) || (lead == 0xf4 && p[1] > 0x8f))
+        return 0;
+    return len;
+}
+
+void ft_utf8_copy(char *dst, const char *src, size_t size)
+{
+    const unsigned char *p = (const unsigned char *)src;
+    size_t n = 0;
+
+    if (size == 0)
+        return;
+    while (*p) {
+        size_t len = utf8_sequence(p);
+        size_t take = len ? len : 1;
+
+        if (n + take >= size)
+            break;
+        if (len)
+            memcpy(dst + n, p, len);
+        else
+            dst[n] = '?';
+        n += take;
+        p += take;
+    }
+    dst[n] = '\0';
+}

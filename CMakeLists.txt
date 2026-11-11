@@ -120,6 +120,7 @@ add_library(ft_core STATIC
     core/clock.c
     core/evlog.c
     core/format.c
+    core/metrics.c
     core/model.c
     core/poller.c
     core/query.c
@@ -143,6 +144,7 @@ add_library(ft_agent STATIC
     agent/config.c
     agent/lifecycle.c
     agent/server.c
+    exporters/prometheus.c
 )
 target_link_libraries(ft_agent PUBLIC ft_core ft_backend)
 target_include_directories(ft_agent PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

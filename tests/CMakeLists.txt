@@ -6,6 +6,7 @@ add_executable(ft_unit_tests
     unit/test_state.c
     unit/test_agent.c
     unit/test_config.c
+    unit/test_metrics.c
     unit/test_views.c
 )
 target_link_libraries(ft_unit_tests PRIVATE ft_cli)

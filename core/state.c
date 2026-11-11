@@ -13,6 +13,7 @@ void ft_state_config_defaults(struct ft_state_config *cfg)
         .max_flows = 16384,
         .max_files = 16384,
         .max_transfers = 16384,
+        .max_metric_series = 2048,
         .event_log_bytes = 1024 * 1024,
         .inferred_min_bytes = 1024,
         .inferred_min_permille = 50,
@@ -74,8 +75,10 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
     st->files = ft_table_create(cfg->max_files, sizeof(struct ft_file_id), sizeof(struct ft_file));
     st->transfers = ft_table_create(cfg->max_transfers, sizeof(struct ft_transfer_key),
                                     sizeof(struct ft_transfer));
+    st->series = ft_series_create(cfg->max_metric_series);
     st->record = calloc(1, sizeof(*st->record));
-    bool ok = st->processes && st->sockets && st->flows && st->files && st->transfers && st->record;
+    bool ok = st->processes && st->sockets && st->flows && st->files && st->transfers &&
+              st->series && st->record;
 
     /* Half for what the tool is about, an eighth for the chattiest and least specific. */
     static const size_t eighths[FT_LOG_CLASS_COUNT] = {
@@ -106,6 +109,7 @@ void ft_state_destroy(struct ft_state *st)
     ft_table_destroy(st->transfers);
     for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++)
         ft_evlog_destroy(st->logs[i]);
+    ft_series_destroy(st->series);
     free(st->record);
     free(st);
 }
@@ -354,6 +358,14 @@ static bool ingest_flow(struct ft_state *st, const struct ft_event *ev)
     st->rx_bytes += e->rx_bytes;
     ft_rate_add(&st->tx_rate, ev->ts_ns, e->tx_bytes);
     ft_rate_add(&st->rx_rate, ev->ts_ns, e->rx_bytes);
+
+    uint8_t proto = (uint8_t)e->proto;
+    if (e->tx_bytes)
+        ft_series_add(st->series, FT_SERIES_NETWORK_IO, p->comm, proto, FT_DIR_TRANSMIT,
+                      e->tx_bytes);
+    if (e->rx_bytes)
+        ft_series_add(st->series, FT_SERIES_NETWORK_IO, p->comm, proto, FT_DIR_RECEIVE,
+                      e->rx_bytes);
     return true;
 }
 
@@ -386,6 +398,25 @@ static bool ingest_file(struct ft_state *st, const struct ft_event *ev)
     f->excluded =
         f->path && matches_any(st->cfg.exclude_paths, st->cfg.exclude_path_count, f->path);
     return !f->excluded;
+}
+
+/* Bytes that preceded the association's first report are counted when it is reported. */
+static void count_transfer(struct ft_state *st, struct ft_transfer *t)
+{
+    enum ft_confidence conf;
+    uint32_t evidence;
+
+    if (!ft_state_classify(st, t, &conf, &evidence))
+        return;
+    if (!t->counted) {
+        t->counted = true;
+        ft_series_add(st->series, FT_SERIES_TRANSFERS_STARTED, t->comm, t->method, conf, 1);
+    }
+    if (t->bytes > t->counted_bytes) {
+        ft_series_add(st->series, FT_SERIES_FILE_SENT, t->comm, t->method, conf,
+                      t->bytes - t->counted_bytes);
+        t->counted_bytes = t->bytes;
+    }
 }
 
 static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
@@ -428,6 +459,7 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     t->ops += e->ops;
     t->alternations += e->alternations;
     ft_rate_add(&t->rate, ev->ts_ns, e->bytes);
+    count_transfer(st, t);
     return true;
 }
 

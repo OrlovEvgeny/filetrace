@@ -552,12 +552,13 @@ static bool apply_limits(struct ft_config *cfg, const char *key, struct value *v
 {
     struct ft_state_config *state = &cfg->agent.state_cfg;
     struct ft_backend_config *backend = &cfg->agent.backend_cfg;
-    size_t *table = strcmp(key, "processes") == 0   ? &state->max_processes
-                    : strcmp(key, "sockets") == 0   ? &state->max_sockets
-                    : strcmp(key, "flows") == 0     ? &state->max_flows
-                    : strcmp(key, "files") == 0     ? &state->max_files
-                    : strcmp(key, "transfers") == 0 ? &state->max_transfers
-                                                    : nullptr;
+    size_t *table = strcmp(key, "processes") == 0       ? &state->max_processes
+                    : strcmp(key, "sockets") == 0       ? &state->max_sockets
+                    : strcmp(key, "flows") == 0         ? &state->max_flows
+                    : strcmp(key, "files") == 0         ? &state->max_files
+                    : strcmp(key, "transfers") == 0     ? &state->max_transfers
+                    : strcmp(key, "metric_series") == 0 ? &state->max_metric_series
+                                                        : nullptr;
     uint32_t *map = strcmp(key, "kernel_counters") == 0 ? &backend->agg_entries
                     : strcmp(key, "kernel_files") == 0  ? &backend->known_files
                                                         : nullptr;
@@ -852,6 +853,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fprintf(o, "transfers = %zu\n", state->max_transfers);
     fprintf(o, "kernel_counters = %u\n", backend->agg_entries);
     fprintf(o, "kernel_files = %u\n", backend->known_files);
+    fprintf(o, "metric_series = %zu\n", state->max_metric_series);
 
     fputs("\n[output]\n", o);
     print_string(o, "format", cfg->format);

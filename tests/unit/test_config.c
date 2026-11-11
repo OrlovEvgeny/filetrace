@@ -71,7 +71,10 @@ static const char every_section[] = "[agent]\n"
                                     "\n"
                                     "[filters]\n"
                                     "exclude_processes = [\"systemd\"]\n"
-                                    "exclude_paths = [\"/proc/*\", \"/sys/*\"]\n";
+                                    "exclude_paths = [\"/proc/*\", \"/sys/*\"]\n"
+                                    "\n"
+                                    "[limits]\n"
+                                    "metric_series = 512\n";
 
 static void reads_every_section(void)
 {
@@ -91,6 +94,7 @@ static void reads_every_section(void)
     CHECK_U64(cfg->agent.state_cfg.exclude_path_count, 2);
     CHECK_STR(cfg->agent.state_cfg.exclude_paths[1], "/sys/*");
     CHECK_STR(cfg->format, "table");
+    CHECK_U64(cfg->agent.state_cfg.max_metric_series, 512);
 
     CHECK_U64(cfg->warning_count, 7);
     CHECK(warned(cfg, "[network] tc_egress"));

@@ -125,6 +125,25 @@ static void globs(void)
     CHECK(ft_glob_match("*", ""));
 }
 
+static void utf8(void)
+{
+    char out[16];
+
+    ft_utf8_copy(out, "caf\xc3\xa9 \xe2\x82\xac", sizeof(out));
+    CHECK_STR(out, "caf\xc3\xa9 \xe2\x82\xac");
+    ft_utf8_copy(out,
+                 "a\xff"
+                 "b\xc3",
+                 sizeof(out));
+    CHECK_STR(out, "a?b?");
+    /* An overlong form and a surrogate are not text either. */
+    ft_utf8_copy(out, "\xc0\xaf \xed\xa0\x80", sizeof(out));
+    CHECK_STR(out, "?? ???");
+    /* A sequence that does not fit is left out whole. */
+    ft_utf8_copy(out, "ab\xe2\x82\xac", 5);
+    CHECK_STR(out, "ab");
+}
+
 void test_format(void)
 {
     bytes();
@@ -133,4 +152,5 @@ void test_format(void)
     timestamps();
     numbers();
     globs();
+    utf8();
 }

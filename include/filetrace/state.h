@@ -2,6 +2,7 @@
 #define FILETRACE_STATE_H
 
 #include "filetrace/event.h"
+#include "filetrace/metrics.h"
 #include "filetrace/table.h"
 #include "filetrace/wire.h"
 
@@ -13,7 +14,8 @@ struct ft_state_config {
     size_t max_flows;
     size_t max_files;
     size_t max_transfers;
-    size_t event_log_bytes; /* 0: recent events are not kept */
+    size_t max_metric_series; /* label sets of the exported counters */
+    size_t event_log_bytes;   /* 0: recent events are not kept */
 
     /* An inferred association is reported only at or above both thresholds. */
     uint64_t inferred_min_bytes;
@@ -169,6 +171,8 @@ struct ft_transfer {
     uint64_t read_bytes;
     uint64_t ops;
     uint64_t alternations;
+    uint64_t counted_bytes; /* already added to the exported counters */
+    bool counted;
     struct ft_rate rate;
     char comm[FT_COMM_MAX];
 };
@@ -202,6 +206,7 @@ struct ft_state {
     struct ft_table *files;     /* key: struct ft_file_id */
     struct ft_table *transfers; /* key: struct ft_transfer_key */
     struct ft_evlog *logs[FT_LOG_CLASS_COUNT];
+    struct ft_series *series;
     struct ft_row_event *record; /* the record being made */
     ft_record_fn *on_record;
     void *on_record_ctx;

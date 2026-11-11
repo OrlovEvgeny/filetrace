@@ -36,6 +36,9 @@ bool ft_parse_time_rfc3339(const char *text, uint64_t *wall_ns);
 bool ft_parse_u32(const char *text, uint32_t *value);
 bool ft_parse_u64(const char *text, uint64_t *value);
 
+/* Copies src with '?' in place of every byte that is not part of valid UTF-8. */
+void ft_utf8_copy(char *dst, const char *src, size_t size);
+
 /* Shell-style pattern match where '*' also crosses '/'. */
 bool ft_glob_match(const char *pattern, const char *text);
 

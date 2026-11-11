@@ -49,5 +49,6 @@ void test_state(void);
 void test_agent(void);
 void test_views(void);
 void test_config(void);
+void test_metrics(void);
 
 #endif
