@@ -121,6 +121,7 @@ add_library(ft_core STATIC
     core/evlog.c
     core/format.c
     core/model.c
+    core/poller.c
     core/query.c
     core/state.c
     core/sysinfo.c

@@ -2,12 +2,12 @@
 
 #include "filetrace/client.h"
 #include "filetrace/clock.h"
+#include "filetrace/poller.h"
 #include "filetrace/sysinfo.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -48,6 +48,7 @@ struct agent {
     struct client clients[MAX_CLIENTS];
     size_t nclients;
     struct ft_row_event *live; /* a record on its way to followers */
+    struct ft_poller poller;
 
     uint64_t start_wall_ns;
     uint64_t rate_mono_ns;
@@ -554,40 +555,25 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
            ft_mode_name(cfg->backend_cfg.mode));
 
     while (!stop_requested) {
-        struct pollfd fds[MAX_CLIENTS + 2];
-        nfds_t nfds = 0;
-        nfds_t listen_slot = (nfds_t)-1;
-        nfds_t backend_slot = (nfds_t)-1;
+        struct ft_poller *p = &d->poller;
 
-        if (d->listen_fd >= 0) {
-            listen_slot = nfds;
-            fds[nfds++] = (struct pollfd){.fd = d->listen_fd, .events = POLLIN};
-        }
-        if (backend_fd >= 0) {
-            backend_slot = nfds;
-            fds[nfds++] = (struct pollfd){.fd = backend_fd, .events = POLLIN};
-        }
-        nfds_t first_client = nfds;
-        for (size_t i = 0; i < d->nclients; i++) {
-            short events = POLLIN;
-            if (d->clients[i].out_len)
-                events |= POLLOUT;
-            fds[nfds++] = (struct pollfd){.fd = d->clients[i].fd, .events = events};
-        }
+        ft_poller_begin(p, next_flush_ns);
+        size_t listen_slot =
+            d->listen_fd >= 0 ? ft_poller_add(p, d->listen_fd, POLLIN) : FT_POLLER_NONE;
+        size_t backend_slot = backend_fd >= 0 ? ft_poller_add(p, backend_fd, POLLIN) : FT_POLLER_NONE;
+        size_t first_client = p->count;
+        for (size_t i = 0; i < d->nclients; i++)
+            ft_poller_add(p, d->clients[i].fd,
+                          d->clients[i].out_len ? POLLIN | POLLOUT : POLLIN);
 
-        now_ns = ft_clock_mono_ns();
-        int timeout_ms = now_ns >= next_flush_ns
-                             ? 0
-                             : (int)((next_flush_ns - now_ns + FT_NS_PER_MS - 1) / FT_NS_PER_MS);
-        int ready = poll(fds, nfds, timeout_ms);
+        int ready = ft_poller_wait(p, ft_clock_mono_ns());
         if (ready < 0 && errno != EINTR) {
             ft_log(FT_LOG_ERROR, "poll failed: %s", strerror(errno));
             break;
         }
 
         now_ns = ft_clock_mono_ns();
-        bool backend_ready =
-            ready > 0 && backend_slot != (nfds_t)-1 && (fds[backend_slot].revents & POLLIN);
+        bool backend_ready = ready > 0 && (ft_poller_revents(p, backend_slot) & POLLIN);
         if (now_ns >= next_flush_ns || backend_ready) {
             cfg->backend->flush(d->backend);
             if (now_ns - d->rate_mono_ns >= RATE_WINDOW_NS) {
@@ -602,7 +588,7 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
 
         /* Dropping a client moves the last one into its place, so walk backwards. */
         for (size_t i = d->nclients; i-- > 0;) {
-            short revents = fds[first_client + i].revents;
+            short revents = ft_poller_revents(p, first_client + i);
             struct client *c = &d->clients[i];
             bool alive = true;
 
@@ -613,7 +599,7 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
             if (!alive)
                 client_drop(d, i);
         }
-        if (listen_slot != (nfds_t)-1 && (fds[listen_slot].revents & POLLIN))
+        if (ft_poller_revents(p, listen_slot) & POLLIN)
             accept_clients(d);
     }
 
