@@ -10,6 +10,7 @@ buf = "1"
 # Formatting differs between releases, so the exact version is part of the style.
 clang-format = "23.1.4"
 cmake = "4"
+gh = "2"
 git-cliff = "2"
 nfpm = "2"
 ninja = "1"
@@ -122,3 +123,11 @@ run = "tools/release/version.sh current"
 [tasks.changelog]
 description = "Preview the notes of a release cut from this commit"
 run = "tools/release/notes.sh"
+
+[tasks.site]
+description = "Build the download site from the releases under dist/releases into dist/site"
+run = "tools/release/site.sh dist/releases dist/site"
+
+[tasks.release]
+description = "Start the release workflow: new or patch, with --ref, --lts, --prestable, --dry-run"
+run = "tools/release/dispatch.sh"
