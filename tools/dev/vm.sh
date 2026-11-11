@@ -3,7 +3,7 @@
 # Kernels: 6.1 (Debian 12) and 6.12 (Debian 13), for arm64 hosts only.
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 build=${FILETRACE_VM_BUILD:-build/vm}
 kernel=$1
 shift
