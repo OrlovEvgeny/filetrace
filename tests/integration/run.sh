@@ -129,6 +129,12 @@ expect "sendfile incomplete" "$(printf '%s\n' "$csv" | column transfer.incomplet
 first_port=$(field "$report" port)
 first_pid=$(field "$report" pid)
 
+# Both ends of its connection, and its listener, are closed. Checked before any
+# other scenario runs, because a later one can be given the same port.
+csv=$(ft connections --port "$first_port" --state closed --format csv)
+expect "closed connections" "$(printf '%s\n' "$csv" | rows)" 3
+expect "no open connections" "$(ft connections --port "$first_port" --active --format csv | rows)" 0
+
 # The same over IPv6.
 report=$("$workload" sendfile "$data/v6.bin" 1000000 ipv6)
 settle
@@ -272,11 +278,6 @@ expect "child status" "$(printf '%s\n' "$csv" | column status)" exited
 expect "parent alone sent nothing" "$(ft processes --pid "$parent" --format csv | rows)" 0
 csv=$(ft processes --pid "$parent" --include-children --format csv)
 expect_match "parent with children" "$(printf '%s\n' "$csv" | column bytes_sent)" '^700000$'
-
-# Both ends of the first scenario's connection, and its listener, are closed.
-csv=$(ft connections --port "$first_port" --state closed --format csv)
-expect "closed connections" "$(printf '%s\n' "$csv" | rows)" 3
-expect "no open connections" "$(ft connections --port "$first_port" --active --format csv | rows)" 0
 
 expect_match "table header" "$(ft files --limit 1 | head -1)" \
     '^FILE +PROCESS +DESTINATION +BYTES +METHOD +CONFIDENCE$'
