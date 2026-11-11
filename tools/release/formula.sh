@@ -2,7 +2,8 @@
 # usage: formula.sh [--line] <version> <tag> <SHA256SUMS>
 # Prints the Homebrew formula filetrace, which installs the archives of a
 # release. With --line, prints the keg-only filetrace@<line> instead, which
-# follows the releases of one line.
+# follows the releases of one line. FILETRACE_RELEASE_URL overrides where the
+# directory of each tag is served.
 set -eu
 
 line=
@@ -18,7 +19,7 @@ fi
 version=$1
 tag=$2
 sums=$3
-base=${FILETRACE_RELEASE_URL:-https://github.com/OrlovEvgeny/filetrace/releases/download}/$tag
+base=${FILETRACE_RELEASE_URL:-https://filetrace.eorlov.org/dist}/$tag
 
 class=Filetrace
 keg_only=
