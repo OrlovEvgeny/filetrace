@@ -644,6 +644,46 @@ static void reused_inode_is_another_file(void)
     fixture_close(&f);
 }
 
+static void processes_count_their_files(void)
+{
+    struct fixture f;
+    struct ft_query q;
+
+    fixture_open(&f);
+    emit_exec(&f, PID_A, 1, "nginx", 1000);
+    emit_exec(&f, PID_B, PID_A, "nginx", 1001);
+    emit_file(&f, 11, "/var/www/a.bin", false);
+    emit_file(&f, 12, "/var/www/b.bin", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 1, 443), 3000, 0);
+    emit_flow(&f, SOCK_B, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 2, 443), 1000, 0);
+    emit_flow(&f, 0x1003, PID_B, FT_PROTO_TCP, endpoint(203, 0, 113, 3, 443), 500, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 1000, 0, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 12, FT_METHOD_SENDFILE, 2000, 0, 0);
+    emit_transfer(&f, SOCK_B, PID_A, 11, FT_METHOD_SENDFILE, 1000, 0, 0);
+    emit_transfer(&f, 0x1003, PID_B, 11, FT_METHOD_SENDFILE, 500, 0, 0);
+
+    /* The same file sent over two sockets is two transfers of one file. */
+    ft_query_init(&q, FT_Q_PROCESSES);
+    q.pid = PID_A;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.processes[0].files, 2);
+    CHECK_U64(f.rows.processes[0].transfers, 3);
+    CHECK_U64(f.rows.processes[0].active_transfers, 3);
+
+    q.flags = FT_QF_INCLUDE_CHILDREN;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.processes[0].transfers, 4);
+    CHECK_U64(f.rows.processes[0].tx_bytes, 4500);
+
+    f.now += 60 * FT_NS_PER_SEC;
+    q.flags = 0;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.processes[0].transfers, 3);
+    CHECK_U64(f.rows.processes[0].active_transfers, 0);
+    fixture_close(&f);
+}
+
 static void rates_cover_recent_seconds(void)
 {
     struct fixture f;
@@ -751,6 +791,7 @@ void test_state(void)
     sockets_and_flows();
     loss_is_reported();
     reused_inode_is_another_file();
+    processes_count_their_files();
     rates_cover_recent_seconds();
     tables_stay_bounded();
 }

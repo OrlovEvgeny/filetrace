@@ -212,10 +212,22 @@ static void p_conns(const void *row, struct value *v)
     set_uint(v, r->connections);
 }
 
+static void p_files(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    set_uint(v, r->files);
+}
+
 static void p_transfers(const void *row, struct value *v)
 {
     ROW(ft_row_process);
-    set_uint(v, r->files_sent);
+    set_uint(v, r->transfers);
+}
+
+static void p_active_transfers(const void *row, struct value *v)
+{
+    ROW(ft_row_process);
+    set_uint(v, r->active_transfers);
 }
 
 static void p_started(const void *row, struct value *v)
@@ -271,7 +283,9 @@ static const struct field process_fields[] = {
     {"outbound_bytes_per_second", 0, p_tx_rate},
     {"inbound_bytes_per_second", 0, p_rx_rate},
     {"connections", 0, p_conns},
+    {"files", 0, p_files},
     {"transfers", 0, p_transfers},
+    {"active_transfers", 0, p_active_transfers},
     {"started", 0, p_started},
     {"status", 0, p_status},
     {"cgroup_id", 0, p_cgroup},

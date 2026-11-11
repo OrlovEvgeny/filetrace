@@ -113,11 +113,12 @@ struct ft_row_process {
     uint32_t pidns;
     uint32_t mntns;
     uint32_t netns;
-    uint32_t connections; /* sockets currently open or active */
-    uint32_t files_sent;  /* distinct files in attributed transfers */
+    uint32_t connections;      /* sockets currently open or active */
+    uint32_t files;            /* distinct files in attributed transfers */
+    uint32_t transfers;        /* attributed transfers */
+    uint32_t active_transfers; /* of those, still in progress */
     int32_t exit_status;
     uint32_t flags;
-    uint32_t pad;
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
 };

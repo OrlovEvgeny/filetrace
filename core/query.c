@@ -113,8 +113,39 @@ static bool socket_is_open(const struct ft_state *st, const struct ft_socket *s,
     return state != FT_SOCK_CLOSED && state != FT_SOCK_IDLE && state != FT_SOCK_UNKNOWN;
 }
 
-static void prepare_processes(struct ft_state *st, const struct ft_query *q, uint64_t now_ns)
+static bool transfer_is_active(const struct ft_state *st, uint64_t last_ns, uint64_t now_ns)
 {
+    return now_ns <= last_ns || now_ns - last_ns <= st->cfg.active_window_ns;
+}
+
+struct sent_file {
+    uint32_t pid;
+    struct ft_file_id file;
+};
+
+static int compare_sent_files(const void *a, const void *b)
+{
+    const struct sent_file *x = a;
+    const struct sent_file *y = b;
+    if (x->pid != y->pid)
+        return x->pid < y->pid ? -1 : 1;
+    if (x->file.dev != y->file.dev)
+        return x->file.dev < y->file.dev ? -1 : 1;
+    if (x->file.ino != y->file.ino)
+        return x->file.ino < y->file.ino ? -1 : 1;
+    if (x->file.instance != y->file.instance)
+        return x->file.instance < y->file.instance ? -1 : 1;
+    return 0;
+}
+
+static bool prepare_processes(struct ft_state *st, const struct ft_query *q, uint64_t now_ns)
+{
+    struct sent_file *sent = calloc(ft_table_count(st->transfers) + 1, sizeof(*sent));
+    size_t nsent = 0;
+
+    if (!sent)
+        return false;
+
     for (struct ft_process *p = ft_table_first(st->processes); p;
          p = ft_table_next(st->processes, p)) {
         p->q_tx = p->tx_bytes;
@@ -122,7 +153,9 @@ static void prepare_processes(struct ft_state *st, const struct ft_query *q, uin
         p->q_tx_rate = ft_rate_per_second(&p->tx_rate, now_ns);
         p->q_rx_rate = ft_rate_per_second(&p->rx_rate, now_ns);
         p->q_connections = 0;
+        p->q_files = 0;
         p->q_transfers = 0;
+        p->q_active_transfers = 0;
     }
 
     for (struct ft_socket *s = ft_table_first(st->sockets); s; s = ft_table_next(st->sockets, s)) {
@@ -136,17 +169,34 @@ static void prepare_processes(struct ft_state *st, const struct ft_query *q, uin
         enum ft_confidence conf;
         uint32_t evidence;
         struct ft_process *p = ft_table_find(st->processes, &t->pid);
-        if (p && ft_state_classify(st, t, &conf, &evidence))
-            p->q_transfers++;
+        if (!p || !ft_state_classify(st, t, &conf, &evidence))
+            continue;
+        p->q_transfers++;
+        if (transfer_is_active(st, t->last_ns, now_ns))
+            p->q_active_transfers++;
+        sent[nsent++] = (struct sent_file){.pid = t->pid, .file = t->file};
     }
 
+    /* One file sent over several sockets counts once. */
+    qsort(sent, nsent, sizeof(*sent), compare_sent_files);
+    for (size_t i = 0; i < nsent; i++) {
+        if (i > 0 && compare_sent_files(&sent[i - 1], &sent[i]) == 0)
+            continue;
+        struct ft_process *p = ft_table_find(st->processes, &sent[i].pid);
+        if (p)
+            p->q_files++;
+    }
+    free(sent);
+
     if (!(q->flags & FT_QF_INCLUDE_CHILDREN))
-        return;
+        return true;
 
     for (struct ft_process *p = ft_table_first(st->processes); p;
          p = ft_table_next(st->processes, p)) {
         p->q_own_connections = p->q_connections;
+        p->q_own_files = p->q_files;
         p->q_own_transfers = p->q_transfers;
+        p->q_own_active_transfers = p->q_active_transfers;
     }
     for (struct ft_process *c = ft_table_first(st->processes); c;
          c = ft_table_next(st->processes, c)) {
@@ -160,21 +210,25 @@ static void prepare_processes(struct ft_state *st, const struct ft_query *q, uin
             a->q_tx_rate += ft_rate_per_second(&c->tx_rate, now_ns);
             a->q_rx_rate += ft_rate_per_second(&c->rx_rate, now_ns);
             a->q_connections += c->q_own_connections;
+            a->q_files += c->q_own_files;
             a->q_transfers += c->q_own_transfers;
+            a->q_active_transfers += c->q_own_active_transfers;
             parent = a->ppid;
         }
     }
+    return true;
 }
 
-static void query_processes(struct ft_state *st, const struct ft_query *q, uint64_t now_ns,
+static bool query_processes(struct ft_state *st, const struct ft_query *q, uint64_t now_ns,
                             ft_row_fn *emit, void *ctx, struct ft_msg_end *end)
 {
     struct span sp = query_span(q);
     struct candidates c;
 
-    prepare_processes(st, q, now_ns);
+    if (!prepare_processes(st, q, now_ns))
+        return false;
     if (!candidates_init(&c, ft_table_count(st->processes)))
-        return;
+        return false;
 
     for (struct ft_process *p = ft_table_first(st->processes); p;
          p = ft_table_next(st->processes, p)) {
@@ -246,7 +300,9 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
             .mntns = p->mntns,
             .netns = p->netns,
             .connections = p->q_connections,
-            .files_sent = p->q_transfers,
+            .files = p->q_files,
+            .transfers = p->q_transfers,
+            .active_transfers = p->q_active_transfers,
             .exit_status = p->exit_status,
             .flags = p->exited ? FT_PROC_EXITED : 0,
         };
@@ -256,6 +312,7 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
     }
     end->rows = (uint32_t)n;
     free(c.items);
+    return true;
 }
 
 static void query_connections(struct ft_state *st, const struct ft_query *q, uint64_t now_ns,
@@ -430,11 +487,6 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
     }
     end->rows = (uint32_t)n;
     free(c.items);
-}
-
-static bool transfer_is_active(const struct ft_state *st, uint64_t last_ns, uint64_t now_ns)
-{
-    return now_ns <= last_ns || now_ns - last_ns <= st->cfg.active_window_ns;
 }
 
 static bool match_activity(const struct ft_query *q, bool active)
@@ -709,7 +761,10 @@ bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_
     memset(end, 0, sizeof(*end));
     switch (q->kind) {
     case FT_Q_PROCESSES:
-        query_processes(st, q, now_ns, emit, ctx, end);
+        if (!query_processes(st, q, now_ns, emit, ctx, end)) {
+            ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+            return false;
+        }
         break;
     case FT_Q_CONNECTIONS:
         query_connections(st, q, now_ns, emit, ctx, end);

@@ -65,9 +65,13 @@ struct ft_process {
     uint64_t q_tx_rate;
     uint64_t q_rx_rate;
     uint32_t q_connections;
+    uint32_t q_files;
     uint32_t q_transfers;
+    uint32_t q_active_transfers;
     uint32_t q_own_connections;
+    uint32_t q_own_files;
     uint32_t q_own_transfers;
+    uint32_t q_own_active_transfers;
 };
 
 struct ft_socket {

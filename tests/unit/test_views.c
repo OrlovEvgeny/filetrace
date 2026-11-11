@@ -196,7 +196,8 @@ static void processes(void)
     CHECK_STR(text, "{\"pid\":1842,\"ppid\":1,\"name\":\"nginx\",\"user\":\"4000000000\","
                     "\"uid\":4000000000,\"gid\":0,\"outbound_bytes\":1524713390,"
                     "\"inbound_bytes\":85983232,\"outbound_bytes_per_second\":13002342,"
-                    "\"inbound_bytes_per_second\":0,\"connections\":12,\"transfers\":0,"
+                    "\"inbound_bytes_per_second\":0,\"connections\":12,\"files\":0,\"transfers\":0,"
+                    "\"active_transfers\":0,"
                     "\"status\":\"running\"}\n");
     free(text);
 
