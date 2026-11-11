@@ -9,36 +9,6 @@
 #include <string.h>
 #include <time.h>
 
-constexpr uint32_t SORT_BIT_OUTBOUND = 1u << FT_SORT_OUTBOUND;
-constexpr uint32_t SORT_BIT_INBOUND = 1u << FT_SORT_INBOUND;
-constexpr uint32_t SORT_BIT_CONNECTIONS = 1u << FT_SORT_CONNECTIONS;
-constexpr uint32_t SORT_BIT_BYTES = 1u << FT_SORT_BYTES;
-constexpr uint32_t SORT_BIT_RECENT = 1u << FT_SORT_RECENT;
-constexpr uint32_t SORT_BIT_PID = 1u << FT_SORT_PID;
-constexpr uint32_t SORT_BIT_RATE = 1u << FT_SORT_RATE;
-
-constexpr uint32_t OPTS_PROCESSES = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
-                                    FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
-constexpr uint32_t SORTS_PROCESSES = SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_RATE |
-                                     SORT_BIT_CONNECTIONS | SORT_BIT_RECENT | SORT_BIT_PID;
-
-constexpr uint32_t OPTS_NETWORK = FT_QO_PID | FT_QO_PROCESS | FT_QO_REMOTE | FT_QO_LOCAL |
-                                  FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_FAMILY | FT_QO_TIME |
-                                  FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
-constexpr uint32_t OPTS_CONNECTIONS = OPTS_NETWORK | FT_QO_STATE;
-constexpr uint32_t SORTS_CONNECTIONS =
-    SORT_BIT_RECENT | SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_RATE | SORT_BIT_PID;
-constexpr uint32_t OPTS_FLOWS = OPTS_NETWORK | FT_QO_MIN_BYTES;
-constexpr uint32_t SORTS_FLOWS = SORT_BIT_OUTBOUND | SORT_BIT_INBOUND | SORT_BIT_BYTES |
-                                 SORT_BIT_RATE | SORT_BIT_RECENT | SORT_BIT_PID;
-
-constexpr uint32_t OPTS_TRANSFERS = FT_QO_PID | FT_QO_PROCESS | FT_QO_FILE | FT_QO_REMOTE |
-                                    FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_CONFIDENCE |
-                                    FT_QO_METHOD | FT_QO_MIN_BYTES | FT_QO_ACTIVITY | FT_QO_TIME |
-                                    FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
-constexpr uint32_t SORTS_TRANSFERS =
-    SORT_BIT_RECENT | SORT_BIT_BYTES | SORT_BIT_RATE | SORT_BIT_PID;
-
 static void print_footer(const struct ft_output *out, const struct ft_rows *rows,
                          const struct ft_msg_end *end, const char *what, bool incomplete)
 {
@@ -448,7 +418,7 @@ int ft_cmd_processes(const struct ft_cli *cli, struct ft_args *a)
 {
     struct ft_query_args qa;
 
-    ft_query_args_init(&qa, "processes", FT_Q_PROCESSES, OPTS_PROCESSES, SORTS_PROCESSES);
+    ft_query_args_init(&qa, "processes", FT_Q_PROCESSES, FT_OPTS_PROCESSES, FT_SORTS_PROCESSES);
     while (!ft_args_done(a)) {
         int r = ft_query_args_parse(&qa, a);
         if (r < 0)
@@ -470,7 +440,8 @@ int ft_cmd_connections(const struct ft_cli *cli, struct ft_args *a)
 {
     struct ft_query_args qa;
 
-    ft_query_args_init(&qa, "connections", FT_Q_CONNECTIONS, OPTS_CONNECTIONS, SORTS_CONNECTIONS);
+    ft_query_args_init(&qa, "connections", FT_Q_CONNECTIONS, FT_OPTS_CONNECTIONS,
+                       FT_SORTS_CONNECTIONS);
     while (!ft_args_done(a)) {
         int r = ft_query_args_parse(&qa, a);
         if (r < 0)
@@ -491,7 +462,7 @@ int ft_cmd_flows(const struct ft_cli *cli, struct ft_args *a)
     enum flow_grouping grouping = GROUP_NONE;
     const char *v;
 
-    ft_query_args_init(&qa, "flows", FT_Q_FLOWS, OPTS_FLOWS, SORTS_FLOWS);
+    ft_query_args_init(&qa, "flows", FT_Q_FLOWS, FT_OPTS_FLOWS, FT_SORTS_FLOWS);
     while (!ft_args_done(a)) {
         int r = ft_query_args_parse(&qa, a);
         if (r < 0)
@@ -550,7 +521,7 @@ static int transfer_command(const struct ft_cli *cli, struct ft_args *a, const c
     struct ft_query_args qa;
     const char *v;
 
-    ft_query_args_init(&qa, command, FT_Q_TRANSFERS, OPTS_TRANSFERS, SORTS_TRANSFERS);
+    ft_query_args_init(&qa, command, FT_Q_TRANSFERS, FT_OPTS_TRANSFERS, FT_SORTS_TRANSFERS);
     if (unknown_by_default)
         qa.query.flags |= FT_QF_INCLUDE_UNKNOWN;
 

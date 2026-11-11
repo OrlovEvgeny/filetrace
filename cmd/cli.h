@@ -69,6 +69,33 @@ enum ft_query_opt : uint32_t {
     FT_QO_OUTPUT = 1u << 18, /* --format, --output */
 };
 
+#define FT_SORT_BIT(sort) (1u << (sort))
+
+constexpr uint32_t FT_OPTS_PROCESSES = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
+                                       FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
+constexpr uint32_t FT_SORTS_PROCESSES =
+    FT_SORT_BIT(FT_SORT_OUTBOUND) | FT_SORT_BIT(FT_SORT_INBOUND) | FT_SORT_BIT(FT_SORT_RATE) |
+    FT_SORT_BIT(FT_SORT_CONNECTIONS) | FT_SORT_BIT(FT_SORT_RECENT) | FT_SORT_BIT(FT_SORT_PID);
+
+constexpr uint32_t FT_OPTS_NETWORK = FT_QO_PID | FT_QO_PROCESS | FT_QO_REMOTE | FT_QO_LOCAL |
+                                     FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_FAMILY | FT_QO_TIME |
+                                     FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
+constexpr uint32_t FT_OPTS_CONNECTIONS = FT_OPTS_NETWORK | FT_QO_STATE;
+constexpr uint32_t FT_SORTS_CONNECTIONS =
+    FT_SORT_BIT(FT_SORT_RECENT) | FT_SORT_BIT(FT_SORT_OUTBOUND) | FT_SORT_BIT(FT_SORT_INBOUND) |
+    FT_SORT_BIT(FT_SORT_RATE) | FT_SORT_BIT(FT_SORT_PID);
+constexpr uint32_t FT_OPTS_FLOWS = FT_OPTS_NETWORK | FT_QO_MIN_BYTES;
+constexpr uint32_t FT_SORTS_FLOWS = FT_SORT_BIT(FT_SORT_OUTBOUND) | FT_SORT_BIT(FT_SORT_INBOUND) |
+                                    FT_SORT_BIT(FT_SORT_BYTES) | FT_SORT_BIT(FT_SORT_RATE) |
+                                    FT_SORT_BIT(FT_SORT_RECENT) | FT_SORT_BIT(FT_SORT_PID);
+
+constexpr uint32_t FT_OPTS_TRANSFERS =
+    FT_QO_PID | FT_QO_PROCESS | FT_QO_FILE | FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT |
+    FT_QO_PROTOCOL | FT_QO_CONFIDENCE | FT_QO_METHOD | FT_QO_MIN_BYTES | FT_QO_ACTIVITY |
+    FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
+constexpr uint32_t FT_SORTS_TRANSFERS = FT_SORT_BIT(FT_SORT_RECENT) | FT_SORT_BIT(FT_SORT_BYTES) |
+                                        FT_SORT_BIT(FT_SORT_RATE) | FT_SORT_BIT(FT_SORT_PID);
+
 struct ft_query_args {
     struct ft_query query;
     struct ft_output out;
