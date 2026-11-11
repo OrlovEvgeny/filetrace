@@ -71,6 +71,7 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBBPF REQUIRED IMPORTED_TARGET libbpf>=1.3)
+    pkg_get_variable(FT_LIBBPF_INCLUDEDIR libbpf includedir)
 
     find_program(FT_BPF_CLANG NAMES clang REQUIRED)
     find_program(FT_LLVM_STRIP NAMES llvm-strip REQUIRED)
@@ -94,6 +95,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 -D__TARGET_ARCH_${FT_BPF_ARCH}
                 -Wall -Wextra -Wno-unused-parameter
                 -I${FT_BPF_DIR}
+                -idirafter ${FT_LIBBPF_INCLUDEDIR}
                 -c ${FT_BPF_DIR}/${name}.bpf.c
                 -o ${object}
             COMMAND ${FT_LLVM_STRIP} -g ${object}
