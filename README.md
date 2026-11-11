@@ -175,6 +175,8 @@ kernel.
   not associated with the send.
 - Files read with `readv`, io_uring or through a memory mapping are not seen
   as read. Bytes sent through io_uring are still counted per socket.
+- With the kprobe set, what a thread reads with `readv` between a file read
+  and a send is counted as read from that file.
 - A file read entirely before a fresh TLS connection is opened is not
   associated: the handshake's receive ends the association.
 - An inferred association can be wrong when a thread reads one file and then
