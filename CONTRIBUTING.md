@@ -13,8 +13,9 @@ mise tasks
 The compiler and the three libraries are not mise's to install. On Linux they
 come with the development container, which `mise run linux -- <command>`
 enters; on macOS, where the command line and the unit tests build,
-`brew install protobuf-c libnghttp2 pkgconf` provides the libraries. The
-README lists the versions needed.
+`brew install protobuf-c libnghttp2 pkgconf` provides the libraries. A build
+outside the container needs Clang 19 or later (C23 and `#embed`), CMake 3.25,
+libbpf 1.3, `llvm-strip`, protobuf-c 1.3 and nghttp2 1.60.
 
 ## Before opening a pull request
 
@@ -28,7 +29,8 @@ schema and the generated code under `gen/` (`mise run gen` regenerates it),
 the shell scripts, the workflows and the commit subjects.
 
 A change to packaging, the service definitions or the installer is checked by
-the package tests, described under Tests in the README.
+the package tests, which need Docker: `mise run dist`, `mise run package`,
+then `mise run test:package`.
 
 ## Commits and branches
 
