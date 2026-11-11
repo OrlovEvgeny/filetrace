@@ -81,3 +81,12 @@ run = [
     "tools/dev/vm.sh 6.1 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'",
     "tools/dev/vm.sh 6.12 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'",
 ]
+
+[tasks.dist]
+description = "Build the static Linux binaries into dist/"
+run = "tools/dist/build.sh"
+
+[tasks."test:dist"]
+description = "Run every test against the static Linux build"
+depends = ["dist"]
+run = "tools/dev/linux.sh sh -c 'ctest --test-dir build/dist-linux-$(dpkg --print-architecture) --output-on-failure'"

@@ -34,12 +34,24 @@
         "FILETRACE_SANITIZE": "ON",
         "FILETRACE_WERROR": "ON"
       }
+    },
+    {
+      "name": "dist",
+      "displayName": "Optimized build with third-party libraries linked statically",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-g",
+        "FILETRACE_STATIC": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "dev", "configurePreset": "dev" },
     { "name": "release", "configurePreset": "release" },
-    { "name": "sanitize", "configurePreset": "sanitize" }
+    { "name": "sanitize", "configurePreset": "sanitize" },
+    { "name": "dist", "configurePreset": "dist" }
   ],
   "testPresets": [
     {
@@ -49,6 +61,7 @@
     },
     { "name": "dev", "inherits": "base", "configurePreset": "dev" },
     { "name": "release", "inherits": "base", "configurePreset": "release" },
-    { "name": "sanitize", "inherits": "base", "configurePreset": "sanitize" }
+    { "name": "sanitize", "inherits": "base", "configurePreset": "sanitize" },
+    { "name": "dist", "inherits": "base", "configurePreset": "dist" }
   ]
 }
