@@ -460,8 +460,8 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t fo
         const char *text;
     } lines[] = {
         {FT_QO_PID, "  --pid <pid>             Only this process\n"},
-        {FT_QO_PROCESS,
-         "  --process <name>        Only processes with this name ('*' wildcards)\n"},
+        {FT_QO_PROCESS, "  --process <name>        Only processes with this name ('*' wildcards;\n"
+                        "                          alias: --name)\n"},
         {FT_QO_USER, "  --user <user>           Only processes of this user\n"},
         {FT_QO_SCOPE, "  --cgroup <id|dir>       Only processes in this cgroup\n"
                       "  --namespace <inode>     Only processes in this network, PID or mount\n"

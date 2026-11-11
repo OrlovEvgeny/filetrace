@@ -35,6 +35,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endforeach()
 endif()
 
+add_test(NAME cli-help
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/cli/help_test.sh
+            $<TARGET_FILE:filetrace> $<TARGET_FILE:filetrace-agent>)
+set_tests_properties(cli-help PROPERTIES TIMEOUT 60)
+
 add_test(NAME release-version
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/release/version_test.sh
             ${CMAKE_SOURCE_DIR}/tools/release/version.sh)

@@ -51,7 +51,7 @@ static void usage(FILE *out, const char *program)
             "Exit codes:\n"
             "  0 stopped normally, 2 invalid arguments, 3 permission denied,\n"
             "  5 unsupported platform or kernel, 6 invalid configuration,\n"
-            "  1 other errors.\n",
+            "  8 the metrics page cannot listen, 1 other errors.\n",
             program, ft_config_default_path(), ft_default_socket_path());
 }
 

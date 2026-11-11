@@ -17,8 +17,9 @@ static const char exit_codes[] =
     "\nExit codes:\n"
     "  0  success                      4  agent unavailable\n"
     "  1  general error                5  unsupported platform or capability\n"
-    "  2  invalid arguments            9  partial results: events were lost in\n"
-    "  3  permission denied               the queried time range\n";
+    "  2  invalid arguments            6  invalid configuration file\n"
+    "  3  permission denied            9  partial results: events were lost in\n"
+    "                                     the queried time range\n";
 
 static const char confidence_levels[] =
     "\nConfidence:\n"
@@ -53,8 +54,10 @@ static void help_watch(FILE *o)
     fputs("  --limit <n>             Rows per table (default: as many as fit, or 10\n"
           "                          with --no-ui)\n"
           "\n"
-          "--sort orders the transfers and defaults to rate. --file and --remote\n"
-          "select transfers; the other filters apply to every view.\n"
+          "--sort orders the transfers and defaults to rate. --pid, --process,\n"
+          "--user, --cgroup and --namespace apply to every view; --file and\n"
+          "--confidence to the files view; --min-bytes to the files and processes\n"
+          "views; --remote and --protocol to the files and network views.\n"
           "\n"
           "Keys: f files, p processes, n network, space pause, ? help, q quit\n"
           "\n"
@@ -83,6 +86,10 @@ static void help_top(FILE *o)
     ft_query_args_help(o, FT_QO_PID | FT_QO_PROCESS | FT_QO_PROTOCOL | FT_QO_TIME | FT_QO_OUTPUT, 0,
                        FT_FORMATS_ALL);
     fputs("  --limit <n>             Number of rows (default: 10)\n"
+          "\n"
+          "--protocol applies to files, destinations and connections, not to\n"
+          "processes. --format quiet prints one process ID, file path, remote\n"
+          "address or flow ID per row.\n"
           "\n"
           "Examples:\n"
           "  filetrace top\n"
@@ -330,7 +337,8 @@ static void help_stats(FILE *o)
           "\n"
           "Options:\n"
           "  --watch                 Repeat until interrupted\n"
-          "  --interval <time>       Repeat at this interval (default: 1s)\n"
+          "  --interval <time>       Repeat at this interval (default: 1s); implies\n"
+          "                          --watch\n"
           "  --format table|json     Output format (default: table)\n"
           "  --json                  Short for --format json\n"
           "\n"
@@ -347,7 +355,8 @@ static void help_stats(FILE *o)
 static void help_doctor(FILE *o)
 {
     fputs("Usage:\n"
-          "  filetrace doctor [--probes auto|trampoline|kprobe] [--json]\n"
+          "  filetrace doctor [--probes auto|trampoline|kprobe] [--format table|json]\n"
+          "                   [--json]\n"
           "\n"
           "Checks whether this machine can be monitored and how well:\n"
           "\n"
@@ -421,6 +430,8 @@ static void help_agent(FILE *o)
           "  --flush-interval <time>   How often counters are collected (default: 250ms)\n"
           "  --queue-size <size>       Kernel event queue size (default: 4MB, or 1MB in\n"
           "                            minimal mode)\n"
+          "  --event-log-size <size>   Memory for the log of recent events; 0 keeps\n"
+          "                            none (default: 1MB, or 256KB in minimal mode)\n"
           "  --correlation-window <time>\n"
           "                            Longest read-to-send gap that still associates\n"
           "                            a file with a send (default: 2s)\n"
