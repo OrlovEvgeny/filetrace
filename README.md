@@ -11,6 +11,11 @@ FILE                    PROCESS  DESTINATION   BYTES    METHOD      CONFIDENCE
 /data/export/users.csv  python   192.0.2.10    85.2 MB  read-write  INFERRED
 ```
 
+Other tools can take what it sees: Prometheus scrapes its metrics, an
+OpenTelemetry collector receives its events and metrics over OTLP, and a gRPC
+API lists and streams transfers. See [Telemetry for other
+tools](#telemetry-for-other-tools).
+
 The questions it answers run in both directions:
 
 | From | To | Command |
@@ -56,8 +61,10 @@ tools/dev/linux.sh build/demo/tests/ft_workload steady /tmp/big.bin 200000000 20
 
 ## Build
 
-Linux needs Clang 19 or later (C23 and `#embed`), CMake 3.25, libbpf 1.3 and
-`llvm-strip`. `tools/dev/Dockerfile` lists the Debian packages.
+Linux needs Clang 19 or later (C23 and `#embed`), CMake 3.25, libbpf 1.3,
+`llvm-strip`, protobuf-c 1.3 and nghttp2 1.60. `tools/dev/Dockerfile` lists
+the Debian packages. On macOS, where only the command-line interface and the
+unit tests build, `brew install protobuf-c libnghttp2` provides the last two.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -71,7 +78,9 @@ UndefinedBehaviorSanitizer.
 ## Two programs
 
 `filetrace-agent` loads the probes, keeps what they report in bounded memory
-and answers queries on a local socket. `filetrace` is the command-line
+and answers queries on a local socket. It is also what exports: the metrics
+page, the OTLP exporter and the gRPC API are parts of the agent and are off
+until the configuration turns them on. `filetrace` is the command-line
 interface: it asks the agent and prints. Only the agent needs privileges to
 load BPF programs; the socket accepts root and the agent's own user.
 
@@ -81,7 +90,8 @@ sudo filetrace watch
 ```
 
 Without a running agent, `filetrace watch` and `filetrace events --follow`
-collect in the foreground for as long as they run.
+collect in the foreground for as long as they run. Such a collector exports
+nothing.
 
 ## Commands
 
@@ -252,6 +262,192 @@ interval, not of one system call; file opens and single system calls are not
 recorded. `--follow` prints events as they happen. Past events come from a log
 of bounded size (1 MB by default) that holds the most recent ones.
 
+## Telemetry for other tools
+
+| Interface | Carries | Turned on by |
+|---|---|---|
+| Prometheus page | Metrics, on `http://127.0.0.1:9464/metrics` | `[prometheus] enabled = true` |
+| OTLP over gRPC | Events as log records, and the same metrics | `[otlp] enabled = true` |
+| gRPC API | Status, transfers on request, transfers as they happen | `[grpc] enabled = true` |
+
+All three read the same state the commands read, name things the same way,
+and add nothing to what the probes do. Fields that OpenTelemetry's semantic
+conventions cover use those names (`process.pid`, `file.path`,
+`network.peer.address`); the rest is under `filetrace.`.
+
+### Metrics
+
+| OpenTelemetry name | Prometheus name | Attributes |
+|---|---|---|
+| `filetrace.network.io` | `filetrace_network_io_bytes_total` | `process.executable.name`, `network.transport`, `network.io.direction` |
+| `filetrace.file.sent` | `filetrace_file_sent_bytes_total` | `process.executable.name`, `filetrace.transfer.method`, `filetrace.transfer.confidence` |
+| `filetrace.transfers.started` | `filetrace_transfers_started_total` | as above |
+| `filetrace.transfers.active` | `filetrace_transfers_active` | `filetrace.transfer.confidence` |
+| `filetrace.connections.active` | `filetrace_connections_active` | |
+| `filetrace.processes.active` | `filetrace_processes_active` | |
+| `filetrace.events.processed` | `filetrace_events_processed_total` | |
+| `filetrace.events.dropped` | `filetrace_events_dropped_total` | `filetrace.loss.kind` |
+| `process.cpu.time` | `process_cpu_time_seconds_total` | |
+| `process.memory.usage` | `process_memory_usage_bytes` | |
+
+The last two describe the agent itself. A Prometheus name is what an
+OpenTelemetry Collector makes of the same metric (dots become underscores,
+then the unit, then `_total` for a counter), and an attribute becomes a label
+the same way, so a query works whichever way the metrics arrive. The resource
+(`service.name`, `service.version`, `host.name`, `os.type`) is on
+`target_info`.
+
+```promql
+# Outbound bytes per second, by process
+sum by (process_executable_name) (
+  rate(filetrace_network_io_bytes_total{network_io_direction="transmit"}[5m]))
+
+# Share of outbound bytes that a file accounts for
+sum(rate(filetrace_file_sent_bytes_total[5m]))
+  / sum(rate(filetrace_network_io_bytes_total{network_io_direction="transmit"}[5m]))
+```
+
+No metric is labelled with a file path or an address: those belong to events.
+`process.executable.name` is the kernel's name for the process, as in the
+`PROCESS` column. Counters are kept apart from the tables, so one never goes
+backwards when a table forgets an entry; they start at zero with the agent.
+`[limits] metric_series` bounds the label sets, and what exceeds it is summed
+into one series per metric marked `otel.metric.overflow="true"`. Bytes of a
+read-write transfer are counted once it is reported, from its first byte. The
+agent's own traffic is counted like any other; `exclude_processes =
+["filetrace-agent"]` leaves it out.
+
+### OpenTelemetry
+
+```toml
+[otlp]
+enabled = true
+endpoint = "127.0.0.1:4317"
+```
+
+The agent sends OTLP over gRPC without TLS to a numeric address or a `unix:`
+socket: an OpenTelemetry Collector or Grafana Alloy on the same host, which
+forwards to Loki, Elasticsearch, Splunk, Datadog or a SIEM with credentials
+and encryption of its own. A minimal collector configuration:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+exporters:
+  debug:
+    verbosity: detailed
+service:
+  pipelines:
+    logs:    {receivers: [otlp], exporters: [debug]}
+    metrics: {receivers: [otlp], exporters: [debug]}
+```
+
+Each event of the types in `events` (`file_transfer` and `event_loss` unless
+set otherwise; any type `filetrace events` knows) leaves as one log record
+with the event name `filetrace.<type>`. A transfer as a collector prints it:
+
+```text
+EventName: filetrace.file_transfer
+Body: Str(file_transfer)
+Attributes:
+     -> filetrace.event.type: Str(file_transfer)
+     -> process.pid: Int(1245)
+     -> process.parent_pid: Int(1)
+     -> process.executable.name: Str(nginx)
+     -> process.user.id: Int(33)
+     -> file.path: Str(/var/www/video.mp4)
+     -> file.inode: Str(366815)
+     -> filetrace.file.device: Int(64768)
+     -> file.size: Int(50000000)
+     -> filetrace.socket.id: Int(421)
+     -> network.transport: Str(tcp)
+     -> network.type: Str(ipv4)
+     -> network.local.address: Str(192.0.2.7)
+     -> network.local.port: Int(443)
+     -> network.peer.address: Str(198.51.100.10)
+     -> network.peer.port: Int(48175)
+     -> filetrace.transfer.method: Str(sendfile)
+     -> filetrace.transfer.bytes: Int(50000000)
+     -> filetrace.transfer.confidence: Str(exact)
+```
+
+A read-write transfer adds `filetrace.transfer.bytes_read`, and one still
+below the reporting thresholds has no confidence. Network events carry
+`filetrace.network.bytes` and `network.io.direction`, process events
+`process.executable.path` and `process.exit.code` or
+`filetrace.process.exit_signal`, a loss `filetrace.loss.events` and
+`filetrace.loss.kind`.
+
+Records are sent every `flush_interval`. Bytes of one transfer, or of one
+socket and peer, that arrive within an interval are summed into a single
+record, so a long transfer produces one record per interval and the bytes of
+its records add up to the transfer. Metrics are sent every
+`metrics_interval`, cumulative since the agent started. `file_paths = false`
+leaves paths out; device and inode remain.
+
+When the collector cannot be reached, the agent keeps up to 16 batches (8 MB)
+and tries again after a pause that grows from one second to thirty. Beyond
+that the oldest batch is given up, which the agent's log reports with the
+number of records. A path or process name that is not valid UTF-8 is sent with
+`?` in place of the offending bytes.
+
+### gRPC API
+
+```toml
+[grpc]
+enabled = true
+listen = "unix:/run/filetrace/api.sock"
+```
+
+| Method | Returns |
+|---|---|
+| `GetStatus` | Version, host, backend, mode, start time, totals, whether events were lost lately |
+| `ListTransfers` | Transfers over their whole observed lifetime, as `filetrace files` lists them; at most 1000 |
+| `WatchTransfers` | A stream of the file bytes attributed in each collection interval, until the caller cancels |
+
+`ListTransfers` and `WatchTransfers` take a filter by PID, process name, path
+pattern, remote address or network, port, transport, method and confidence.
+The service is `filetrace.v1.FiletraceService`, defined in
+`proto/filetrace/v1/filetrace.proto`. The server speaks gRPC over HTTP/2
+without TLS and without reflection, so a client names the schema:
+
+```sh
+grpcurl -plaintext -unix -import-path proto -proto filetrace/v1/filetrace.proto \
+    -d '{"filter": {"remote": "203.0.113.0/24"}}' \
+    /run/filetrace/api.sock filetrace.v1.FiletraceService/ListTransfers
+
+buf curl --schema proto --protocol grpc --http2-prior-knowledge \
+    --unix-socket /run/filetrace/api.sock -d '{"filter": {"path": "/data/*"}}' \
+    http://localhost/filetrace.v1.FiletraceService/WatchTransfers
+```
+
+A `unix:` socket admits root and the agent's user, like the command-line
+socket. An address and port, such as `127.0.0.1:9500`, admits whoever can
+connect, and the agent says so when it starts. A watcher that reads too slowly
+is not sent what it cannot take; the next message it receives says how many
+events it missed.
+
+### Schemas
+
+[Buf](https://buf.build) manages the protobuf side: `buf.yaml` holds the lint
+and breaking-change rules for `proto/`, and `buf.gen.yaml` generates the C
+code in `gen/` for the API and for the OTLP messages of the
+`buf.build/opentelemetry/opentelemetry` module, with the
+`buf.build/community/protobuf-c` plugin.
+
+```sh
+buf lint
+buf breaking --against '.git#branch=master'
+buf generate
+```
+
+`gen/` is committed, so building needs neither Buf nor the network. `buf
+generate` warns that the plugin does not declare proto3 `optional` support;
+the fields concerned are histogram fields, which the agent does not use.
+
 ## Confidence
 
 | Level | Meaning |
@@ -311,6 +507,7 @@ files = 16384
 transfers = 16384
 kernel_counters = 16384
 kernel_files = 16384
+metric_series = 2048         # label sets of the exported counters
 
 [output]
 format = "table"             # default format of the listing commands
@@ -319,6 +516,26 @@ timestamps = true
 [filters]
 exclude_processes = ["systemd"]
 exclude_paths = ["/proc/*", "/sys/*"]
+
+[prometheus]
+enabled = false
+listen = "127.0.0.1:9464"
+
+[otlp]
+enabled = false
+endpoint = "127.0.0.1:4317"  # gRPC without TLS; a numeric address or "unix:" path
+logs = true
+metrics = true
+events = ["file_transfer", "event_loss"]
+file_paths = true
+batch_size = 1024            # records per request
+flush_interval = "5s"
+metrics_interval = "30s"
+timeout = "10s"
+
+[grpc]
+enabled = false
+listen = "unix:/run/filetrace/api.sock"
 ```
 
 The file also accepts `[network] tc_egress`, `[file] track_open`,
@@ -414,9 +631,14 @@ kernel.
   mount. On btrfs, files in different subvolumes can share an inode number.
 - An accepted connection has no owning process until that process sends or
   receives on it.
+- The exporters and the API speak without TLS and do not resolve host names:
+  the OTLP endpoint is a collector on the same host, by numeric address or
+  Unix socket. The API has no server reflection.
+- Exported counters and the batches waiting for a collector live in memory
+  and do not survive a restart of the agent.
 
-Not included in this build: persistent history, Prometheus and OpenTelemetry
-exporters, packet-level counters, TLS attribution, and the `record`, `replay`,
+Not included in this build: persistent history, OpenTelemetry traces, OTLP
+over HTTP, packet-level counters, TLS attribution, and the `record`, `replay`,
 `monitor` and `integrations` commands.
 
 ## Tests
@@ -428,7 +650,11 @@ ctest --test-dir build --output-on-failure
 `unit` covers formatting, the bounded tables and the event log, the
 correlation state and its filters, the configuration file, the IPC round trip
 with a scripted backend including a live event stream, and every output
-format; it runs on Linux and macOS. `integration-auto` and
+format. For the exporters it covers the exported counters and their Prometheus
+text, the gRPC client and server against each other, the OTLP messages as a
+protobuf decoder reads them back, and an agent that is scraped over HTTP,
+exports to a collector that starts late, and answers and streams over the
+API. It runs on Linux and macOS. `integration-auto` and
 `integration-kprobe` need root and a supporting kernel, and are skipped
 otherwise. They start the agent with the probe set the kernel prefers and with
 the kprobe set, generate real transfers (sendfile over IPv4 and IPv6,
@@ -488,10 +714,14 @@ default sizes, and about 8 MB more for the kprobe set's socket table.
 
 ```text
 backends/        collection backends; linux/ holds the BPF probes and loader
-core/            data model, bounded tables, event log, correlation state, queries, IPC
-agent/           filetrace-agent: event loop, local query socket, configuration file
+core/            data model, bounded tables, event log, correlation state, queries, IPC,
+                 exported counters
+agent/           filetrace-agent: event loop, local query socket, configuration file,
+                 metrics page, OTLP exporter, gRPC API
 cmd/             filetrace: commands and output views
-exporters/, ui/  JSON and CSV writers, tables, terminal, live view
+exporters/, ui/  JSON, CSV, Prometheus and OTLP writers, tables, terminal, live view
+rpc/             gRPC client and server over nghttp2
+proto/, gen/     the API schema, and the C code Buf generates for it and for OTLP
 tests/           unit tests and kernel integration tests
 benchmarks/      system call overhead benchmark
 tools/dev/       Linux development container, demo, and QEMU harness for other kernels
