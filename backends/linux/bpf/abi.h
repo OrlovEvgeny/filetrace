@@ -67,11 +67,13 @@ struct ft_bpf_ev_file {
     __u64 fs_magic;
     __u32 dev; /* kernel dev_t encoding */
     __u32 gen;
+    __u32 instance; /* tells apart successive files that were given the same inode number */
     __u32 mnt_id;
     __u32 mntns;
     __u32 path_len;
     __u16 depth;
     __u16 flags;
+    __u32 pad;
 };
 
 enum ft_bpf_agg_kind {
@@ -91,7 +93,7 @@ struct ft_bpf_agg_key {
         struct {
             __u64 ino;
             __u32 dev;
-            __u32 gen;
+            __u32 instance;
         } file; /* SENDFILE, READ_SEND */
     };
 };

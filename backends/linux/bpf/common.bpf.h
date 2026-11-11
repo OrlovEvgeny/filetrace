@@ -87,14 +87,22 @@ struct file_key {
     __u32 gen;
 };
 
+/* A file as records refer to it; instance 0 means its path could not be reported yet. */
+struct file_ref {
+    __u64 ino;
+    __u32 dev;
+    __u32 instance;
+};
+
 /* The file a thread read most recently and how much of it is unsent. */
 struct thread_state {
-    struct file_key file;
+    struct file_ref file;
+    __u32 gen;
+    __u32 forgotten; /* value of forgotten_files when the instance was resolved */
     __u64 pending;
     __u64 unreported;
     __u64 last_ns;
     __u8 fresh;
-    __u8 named;
 };
 
 struct {
@@ -108,8 +116,11 @@ struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 16384);
     __type(key, struct file_key);
-    __type(value, __u8);
+    __type(value, __u32);
 } known_files SEC(".maps");
+
+static __u32 last_file_instance;
+static __u32 forgotten_files;
 
 struct path_scratch {
     __u32 busy;
@@ -276,7 +287,7 @@ static __always_inline void correlate_send(void *map, __u64 cookie, __u32 tgid, 
         .cookie = cookie,
         .tgid = tgid,
         .kind = FT_BPF_AGG_READ_SEND,
-        .file = {.ino = ts->file.ino, .dev = ts->file.dev, .gen = ts->file.gen},
+        .file = {.ino = ts->file.ino, .dev = ts->file.dev, .instance = ts->file.instance},
     };
     struct ft_bpf_agg_val init = {.first_ns = now};
     struct ft_bpf_agg_val *v = agg_slot(map, &key, &init);
@@ -367,7 +378,7 @@ static long path_step(__u64 index, void *arg)
 
 /* Emits the path components leaf first; userspace joins them in reverse. */
 static __always_inline int emit_file(struct file *file, struct inode *inode,
-                                     const struct file_key *fk, __u64 fs_magic)
+                                     const struct file_key *fk, __u32 instance, __u64 fs_magic)
 {
     __u32 zero = 0;
     struct path_scratch *s = bpf_map_lookup_elem(&scratch, &zero);
@@ -404,6 +415,8 @@ static __always_inline int emit_file(struct file *file, struct inode *inode,
     s->ev.fs_magic = fs_magic;
     s->ev.dev = fk->dev;
     s->ev.gen = fk->gen;
+    s->ev.instance = instance;
+    s->ev.pad = 0;
     s->ev.depth = w.depth;
     s->ev.flags = w.flags;
 
@@ -419,17 +432,60 @@ static __always_inline int emit_file(struct file *file, struct inode *inode,
     return err ? -1 : 0;
 }
 
-static __always_inline bool name_file(struct file *file, struct inode *inode,
-                                      const struct file_key *fk, __u64 fs_magic)
+/* Returns the instance of the file, reporting its path the first time; 0 if that failed. */
+static __always_inline __u32 file_instance(struct file *file, struct inode *inode,
+                                           const struct file_key *fk, __u64 fs_magic)
 {
-    if (bpf_map_lookup_elem(&known_files, fk))
-        return true;
-    if (emit_file(file, inode, fk, fs_magic))
-        return false;
+    __u32 *known = bpf_map_lookup_elem(&known_files, fk);
+    if (known)
+        return *known;
 
-    __u8 one = 1;
-    bpf_map_update_elem(&known_files, fk, &one, BPF_ANY);
-    return true;
+    __u32 instance = __sync_fetch_and_add(&last_file_instance, 1) + 1;
+    if (emit_file(file, inode, fk, instance, fs_magic))
+        return 0;
+    if (bpf_map_update_elem(&known_files, fk, &instance, BPF_NOEXIST) == -EEXIST) {
+        known = bpf_map_lookup_elem(&known_files, fk);
+        if (known)
+            return *known;
+    }
+    return instance;
+}
+
+/* Points the thread at the file it is about to read, starting over if that is another file. */
+static __always_inline void thread_set_file(struct thread_state *ts, struct file *file,
+                                            struct inode *inode, const struct file_key *fk,
+                                            __u64 fs_magic)
+{
+    if (ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen) {
+        ts->file.ino = fk->ino;
+        ts->file.dev = fk->dev;
+        ts->file.instance = 0;
+        ts->gen = fk->gen;
+        thread_reset(ts);
+    }
+    /* A deleted file's inode number may have been given to this one since. */
+    if (ts->forgotten != forgotten_files) {
+        ts->forgotten = forgotten_files;
+        ts->file.instance = 0;
+    }
+    if (!ts->file.instance)
+        ts->file.instance = file_instance(file, inode, fk, fs_magic);
+}
+
+/* A deleted file is gone for good once its inode is destroyed. */
+static __always_inline void forget_file(struct inode *inode)
+{
+    if ((FT_READ(inode, i_mode) & S_IFMT) != S_IFREG || FT_READ(inode, i_nlink))
+        return;
+
+    struct super_block *sb = FT_READ(inode, i_sb);
+    struct file_key fk = {
+        .ino = FT_READ(inode, i_ino),
+        .dev = FT_READ(sb, s_dev),
+        .gen = FT_READ(inode, i_generation),
+    };
+    if (!bpf_map_delete_elem(&known_files, &fk))
+        __sync_fetch_and_add(&forgotten_files, 1);
 }
 
 #endif

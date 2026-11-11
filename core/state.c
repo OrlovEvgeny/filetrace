@@ -271,6 +271,7 @@ static void ingest_file(struct ft_state *st, const struct ft_event *ev)
         f->id = e->id;
         f->first_ns = ev->ts_ns;
     }
+    f->generation = e->generation;
     f->mnt_id = e->mnt_id;
     f->mntns = e->mntns;
     f->deleted = e->deleted;

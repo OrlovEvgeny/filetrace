@@ -40,6 +40,7 @@ struct ft_ev_socket {
 
 struct ft_ev_file {
     struct ft_file_id id;
+    uint32_t generation;
     uint32_t mnt_id;
     uint32_t mntns;
     char fs_type[FT_FS_TYPE_MAX];

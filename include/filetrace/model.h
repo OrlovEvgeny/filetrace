@@ -62,7 +62,7 @@ struct ft_endpoint {
 struct ft_file_id {
     uint64_t dev; /* stat(2) st_dev encoding */
     uint64_t ino;
-    uint32_t gen;
+    uint32_t instance; /* tells apart successive files that were given the same inode number */
     uint32_t pad;
 };
 

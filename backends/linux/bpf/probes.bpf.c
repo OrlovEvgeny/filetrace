@@ -186,13 +186,7 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
         return 0;
 
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
-    if (ts->file.ino != fk.ino || ts->file.dev != fk.dev || ts->file.gen != fk.gen) {
-        ts->file = fk;
-        ts->named = 0;
-        thread_reset(ts);
-    }
-    if (!ts->named)
-        ts->named = name_file(file, inode, &fk, magic);
+    thread_set_file(ts, file, inode, &fk, magic);
 
     ts->pending += (__u64)ret;
     ts->unreported += (__u64)ret;
@@ -236,14 +230,14 @@ int BPF_PROG(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out, 
 
     struct super_block *sb = inode->i_sb;
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
-    name_file(in, inode, &fk, sb->s_magic);
+    __u32 instance = file_instance(in, inode, &fk, sb->s_magic);
 
     __u64 now = bpf_ktime_get_boot_ns();
     struct ft_bpf_agg_key key = {
         .cookie = cookie,
         .tgid = (__u32)(bpf_get_current_pid_tgid() >> 32),
         .kind = FT_BPF_AGG_SENDFILE,
-        .file = {.ino = fk.ino, .dev = fk.dev, .gen = fk.gen},
+        .file = {.ino = fk.ino, .dev = fk.dev, .instance = instance},
     };
     struct ft_bpf_agg_val init = {.first_ns = now};
     struct ft_bpf_agg_val *v = agg_slot(map, &key, &init);
@@ -252,5 +246,12 @@ int BPF_PROG(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out, 
         __sync_fetch_and_add(&v->transfer.sends, 1);
         v->last_ns = now;
     }
+    return 0;
+}
+
+SEC("fentry/__destroy_inode")
+int BPF_PROG(ft_destroy_inode, struct inode *inode)
+{
+    forget_file(inode);
     return 0;
 }

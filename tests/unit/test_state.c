@@ -542,6 +542,52 @@ static void loss_is_reported(void)
     fixture_close(&f);
 }
 
+static void reused_inode_is_another_file(void)
+{
+    struct fixture f;
+    struct ft_query q;
+    struct ft_endpoint remote = endpoint(203, 0, 113, 42, 443);
+
+    fixture_open(&f);
+    emit_exec(&f, PID_A, 1, "nginx", 1000);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 9000, 0);
+
+    /* The same device and inode number, first for one file and then for its successor. */
+    struct ft_event ev = {.type = FT_EVENT_FILE_SEEN, .ts_ns = f.now};
+    ev.file.id = (struct ft_file_id){.dev = 2049, .ino = 77, .instance = 1};
+    ev.file.path = "/data/old.bin";
+    ev.file.deleted = true;
+    ft_state_ingest(f.st, &ev);
+    ev.file.id.instance = 2;
+    ev.file.path = "/data/new.bin";
+    ev.file.deleted = false;
+    ft_state_ingest(f.st, &ev);
+
+    for (uint32_t instance = 1; instance <= 2; instance++) {
+        struct ft_event xfer = {.type = FT_EVENT_TRANSFER, .ts_ns = f.now};
+        xfer.transfer.sock_id = SOCK_A;
+        xfer.transfer.pid = PID_A;
+        xfer.transfer.method = FT_METHOD_SENDFILE;
+        xfer.transfer.file = (struct ft_file_id){.dev = 2049, .ino = 77, .instance = instance};
+        xfer.transfer.first_ns = f.now;
+        xfer.transfer.bytes = 1000 * instance;
+        ft_state_ingest(f.st, &xfer);
+    }
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.sort = FT_SORT_BYTES;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    CHECK_STR(f.rows.transfers[0].path, "/data/new.bin");
+    CHECK_U64(f.rows.transfers[0].bytes, 2000);
+    CHECK(!(f.rows.transfers[0].flags & FT_XFER_FILE_DELETED));
+    CHECK_STR(f.rows.transfers[1].path, "/data/old.bin");
+    CHECK_U64(f.rows.transfers[1].bytes, 1000);
+    CHECK(f.rows.transfers[1].flags & FT_XFER_FILE_DELETED);
+    CHECK_U64(f.rows.transfers[0].ino, f.rows.transfers[1].ino);
+    fixture_close(&f);
+}
+
 static void tables_stay_bounded(void)
 {
     struct ft_state_config cfg;
@@ -584,5 +630,6 @@ void test_state(void)
     process_lifecycle();
     sockets_and_flows();
     loss_is_reported();
+    reused_inode_is_another_file();
     tables_stay_bounded();
 }

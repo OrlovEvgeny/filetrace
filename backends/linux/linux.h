@@ -13,6 +13,7 @@ enum ft_probe_group : uint8_t {
     FT_PG_NET_IPV6,
     FT_PG_FILE_READ,
     FT_PG_SENDFILE,
+    FT_PG_FILE_END, /* notices when a deleted file's inode number becomes free */
     FT_PG_COUNT,
 };
 
@@ -33,7 +34,7 @@ struct ft_probe_def {
     enum ft_mode min_mode;
 };
 
-#define FT_LINUX_PROBES 10
+#define FT_LINUX_PROBES 11
 
 extern const struct ft_probe_def ft_linux_probe_defs[FT_LINUX_PROBES];
 

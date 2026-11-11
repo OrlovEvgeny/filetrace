@@ -96,6 +96,7 @@ struct ft_flow {
 
 struct ft_file {
     struct ft_file_id id;
+    uint32_t generation;
     uint32_t mnt_id;
     uint32_t mntns;
     uint64_t first_ns;

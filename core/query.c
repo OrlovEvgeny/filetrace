@@ -431,7 +431,6 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
         row->read_bytes = t->read_bytes;
         row->dev = t->file.dev;
         row->ino = t->file.ino;
-        row->gen = t->file.gen;
         row->ops = (uint32_t)(t->ops > UINT32_MAX ? UINT32_MAX : t->ops);
         row->alternations = (uint32_t)(t->alternations > UINT32_MAX ? UINT32_MAX : t->alternations);
         row->evidence = evidence;
@@ -446,6 +445,7 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
 
         const struct ft_file *f = ft_table_find(st->files, &t->file);
         if (f) {
+            row->gen = f->generation;
             ft_strlcpy(row->fs_type, f->fs_type, sizeof(row->fs_type));
             if (f->deleted)
                 row->flags |= FT_XFER_FILE_DELETED;

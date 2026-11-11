@@ -13,6 +13,7 @@ static const char *const group_titles[FT_PG_COUNT] = {
     [FT_PG_NET_IPV6] = "IPv6 send and receive probes",
     [FT_PG_FILE_READ] = "File read probe",
     [FT_PG_SENDFILE] = "sendfile probe",
+    [FT_PG_FILE_END] = "File deletion probe",
 };
 
 static const char *probe_problem(const struct ft_probe_status *st, char *buf, size_t size)

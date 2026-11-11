@@ -32,6 +32,7 @@ const struct ft_probe_def ft_linux_probe_defs[FT_LINUX_PROBES] = {
     {"ft_inet6_recvmsg", "inet6_recvmsg", "fexit", 4, FT_PG_NET_IPV6, FT_MODE_MINIMAL},
     {"ft_vfs_read", "vfs_read", "fexit", 4, FT_PG_FILE_READ, FT_MODE_STANDARD},
     {"ft_splice_direct", "do_splice_direct", "fexit", 6, FT_PG_SENDFILE, FT_MODE_STANDARD},
+    {"ft_destroy_inode", "__destroy_inode", "fentry", 1, FT_PG_FILE_END, FT_MODE_STANDARD},
 };
 
 static char last_message[512];
@@ -354,13 +355,13 @@ static void on_sock_state(struct ft_backend *b, const struct ft_bpf_ev_sock *e)
     emit(b, &ev);
 }
 
-static struct ft_file_id file_id(uint32_t kernel_dev, uint64_t ino, uint32_t gen)
+static struct ft_file_id file_id(uint32_t kernel_dev, uint64_t ino, uint32_t instance)
 {
     /* The kernel packs dev_t as major:12 minor:20; stat(2) reports makedev(). */
     return (struct ft_file_id){
         .dev = makedev(kernel_dev >> 20, kernel_dev & 0xfffff),
         .ino = ino,
-        .gen = gen,
+        .instance = instance,
     };
 }
 
@@ -402,7 +403,8 @@ static void on_file(struct ft_backend *b, const struct ft_bpf_ev_file *e, size_t
         .ts_ns = e->hdr.ts_ns,
         .file =
             {
-                .id = file_id(e->dev, e->ino, e->gen),
+                .id = file_id(e->dev, e->ino, e->instance),
+                .generation = e->gen,
                 .mnt_id = e->mnt_id,
                 .mntns = e->mntns,
                 .deleted = (e->flags & FT_BPF_FILE_DELETED) != 0,
@@ -484,7 +486,7 @@ static void emit_transfer(struct ft_backend *b, const struct agg_record *r)
                 .sock_id = r->key.cookie,
                 .pid = r->key.tgid,
                 .method = sendfile ? FT_METHOD_SENDFILE : FT_METHOD_READ_SEND,
-                .file = file_id(r->key.file.dev, r->key.file.ino, r->key.file.gen),
+                .file = file_id(r->key.file.dev, r->key.file.ino, r->key.file.instance),
                 .first_ns = r->val.first_ns,
                 .bytes = r->val.transfer.sent_bytes,
                 .read_bytes = r->val.transfer.read_bytes,
