@@ -164,6 +164,14 @@ settle
 expect "read before a handshake: CA bundle not reported" \
     "$(ft files --path "$data/ca-bundle.crt" --format csv | rows)" 0
 
+# The same, with the hello received on a second connection: a receive on any socket ends
+# what the read could claim.
+"$workload" readrecvelsewhere "$data/upload-other.bin" 300000 "$data/ca-other.crt" 200000 \
+    >/dev/null
+settle
+expect "receive on another connection: CA bundle not reported" \
+    "$(ft files --path "$data/ca-other.crt" --format csv | rows)" 0
+
 # Neither is sending a sliver of what was read.
 "$workload" readlittle "$data/bundle.bin" 400000 >/dev/null
 settle

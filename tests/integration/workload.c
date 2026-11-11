@@ -292,6 +292,46 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
     stop_sink(&sink);
 }
 
+/*
+ * readrecvelsewhere <path> <bytes> <bundle> <bundle bytes>: like readhandshake, but the hello
+ * comes back on a second connection, and the file then goes out on the first.
+ */
+static void scenario_read_recv_elsewhere(const char *path, size_t size, const char *bundle,
+                                         size_t bundle_size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink other = start_sink(SOCK_STREAM, false, true);
+    make_file(path, size);
+    make_file(bundle, bundle_size);
+
+    char *contents = malloc(size);
+    char *trust = malloc(bundle_size);
+    char greeting[6];
+    if (!contents || !trust)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    int ca = open_file(bundle);
+    if (read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+        die("read");
+    int sock = connect_sink(&sink);
+    int elsewhere = connect_sink(&other);
+    send_all(sock, "hello\n", 6);
+    if (recv(elsewhere, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
+        die("recv");
+    send_all(sock, contents, size);
+    close(elsewhere);
+    close(sock);
+    close(ca);
+    close(file);
+    free(contents);
+    free(trust);
+    report("readrecvelsewhere", path, size, sink.port);
+    stop_sink(&other);
+    stop_sink(&sink);
+}
+
 /* readlittle <path> <bytes>: sends only a sliver of what it read */
 static void scenario_read_little(const char *path, size_t size)
 {
@@ -613,6 +653,8 @@ int main(int argc, char **argv)
         scenario_read_then_recv(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readhandshake") == 0 && argc == 6)
         scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "readrecvelsewhere") == 0 && argc == 6)
+        scenario_read_recv_elsewhere(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "readlittle") == 0 && argc == 4)
         scenario_read_little(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "fdreuse") == 0 && argc == 5)

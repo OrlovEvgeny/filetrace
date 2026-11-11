@@ -22,7 +22,7 @@ struct sock_track {
     __u8 claim_fresh;
     __u32 claim_tgid;
     __u32 claim_tid;
-    __u32 pad;
+    __u32 claim_received; /* the thread's receive count when it made the claim */
     struct file_ref claim_file;
     __u64 claim_bytes; /* most that the next bytes sent can carry of the file */
     __u64 claim_read;
@@ -249,12 +249,13 @@ static __always_inline void tcp_adopt(struct sock *sk, struct sock_track *t)
     }
 }
 
-/* Hands a thread back the part of its read that the socket did not take. */
+/* Hands a thread back the part of its read that the socket did not take, unless it has received
+ * since: a receive on any socket ends the read's claim, as it ends the read itself. */
 static __always_inline void claim_release(struct sock_track *t, struct thread_state *ts, __u32 tid)
 {
     if (ts && t->claim_kind == FT_BPF_AGG_READ_SEND && t->claim_tid == tid &&
-        t->claim_file.ino == ts->file.ino && t->claim_file.dev == ts->file.dev &&
-        t->claim_file.instance == ts->file.instance) {
+        t->claim_received == ts->received && t->claim_file.ino == ts->file.ino &&
+        t->claim_file.dev == ts->file.dev && t->claim_file.instance == ts->file.instance) {
         ts->pending += t->claim_bytes;
         ts->unreported += t->claim_read;
     }
@@ -302,6 +303,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     t->claim_fresh = ts->fresh;
     t->claim_tgid = (__u32)(ids >> 32);
     t->claim_tid = (__u32)ids;
+    t->claim_received = ts->received;
     thread_reset(ts);
     ts->last_ns = now;
     return 0;
@@ -327,15 +329,11 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
     t->rx_tgid = tgid;
 
     if (cfg.file_corr) {
-        __u32 tid = (__u32)bpf_get_current_pid_tgid();
-        /* What the thread claimed with an earlier send ends here too, or its next send hands it
-         * back to the thread and the read outlives the receive. */
-        if (t->claim_kind == FT_BPF_AGG_READ_SEND && t->claim_tid == tid)
-            claim_release(t, NULL, tid);
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
             thread_reset(ts);
+            ts->received++;
         }
     }
     return 0;
@@ -600,6 +598,7 @@ int BPF_KPROBE(ft_skb_consume_udp, struct sock *sk, struct sk_buff *skb, int len
         if (ts) {
             read_sync(ts);
             thread_reset(ts);
+            ts->received++;
         }
     }
     return 0;
