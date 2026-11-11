@@ -94,7 +94,10 @@ struct file_ref {
     __u32 instance;
 };
 
-/* The file a thread read most recently and how much of it is unsent. */
+/*
+ * The file a thread read most recently and how much of it is unsent, and apart from it the
+ * background file it read last: a candidate only for sends that no other read accounts for.
+ */
 struct thread_state {
     struct file_ref file;
     __u32 gen;
@@ -105,8 +108,17 @@ struct thread_state {
     __u64 read_ns;    /* when the file was last read */
     __u64 rchar_mark; /* the task's read counter up to which reads are accounted */
     __u8 fresh;
-    __u8 reading;   /* the read counter has grown only by reads of this file */
-    __u32 received; /* receives seen; a claim made before the last one is not handed back */
+    __u8 reading; /* the read counter has grown only by reads of this file */
+    __u8 bg_fresh;
+    __u8 bg_reading; /* the read counter has grown only by reads of bg_file */
+    __u32 received;  /* receives seen; a claim made before the last one is not handed back */
+    struct file_ref bg_file;
+    __u32 bg_gen;
+    __u32 bg_forgotten;
+    __u64 bg_pending;
+    __u64 bg_unreported;
+    __u64 bg_last_ns;
+    __u64 bg_read_ns;
 };
 
 struct {
@@ -122,6 +134,13 @@ struct {
     __type(key, struct file_key);
     __type(value, __u32);
 } known_files SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, FT_BPF_BACKGROUND_MAX);
+    __type(key, struct ft_bpf_background_key);
+    __type(value, __u8);
+} background_files SEC(".maps");
 
 static __u32 last_file_instance;
 static __u32 forgotten_files;
@@ -267,45 +286,87 @@ static __always_inline struct ft_bpf_agg_val *agg_slot(void *map, const struct f
     return bpf_map_lookup_elem(map, key);
 }
 
-static __always_inline void thread_reset(struct thread_state *ts)
+static __always_inline void foreground_reset(struct thread_state *ts)
 {
     ts->pending = 0;
     ts->unreported = 0;
     ts->fresh = 0;
 }
 
-/* Attributes a send to the file this thread just read, up to what of it is still unsent. */
-static __always_inline void correlate_send(void *map, __u64 cookie, __u32 tgid, __u64 sent,
-                                           __u64 now)
+static __always_inline void background_reset(struct thread_state *ts)
 {
-    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
-    if (!ts || !ts->pending)
-        return;
-    if (now - ts->last_ns > cfg.corr_window_ns) {
-        thread_reset(ts);
-        return;
-    }
+    ts->bg_pending = 0;
+    ts->bg_unreported = 0;
+    ts->bg_fresh = 0;
+}
 
-    __u64 take = sent < ts->pending ? sent : ts->pending;
+static __always_inline void thread_reset(struct thread_state *ts)
+{
+    foreground_reset(ts);
+    background_reset(ts);
+}
+
+static __always_inline bool is_background(const struct file_key *fk)
+{
+    struct ft_bpf_background_key key = {.ino = fk->ino, .dev = fk->dev};
+    return bpf_map_lookup_elem(&background_files, &key) != NULL;
+}
+
+/* Adds a send of up to *pending bytes of the file to the counters, and takes it off *pending. */
+static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
+                                        const struct file_ref *file, __u8 background, __u64 sent,
+                                        __u64 *pending, __u64 *unreported, __u8 *fresh, __u64 now)
+{
+    __u64 take = sent < *pending ? sent : *pending;
     struct ft_bpf_agg_key key = {
         .cookie = cookie,
         .tgid = tgid,
         .kind = FT_BPF_AGG_READ_SEND,
-        .file = {.ino = ts->file.ino, .dev = ts->file.dev, .instance = ts->file.instance},
+        .background = background,
+        .file = {.ino = file->ino, .dev = file->dev, .instance = file->instance},
     };
     struct ft_bpf_agg_val init = {.first_ns = now};
     struct ft_bpf_agg_val *v = agg_slot(map, &key, &init);
     if (v) {
         __sync_fetch_and_add(&v->transfer.sent_bytes, take);
-        __sync_fetch_and_add(&v->transfer.read_bytes, ts->unreported);
+        __sync_fetch_and_add(&v->transfer.read_bytes, *unreported);
         __sync_fetch_and_add(&v->transfer.sends, 1);
-        __sync_fetch_and_add(&v->transfer.alternations, ts->fresh);
+        __sync_fetch_and_add(&v->transfer.alternations, *fresh);
         v->last_ns = now;
     }
-    ts->pending -= take;
-    ts->unreported = 0;
-    ts->fresh = 0;
-    ts->last_ns = now;
+    *pending -= take;
+    *unreported = 0;
+    *fresh = 0;
+}
+
+/*
+ * Attributes a send to the file this thread just read, up to what of it is still unsent, or,
+ * when no such read accounts for it, to the background file the thread read last.
+ */
+static __always_inline void correlate_send(void *map, __u64 cookie, __u32 tgid, __u64 sent,
+                                           __u64 now)
+{
+    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
+    if (!ts)
+        return;
+    if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
+        foreground_reset(ts);
+    if (ts->pending) {
+        charge_send(map, cookie, tgid, &ts->file, 0, sent, &ts->pending, &ts->unreported,
+                    &ts->fresh, now);
+        ts->last_ns = now;
+        background_reset(ts);
+        return;
+    }
+    if (!ts->bg_pending)
+        return;
+    if (now - ts->bg_last_ns > cfg.corr_window_ns) {
+        background_reset(ts);
+        return;
+    }
+    charge_send(map, cookie, tgid, &ts->bg_file, 1, sent, &ts->bg_pending, &ts->bg_unreported,
+                &ts->bg_fresh, now);
+    ts->bg_last_ns = now;
 }
 
 /* Pseudo filesystems whose regular files are kernel state, not stored data. */
@@ -475,6 +536,26 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
     }
     if (!ts->file.instance)
         ts->file.instance = file_instance(file, inode, fk, fs_magic);
+}
+
+/* Points the thread's background slot at the file, starting it over if that is another file. */
+static __always_inline void thread_set_background(struct thread_state *ts, struct file *file,
+                                                  struct inode *inode, const struct file_key *fk,
+                                                  __u64 fs_magic)
+{
+    if (ts->bg_file.ino != fk->ino || ts->bg_file.dev != fk->dev || ts->bg_gen != fk->gen) {
+        ts->bg_file.ino = fk->ino;
+        ts->bg_file.dev = fk->dev;
+        ts->bg_file.instance = 0;
+        ts->bg_gen = fk->gen;
+        background_reset(ts);
+    }
+    if (ts->bg_forgotten != forgotten_files) {
+        ts->bg_forgotten = forgotten_files;
+        ts->bg_file.instance = 0;
+    }
+    if (!ts->bg_file.instance)
+        ts->bg_file.instance = file_instance(file, inode, fk, fs_magic);
 }
 
 /* A deleted file is gone for good once its inode is destroyed. */

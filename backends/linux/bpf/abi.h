@@ -6,6 +6,7 @@
 #define FT_BPF_NAME_MAX 256
 #define FT_BPF_PATH_BUF 4096
 #define FT_BPF_PATH_DEPTH 64
+#define FT_BPF_BACKGROUND_MAX 16384
 
 enum ft_bpf_event_kind {
     FT_BPF_EV_EXEC = 1,
@@ -87,8 +88,8 @@ struct ft_bpf_agg_key {
     __u64 cookie;
     __u32 tgid;
     __u8 kind;
-    __u8 pad;
-    __u16 rport; /* FLOW: host byte order */
+    __u8 background; /* READ_SEND: charged to the thread's background file */
+    __u16 rport;     /* FLOW: host byte order */
     union {
         __u8 raddr[16]; /* FLOW */
         struct {
@@ -133,6 +134,13 @@ enum ft_bpf_counter {
     FT_BPF_CNT_PATH_BUSY = 3,
     FT_BPF_CNT_AGG_INSERTS = 4,
     FT_BPF_CNT_MAX = 5,
+};
+
+/* A file the agent names as background: reading it does not change what a thread sends. */
+struct ft_bpf_background_key {
+    __u64 ino;
+    __u32 dev; /* the kernel's encoding: major in the top 12 bits, minor in the low 20 */
+    __u32 pad;
 };
 
 struct ft_bpf_cfg {

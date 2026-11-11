@@ -457,6 +457,7 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     }
     /* The path can be learned after the first bytes, so this is refreshed every time. */
     t->no_minimum = file && file->no_minimum;
+    t->background = t->background || e->background;
     t->last_ns = ev->ts_ns;
     t->bytes += e->bytes;
     t->read_bytes += e->read_bytes;
@@ -747,6 +748,9 @@ bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,
             if (t->bytes < t->read_bytes / 1000 * st->cfg.inferred_min_permille)
                 return false;
         }
+        /* A file every program reads counts as sent only when all that was read of it went. */
+        if (t->background && t->bytes < t->read_bytes)
+            return false;
         evd |= FT_EVD_THREAD_SEQUENCE;
         if (t->alternations >= 2)
             evd |= FT_EVD_REPEATED;

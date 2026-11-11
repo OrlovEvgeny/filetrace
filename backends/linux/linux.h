@@ -84,4 +84,12 @@ bool ft_linux_privileged(void);
 bool ft_linux_kernel_version(unsigned *major, unsigned *minor);
 void ft_linux_fs_type(uint64_t magic, char *buf, size_t size);
 
+/*
+ * Points the background map at the regular files the patterns name, resolved to their inodes,
+ * and drops what they no longer name. Returns how many files it holds; *truncated tells whether
+ * the patterns named more than the map takes.
+ */
+size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t count,
+                                bool *truncated);
+
 #endif

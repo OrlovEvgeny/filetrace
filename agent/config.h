@@ -30,6 +30,8 @@ struct ft_config {
     size_t exclude_path_count;
     char *no_minimum_paths[FT_CONFIG_MAX_PATTERNS];
     size_t no_minimum_path_count;
+    char *background_paths[FT_CONFIG_MAX_PATTERNS];
+    size_t background_path_count;
 
     /* Accepted and kept, though this build cannot honour them. */
     bool tc_egress;

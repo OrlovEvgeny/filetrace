@@ -24,6 +24,9 @@ struct ft_backend_config {
     uint32_t known_files;    /* file identities remembered as already described */
     uint32_t drain_batch;    /* counters read from the kernel per call */
     uint64_t corr_window_ns; /* longest read-to-send gap that still correlates */
+    /* Borrowed patterns: files whose reads do not change what a thread is sending. */
+    const char *const *background_paths;
+    size_t background_path_count;
 };
 
 void ft_backend_config_defaults(struct ft_backend_config *cfg);

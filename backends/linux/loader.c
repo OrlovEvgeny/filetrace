@@ -397,8 +397,24 @@ struct ft_backend {
     uint64_t queue_bytes;
     uint64_t queue_peak_bytes;
     uint64_t last_flush_ns;
+    int background_fd;
+    uint64_t background_scan_ns; /* when the background map was last brought up to date */
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
+
+/* A bundle replaced by an update is a file with another inode; this long it goes unnoticed. */
+#define BACKGROUND_RESCAN_NS (30 * FT_NS_PER_SEC)
+
+static void background_scan(struct ft_backend *b, uint64_t now_ns)
+{
+    bool truncated = false;
+    size_t held = ft_linux_background_load(b->background_fd, b->cfg.background_paths,
+                                           b->cfg.background_path_count, &truncated);
+    if (truncated && !b->background_scan_ns)
+        ft_log(FT_LOG_WARN, "[correlation] background_paths names more than %d files; %zu are kept",
+               FT_BPF_BACKGROUND_MAX, held);
+    b->background_scan_ns = now_ns;
+}
 
 static void emit(struct ft_backend *b, const struct ft_event *ev)
 {
@@ -614,6 +630,7 @@ static void emit_transfer(struct ft_backend *b, const struct agg_record *r)
                 .first_ns = r->val.first_ns,
                 .bytes = r->val.transfer.sent_bytes,
                 .read_bytes = r->val.transfer.read_bytes,
+                .background = r->key.background != 0,
                 .ops = r->val.transfer.sends,
                 .alternations = r->val.transfer.alternations,
             },
@@ -720,6 +737,8 @@ static void backend_flush(struct ft_backend *b)
 
     memcpy(b->counters, totals, sizeof(b->counters));
     b->last_flush_ns = now_ns;
+    if (b->background_fd >= 0 && now_ns - b->background_scan_ns > BACKGROUND_RESCAN_NS)
+        background_scan(b, now_ns);
 }
 
 static int backend_poll_fd(struct ft_backend *b)
@@ -818,6 +837,9 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     b->queue_bytes = bpf_map__max_entries(events);
     b->ncpus = libbpf_num_possible_cpus();
     b->last_flush_ns = ft_clock_mono_ns();
+    b->background_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_files"));
+    if (b->background_fd >= 0)
+        background_scan(b, b->last_flush_ns);
 
     b->ring = ring_buffer__new(bpf_map__fd(events), on_ring_event, b, nullptr);
     b->cpu_values = calloc((size_t)(b->ncpus > 0 ? b->ncpus : 1), sizeof(uint64_t));

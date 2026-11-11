@@ -129,7 +129,7 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
             correlate_send(map, key.cookie, key.tgid, (__u64)ret, now);
     } else {
         struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
-        if (ts && ts->pending)
+        if (ts && (ts->pending || ts->bg_pending))
             thread_reset(ts);
     }
     return 0;
@@ -186,6 +186,14 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
         return 0;
 
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
+    if (is_background(&fk)) {
+        thread_set_background(ts, file, inode, &fk, magic);
+        ts->bg_pending += (__u64)ret;
+        ts->bg_unreported += (__u64)ret;
+        ts->bg_last_ns = bpf_ktime_get_boot_ns();
+        ts->bg_fresh = 1;
+        return 0;
+    }
     thread_set_file(ts, file, inode, &fk, magic);
 
     ts->pending += (__u64)ret;

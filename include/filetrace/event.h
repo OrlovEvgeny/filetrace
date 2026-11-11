@@ -75,6 +75,7 @@ struct ft_ev_transfer {
     uint64_t read_bytes; /* READ_SEND: bytes read from the file */
     uint32_t ops;
     uint32_t alternations; /* READ_SEND: read-then-send sequences */
+    bool background;       /* READ_SEND: of a file in [correlation] background_paths */
 };
 
 enum ft_loss_kind : uint8_t {

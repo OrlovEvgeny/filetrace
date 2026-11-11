@@ -178,6 +178,7 @@ struct ft_transfer {
     uint64_t counted_bytes; /* already added to the exported counters */
     bool counted;
     bool no_minimum; /* the file matches [correlation] no_minimum_paths */
+    bool background; /* bytes were charged to a file in [correlation] background_paths */
     struct ft_rate rate;
     char comm[FT_COMM_MAX];
 };

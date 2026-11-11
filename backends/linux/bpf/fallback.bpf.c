@@ -20,6 +20,7 @@ struct sock_track {
     __u8 rx_live;
     __u8 claim_kind; /* enum ft_bpf_agg_kind, or 0 */
     __u8 claim_fresh;
+    __u8 claim_background; /* the claim was made for the thread's background file */
     __u32 claim_tgid;
     __u32 claim_tid;
     __u32 claim_received; /* the thread's receive count when it made the claim */
@@ -99,7 +100,7 @@ static __always_inline void tcp_flow_add(void *map, struct sock *sk, __u64 id, _
 /* Credits the thread with what it read since the mark, as counted by the kernel. */
 static __always_inline void read_sync(struct thread_state *ts)
 {
-    if (!ts->reading)
+    if (!ts->reading && !ts->bg_reading)
         return;
 
     struct task_struct *task = (void *)bpf_get_current_task();
@@ -109,6 +110,13 @@ static __always_inline void read_sync(struct thread_state *ts)
     ts->rchar_mark = rchar;
     if (!delta)
         return;
+    if (ts->bg_reading) {
+        ts->bg_pending += delta;
+        ts->bg_unreported += delta;
+        ts->bg_last_ns = ts->bg_read_ns;
+        ts->bg_fresh = 1;
+        return;
+    }
     ts->pending += delta;
     ts->unreported += delta;
     ts->last_ns = ts->read_ns;
@@ -136,6 +144,7 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
     if (!tracked) {
         /* What this call reads would be mistaken for bytes of the tracked file. */
         ts->reading = 0;
+        ts->bg_reading = 0;
         return 0;
     }
 
@@ -144,12 +153,21 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
         .dev = BPF_CORE_READ(sb, s_dev),
         .gen = BPF_CORE_READ(inode, i_generation),
     };
+    struct task_struct *task = (void *)bpf_get_current_task();
+    if (is_background(&fk)) {
+        thread_set_background(ts, file, inode, &fk, magic);
+        ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
+        ts->bg_read_ns = bpf_ktime_get_boot_ns();
+        ts->bg_reading = 1;
+        ts->reading = 0;
+        return 0;
+    }
     thread_set_file(ts, file, inode, &fk, magic);
 
-    struct task_struct *task = (void *)bpf_get_current_task();
     ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
     ts->read_ns = bpf_ktime_get_boot_ns();
     ts->reading = 1;
+    ts->bg_reading = 0;
     return 0;
 }
 
@@ -175,6 +193,7 @@ static __always_inline void claim_settle(void *map, struct sock_track *t, __u64 
         .cookie = t->id,
         .tgid = t->claim_tgid,
         .kind = t->claim_kind,
+        .background = t->claim_background,
         .file = {.ino = t->claim_file.ino,
                  .dev = t->claim_file.dev,
                  .instance = t->claim_file.instance},
@@ -191,8 +210,10 @@ static __always_inline void claim_settle(void *map, struct sock_track *t, __u64 
     t->claim_bytes -= take;
     t->claim_read = 0;
     t->claim_fresh = 0;
-    if (!t->claim_bytes)
+    if (!t->claim_bytes) {
         t->claim_kind = 0;
+        t->claim_background = 0;
+    }
 }
 
 /* Accounts what was queued for sending since the socket was last looked at. */
@@ -254,12 +275,21 @@ static __always_inline void tcp_adopt(struct sock *sk, struct sock_track *t)
 static __always_inline void claim_release(struct sock_track *t, struct thread_state *ts, __u32 tid)
 {
     if (ts && t->claim_kind == FT_BPF_AGG_READ_SEND && t->claim_tid == tid &&
-        t->claim_received == ts->received && t->claim_file.ino == ts->file.ino &&
-        t->claim_file.dev == ts->file.dev && t->claim_file.instance == ts->file.instance) {
-        ts->pending += t->claim_bytes;
-        ts->unreported += t->claim_read;
+        t->claim_received == ts->received) {
+        if (t->claim_background && t->claim_file.ino == ts->bg_file.ino &&
+            t->claim_file.dev == ts->bg_file.dev &&
+            t->claim_file.instance == ts->bg_file.instance) {
+            ts->bg_pending += t->claim_bytes;
+            ts->bg_unreported += t->claim_read;
+        } else if (!t->claim_background && t->claim_file.ino == ts->file.ino &&
+                   t->claim_file.dev == ts->file.dev &&
+                   t->claim_file.instance == ts->file.instance) {
+            ts->pending += t->claim_bytes;
+            ts->unreported += t->claim_read;
+        }
     }
     t->claim_kind = 0;
+    t->claim_background = 0;
     t->claim_bytes = 0;
     t->claim_read = 0;
     t->claim_fresh = 0;
@@ -289,23 +319,35 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     if (!ts)
         return 0;
     read_sync(ts);
-    if (!ts->pending)
-        return 0;
-    if (now - ts->last_ns > cfg.corr_window_ns) {
-        thread_reset(ts);
-        return 0;
-    }
+    if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
+        foreground_reset(ts);
 
     t->claim_kind = FT_BPF_AGG_READ_SEND;
-    t->claim_file = ts->file;
-    t->claim_bytes = ts->pending;
-    t->claim_read = ts->unreported;
-    t->claim_fresh = ts->fresh;
     t->claim_tgid = (__u32)(ids >> 32);
     t->claim_tid = (__u32)ids;
     t->claim_received = ts->received;
-    thread_reset(ts);
-    ts->last_ns = now;
+    if (ts->pending) {
+        t->claim_file = ts->file;
+        t->claim_bytes = ts->pending;
+        t->claim_read = ts->unreported;
+        t->claim_fresh = ts->fresh;
+        t->claim_background = 0;
+        thread_reset(ts);
+        ts->last_ns = now;
+        return 0;
+    }
+    if (ts->bg_pending && now - ts->bg_last_ns <= cfg.corr_window_ns) {
+        t->claim_file = ts->bg_file;
+        t->claim_bytes = ts->bg_pending;
+        t->claim_read = ts->bg_unreported;
+        t->claim_fresh = ts->bg_fresh;
+        t->claim_background = 1;
+        background_reset(ts);
+        ts->bg_last_ns = now;
+        return 0;
+    }
+    t->claim_kind = 0;
+    background_reset(ts);
     return 0;
 }
 
@@ -431,6 +473,7 @@ int BPF_KPROBE(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out
     if (ts) {
         read_sync(ts);
         ts->reading = 0;
+        ts->bg_reading = 0;
     }
 
     struct inode *inode = BPF_CORE_READ(in, f_inode);
@@ -471,6 +514,7 @@ int BPF_KPROBE(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out
     __u64 left = size > pos ? (__u64)(size - pos) : 0;
 
     t->claim_kind = FT_BPF_AGG_SENDFILE;
+    t->claim_background = 0;
     t->claim_file = (struct file_ref){.ino = fk.ino, .dev = fk.dev, .instance = instance};
     t->claim_bytes = len < left ? len : left;
     t->claim_read = 0;

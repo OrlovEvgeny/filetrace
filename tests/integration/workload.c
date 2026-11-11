@@ -332,6 +332,51 @@ static void scenario_read_recv_elsewhere(const char *path, size_t size, const ch
     stop_sink(&sink);
 }
 
+/*
+ * readbundle <path> <bytes> <bundle> <bundle bytes>: the file is read whole, then a CA bundle,
+ * and the file is sent with nothing received in between.
+ */
+static void scenario_read_bundle(const char *path, size_t size, const char *bundle,
+                                 size_t bundle_size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    make_file(path, size);
+    make_file(bundle, bundle_size);
+
+    char *contents = malloc(size);
+    char *trust = malloc(bundle_size);
+    if (!contents || !trust)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    int ca = open_file(bundle);
+    if (read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+        die("read");
+    int sock = connect_sink(&sink);
+    send_all(sock, contents, size);
+    close(sock);
+    close(ca);
+    close(file);
+    free(contents);
+    free(trust);
+    report("readbundle", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/* upload <path> <chunk>: sends a file that already exists, in reads of chunk bytes */
+static void scenario_upload(const char *path, size_t chunk)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    int file = open_file(path);
+    int sock = connect_sink(&sink);
+    read_send(sock, file, chunk);
+    close(sock);
+    close(file);
+    report("upload", path, 0, sink.port);
+    stop_sink(&sink);
+}
+
 /* readlittle <path> <bytes>: sends only a sliver of what it read */
 static void scenario_read_little(const char *path, size_t size)
 {
@@ -655,6 +700,10 @@ int main(int argc, char **argv)
         scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "readrecvelsewhere") == 0 && argc == 6)
         scenario_read_recv_elsewhere(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "readbundle") == 0 && argc == 6)
+        scenario_read_bundle(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "upload") == 0 && argc == 4)
+        scenario_upload(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readlittle") == 0 && argc == 4)
         scenario_read_little(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "fdreuse") == 0 && argc == 5)

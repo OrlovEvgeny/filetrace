@@ -455,6 +455,41 @@ expect "no minimum: other file not reported" \
 stop_agent
 expect "no minimum agent exit code" "$?" 0
 
+# Files in background_paths do not displace what a thread read before them, and count as sent
+# only when all that was read of them went.
+cat >"$work/background.toml" <<CONFIG
+[correlation]
+background_paths = ["$data/bg-*", "/etc/passwd"]
+no_minimum_paths = ["/etc/passwd"]
+CONFIG
+# The agent resolves the patterns to inodes when it starts, so the files exist by then.
+: >"$data/bg-ca.crt"
+: >"$data/bg-gai.conf"
+: >"$data/bg-whole.bin"
+start_agent --config "$work/background.toml" ||
+    { echo "FAIL: the agent did not start with background_paths"; exit 1; }
+"$workload" readbundle "$data/up-bundle.bin" 300000 "$data/bg-ca.crt" 200000 >/dev/null
+"$workload" readlittle "$data/bg-gai.conf" 4000 >/dev/null
+"$workload" readsend "$data/bg-whole.bin" 4096 65536 >/dev/null
+"$workload" upload /etc/passwd 65536 >/dev/null
+settle
+csv=$(ft files --path "$data/up-bundle.bin" --format csv)
+expect "background: file read before the bundle reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "background: file read before the bundle bytes" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 300000
+expect "background: bundle not reported" "$(ft files --path "$data/bg-ca.crt" --format csv | rows)" 0
+expect "background: part of a read not reported" \
+    "$(ft files --path "$data/bg-gai.conf" --format csv | rows)" 0
+csv=$(ft files --path "$data/bg-whole.bin" --format csv)
+expect "background: whole read reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "background: whole read bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 4096
+csv=$(ft files --path /etc/passwd --format csv)
+expect "background: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "background: /etc/passwd upload bytes" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "$(stat -L -c %s /etc/passwd)"
+stop_agent
+expect "background agent exit code" "$?" 0
+
 # A configuration file decides what is collected and how the commands print.
 cat >"$work/config.toml" <<CONFIG
 [agent]

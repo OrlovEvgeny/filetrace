@@ -158,11 +158,12 @@ static void emit_file(struct fixture *f, uint64_t ino, const char *path, bool de
     ft_state_ingest(f->st, &ev);
 }
 
-static void emit_transfer(struct fixture *f, uint64_t sock, uint32_t pid, uint64_t ino,
-                          enum ft_method method, uint64_t bytes, uint64_t read_bytes,
-                          uint32_t alternations)
+static void emit_transfer_of(struct fixture *f, uint64_t sock, uint32_t pid, uint64_t ino,
+                             enum ft_method method, uint64_t bytes, uint64_t read_bytes,
+                             uint32_t alternations, bool background)
 {
     struct ft_event ev = {.type = FT_EVENT_TRANSFER, .ts_ns = f->now};
+    ev.transfer.background = background;
     ev.transfer.sock_id = sock;
     ev.transfer.pid = pid;
     ev.transfer.method = method;
@@ -173,6 +174,13 @@ static void emit_transfer(struct fixture *f, uint64_t sock, uint32_t pid, uint64
     ev.transfer.ops = 1;
     ev.transfer.alternations = alternations;
     ft_state_ingest(f->st, &ev);
+}
+
+static void emit_transfer(struct fixture *f, uint64_t sock, uint32_t pid, uint64_t ino,
+                          enum ft_method method, uint64_t bytes, uint64_t read_bytes,
+                          uint32_t alternations)
+{
+    emit_transfer_of(f, sock, pid, ino, method, bytes, read_bytes, alternations, false);
 }
 
 static void sendfile_is_exact(void)
@@ -1006,6 +1014,60 @@ static void listed_files_have_no_minimum(void)
     fixture_close(&f);
 }
 
+/* A background file counts as sent only when a send took all that was read of it. */
+static void background_files_need_the_whole_read(void)
+{
+    static const char *const listed[] = {"/etc/passwd"};
+    struct ft_state_config cfg;
+    struct fixture f;
+    struct ft_query q;
+
+    ft_state_config_defaults(&cfg);
+    fixture_open_with(&f, &cfg);
+    emit_exec(&f, PID_B, 1, "curl", 2000);
+    emit_file(&f, 11, "/etc/ssl/certs/ca-certificates.crt", false);
+    emit_file(&f, 12, "/etc/gai.conf", false);
+    emit_file(&f, 13, "/srv/upload/passwd-copy", false);
+    emit_flow(&f, SOCK_A, PID_B, FT_PROTO_TCP, endpoint(192, 0, 2, 10, 443), 90000000, 4096);
+
+    /* Part of each read went: a ClientHello after the bundle, a request after gai.conf. */
+    emit_transfer_of(&f, SOCK_A, PID_B, 11, FT_METHOD_READ_SEND, 60000, 200000, 1, true);
+    emit_transfer_of(&f, SOCK_A, PID_B, 12, FT_METHOD_READ_SEND, 1551, 2584, 1, true);
+    /* All of it went: a whole file uploaded. */
+    emit_transfer_of(&f, SOCK_A, PID_B, 13, FT_METHOD_READ_SEND, 4096, 4096, 1, true);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK(listed_row(&f, "/srv/upload/passwd-copy"));
+    fixture_close(&f);
+
+    /* The minimums still apply, and no_minimum_paths lifts them as for any file. */
+    fixture_open_with(&f, &cfg);
+    emit_exec(&f, PID_B, 1, "curl", 2000);
+    emit_file(&f, 14, "/etc/passwd", false);
+    emit_flow(&f, SOCK_A, PID_B, FT_PROTO_TCP, endpoint(192, 0, 2, 10, 443), 90000000, 4096);
+    emit_transfer_of(&f, SOCK_A, PID_B, 14, FT_METHOD_READ_SEND, 839, 839, 1, true);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+    fixture_close(&f);
+
+    cfg.no_minimum_paths = listed;
+    cfg.no_minimum_path_count = FT_ARRAY_LEN(listed);
+    fixture_open_with(&f, &cfg);
+    emit_exec(&f, PID_B, 1, "curl", 2000);
+    emit_file(&f, 14, "/etc/passwd", false);
+    emit_flow(&f, SOCK_A, PID_B, FT_PROTO_TCP, endpoint(192, 0, 2, 10, 443), 90000000, 4096);
+    emit_transfer_of(&f, SOCK_A, PID_B, 14, FT_METHOD_READ_SEND, 300, 839, 1, true);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+    emit_transfer_of(&f, SOCK_A, PID_B, 14, FT_METHOD_READ_SEND, 539, 0, 1, true);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK(listed_row(&f, "/etc/passwd"));
+    fixture_close(&f);
+}
+
 static void configured_exclusions(void)
 {
     static const char *const processes[] = {"systemd*", "sshd"};
@@ -1145,6 +1207,7 @@ void test_state(void)
     event_floods_stay_in_their_class();
     configured_exclusions();
     listed_files_have_no_minimum();
+    background_files_need_the_whole_read();
     confidence_threshold();
     tables_stay_bounded();
 }

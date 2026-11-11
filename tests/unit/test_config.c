@@ -1,6 +1,7 @@
 #include "unit/test.h"
 
 #include "agent/config.h"
+#include "filetrace/format.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -242,6 +243,7 @@ static void reports_what_is_wrong(void)
     rejects("[limits]\nflows = 3\n", "[limits] flows: expected a whole number from 64");
     rejects("[filters]\nexclude_paths = \"/proc/*\"\n", "expected a list of strings");
     rejects("[correlation]\nno_minimum_paths = \"/etc/*\"\n", "expected a list of strings");
+    rejects("[correlation]\nbackground_paths = [\"\"]\n", "a pattern is empty");
     rejects("[filters]\nexclude_paths = [\"/proc/*\"\n", "expected ',' or ']'");
     rejects("[otlp]\nevents = [\"file_sent\"]\n", "\"file_sent\" is not an event type");
     rejects("[otlp]\nbatch_size = 5\n", "[otlp] batch_size: expected a whole number from 16");
@@ -314,6 +316,8 @@ static void prints_what_it_reads(void)
     CHECK_U64(reread->warning_count, 0);
     CHECK_U64(reread->agent.state_cfg.max_flows, defaults->agent.state_cfg.max_flows);
     CHECK_U64(reread->agent.backend_cfg.corr_window_ns, defaults->agent.backend_cfg.corr_window_ns);
+    CHECK_U64(reread->background_path_count, defaults->background_path_count);
+    CHECK_STR(reread->background_paths[0], defaults->background_paths[0]);
 
     free(text);
     ft_config_free(first);
@@ -322,10 +326,44 @@ static void prints_what_it_reads(void)
     ft_config_free(reread);
 }
 
+/* The trust stores and resolver files are background unless the list is replaced or emptied. */
+static void background_paths_default_to_shared_files(void)
+{
+    struct ft_config *cfg = ft_config_new();
+    struct ft_error err = {0};
+
+    ft_config_finish(cfg);
+    const struct ft_backend_config *backend = &cfg->agent.backend_cfg;
+    bool bundle = false;
+    bool passwd = false;
+    for (size_t i = 0; i < backend->background_path_count; i++) {
+        const char *pattern = backend->background_paths[i];
+        if (ft_glob_match(pattern, "/etc/ssl/certs/ca-certificates.crt"))
+            bundle = true;
+        if (ft_glob_match(pattern, "/etc/passwd"))
+            passwd = true;
+        CHECK(!ft_glob_match(pattern, "/etc/ssl/private/server.key"));
+    }
+    CHECK(bundle);
+    CHECK(passwd);
+
+    CHECK_U64(load(cfg, "[correlation]\nbackground_paths = []\n", &err), FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK_U64(backend->background_path_count, 0);
+
+    CHECK_U64(load(cfg, "[correlation]\nbackground_paths = [\"/opt/app/ca.pem\"]\n", &err),
+              FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK_U64(backend->background_path_count, 1);
+    CHECK_STR(backend->background_paths[0], "/opt/app/ca.pem");
+    ft_config_free(cfg);
+}
+
 void test_config(void)
 {
     reads_every_section();
     applies_every_kind_of_value();
     reports_what_is_wrong();
     prints_what_it_reads();
+    background_paths_default_to_shared_files();
 }
