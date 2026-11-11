@@ -83,6 +83,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND ${FT_LLVM_STRIP} -g ${FT_BPF_OBJECT}
         DEPENDS
             ${FT_BPF_DIR}/probes.bpf.c
+            ${FT_BPF_DIR}/common.bpf.h
             ${FT_BPF_DIR}/abi.h
             ${FT_BPF_DIR}/kernel_types.h
         COMMENT "Compiling BPF probes"
