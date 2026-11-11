@@ -1,0 +1,266 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - "[0-9][0-9].[0-9]*"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to check
+        required: true
+        type: string
+      version:
+        description: Version the binaries and packages report
+        required: true
+        type: string
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      commit: ${{ steps.resolve.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: resolve
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          echo "version=${REQUESTED:-$(tools/release/version.sh current)}" >>"$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short=12 HEAD)" >>"$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/mise
+      - name: Choose what to compare with
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE" ]; then
+              echo "FILETRACE_BREAKING_AGAINST=.git#ref=origin/$BASE" >>"$GITHUB_ENV"
+              echo "FILETRACE_COMMIT_RANGE=origin/$BASE..HEAD" >>"$GITHUB_ENV"
+          else
+              echo "FILETRACE_BREAKING_AGAINST=.git#ref=$(git rev-parse HEAD~1)" >>"$GITHUB_ENV"
+          fi
+      - run: mise run lint
+
+  test-linux:
+    name: Test (linux ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/mise
+      - run: mise run test:linux
+
+  sanitize:
+    name: Sanitizers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/mise
+      - run: mise run test:sanitize
+
+  test-macos:
+    name: Test (macos)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - run: brew install libnghttp2 pkgconf protobuf-c
+      - uses: $/.github/actions/mise
+      - run: mise run test
+
+  dist-linux:
+    name: Build (linux ${{ matrix.arch }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      FILETRACE_VERSION: ${{ needs.version.outputs.version }}
+      FILETRACE_COMMIT: ${{ needs.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: $/.github/actions/mise
+      - run: mise run test:dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stage-linux-${{ matrix.arch }}
+          path: dist/stage/linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  dist-macos:
+    name: Build (macos ${{ matrix.arch }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: amd64
+            runner: macos-15-intel
+    env:
+      FILETRACE_VERSION: ${{ needs.version.outputs.version }}
+      FILETRACE_COMMIT: ${{ needs.version.outputs.commit }}
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - run: brew install libnghttp2 pkgconf protobuf-c
+      - uses: $/.github/actions/mise
+      - run: mise run dist:macos
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stage-darwin-${{ matrix.arch }}
+          path: dist/stage/darwin-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    name: Package
+    needs: [version, dist-linux, dist-macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      FILETRACE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: stage-*
+          path: dist/stage
+      - name: Name the staged trees after their platforms
+        run: |
+          for tree in dist/stage/stage-*; do
+              mv "$tree" "dist/stage/${tree#dist/stage/stage-}"
+          done
+      - uses: $/.github/actions/mise
+      - run: mise run package
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+            dist/install.sh
+          if-no-files-found: error
+          retention-days: 7
+
+  test-packages:
+    name: Test packages (${{ matrix.arch }})
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: stage-linux-${{ matrix.arch }}
+          path: dist/stage/linux-${{ matrix.arch }}
+      - uses: $/.github/actions/mise
+      - run: mise run test:package
+
+  ci-ok:
+    name: CI
+    if: always()
+    needs: [lint, test-linux, sanitize, test-macos, dist-linux, dist-macos, package, test-packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to have passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+              if [ "$result" != success ]; then
+                  echo "a job ended as: $result"
+                  exit 1
+              fi
+          done

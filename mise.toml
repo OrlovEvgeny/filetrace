@@ -5,6 +5,7 @@ lockfile = true
 lockfile_platforms = ["linux-arm64", "linux-x64", "macos-arm64", "macos-x64"]
 
 [tools]
+actionlint = "1"
 buf = "1"
 # Formatting differs between releases, so the exact version is part of the style.
 clang-format = "23.1.4"
@@ -12,6 +13,7 @@ cmake = "4"
 nfpm = "2"
 ninja = "1"
 shellcheck = "0.11"
+zizmor = "1"
 
 [tasks.build]
 description = "Configure and build the debug tree"
@@ -60,9 +62,13 @@ run = "tools/lint/shell.sh"
 description = "Check the commit subjects on this branch"
 run = "tools/lint/commits.sh"
 
+[tasks."lint:actions"]
+description = "Lint the GitHub Actions workflows"
+run = ["actionlint", "zizmor --offline .github"]
+
 [tasks.lint]
 description = "Run every linter"
-depends = ["fmt:check", "gen:check", "lint:proto", "lint:shell", "lint:commits"]
+depends = ["fmt:check", "gen:check", "lint:proto", "lint:shell", "lint:commits", "lint:actions"]
 
 [tasks.ci]
 description = "Run what continuous integration runs on every change"

@@ -1,8 +1,9 @@
 #!/bin/sh
 # usage: commits.sh [<revision range>]
+# The range defaults to $FILETRACE_COMMIT_RANGE, then to what master lacks.
 set -eu
 
-range=${1:-origin/master..HEAD}
+range=${1:-${FILETRACE_COMMIT_RANGE:-origin/master..HEAD}}
 types='feat|fix|chore|refactor|docs|test|perf'
 failed=0
 
