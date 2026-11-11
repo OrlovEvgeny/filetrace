@@ -262,7 +262,7 @@ expect "closed connections" "$(printf '%s\n' "$csv" | rows)" 3
 expect "no open connections" "$(ft connections --port "$first_port" --active --format csv | rows)" 0
 
 expect_match "table header" "$(ft files --limit 1 | head -1)" \
-    '^FILE +PID +PROCESS +REMOTE +SENT +CONFIDENCE$'
+    '^FILE +PROCESS +DESTINATION +BYTES +METHOD +CONFIDENCE$'
 expect_match "json array" "$(ft files --limit 1 --format json | tr -d '\n')" \
     '^\[ *\{"event":"file_transfer","transfer_id":"tr_[0-9a-f]+".*"confidence":"(exact|inferred)".*\}\]$'
 expect "jsonl lines" "$(ft files --path "$data/reuse-*" --format jsonl | wc -l | tr -d ' ')" 25

@@ -295,8 +295,13 @@ static const struct field process_fields[] = {
 };
 
 static const struct column process_columns[] = {
-    {"PID", "pid", false},   {"PPID", "ppid", false},          {"PROCESS", "name", false},
-    {"USER", "user", false}, {"OUTBOUND", "bytes_sent", true}, {"INBOUND", "bytes_received", true},
+    {"PID", "pid", false},
+    {"PROCESS", "name", false},
+    {"OUTBOUND", "bytes_sent_per_second", true},
+    {"FILES", "files", true},
+    {"CONNECTIONS", "connections", true},
+    {"SENT", "bytes_sent", true},
+    {"RECEIVED", "bytes_received", true},
 };
 
 static void c_proto(const void *row, struct value *v)
@@ -423,8 +428,11 @@ static const struct field connection_fields[] = {
 };
 
 static const struct column connection_columns[] = {
-    {"PROTO", "protocol", false}, {"PID", "pid", false},        {"PROCESS", "process", false},
-    {"LOCAL", "@local", false},   {"REMOTE", "@remote", false}, {"STATE", "state", false},
+    {"PID", "pid", false},           {"PROCESS", "process", false},
+    {"PROTOCOL", "protocol", false}, {"LOCAL", "@local", false},
+    {"REMOTE", "@remote", false},    {"STATE", "state", false},
+    {"SENT", "bytes_sent", true},    {"RECEIVED", "bytes_received", true},
+    {"SOCKET", "socket_id", true},
 };
 
 static void f_proto(const void *row, struct value *v)
@@ -558,9 +566,15 @@ static const struct field flow_fields[] = {
 };
 
 static const struct column flow_columns[] = {
-    {"PROCESS", "process", false}, {"PROTO", "protocol", false},
-    {"LOCAL", "@local", false},    {"REMOTE", "@remote", false},
-    {"SENT", "bytes_sent", true},  {"RECEIVED", "bytes_received", true},
+    {"PID", "pid", false},
+    {"PROCESS", "process", false},
+    {"PROTOCOL", "protocol", false},
+    {"LOCAL", "@local", false},
+    {"REMOTE", "@remote", false},
+    {"SENT", "bytes_sent", true},
+    {"RECEIVED", "bytes_received", true},
+    {"OUTBOUND", "bytes_sent_per_second", true},
+    {"FLOW", "flow_id", true},
 };
 
 static struct ft_host_info host_info;
@@ -727,6 +741,13 @@ static void t_remote(const void *row, struct value *v)
     set_endpoint(v, &r->remote);
 }
 
+static void t_destination(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    ft_addr_format(&r->remote, v->buf, sizeof(v->buf));
+    set_str(v, v->buf);
+}
+
 static void t_sock(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
@@ -847,16 +868,17 @@ static const struct field transfer_fields[] = {
     {"transfer.incomplete", 0, t_incomplete},
     {"@file", F_VIRTUAL, t_file_column},
     {"@remote", F_VIRTUAL, t_remote},
+    {"@destination", F_VIRTUAL, t_destination},
     {"@method", F_VIRTUAL, t_method_column},
     {"@confidence", F_VIRTUAL | F_UPPER, t_confidence_column},
 };
 
 static const struct column file_columns[] = {
     {"FILE", "@file", false},
-    {"PID", "process.pid", false},
     {"PROCESS", "process.name", false},
-    {"REMOTE", "@remote", false},
-    {"SENT", "transfer.bytes_sent", true},
+    {"DESTINATION", "@destination", false},
+    {"BYTES", "transfer.bytes_sent", true},
+    {"METHOD", "@method", false},
     {"CONFIDENCE", "@confidence", false},
 };
 

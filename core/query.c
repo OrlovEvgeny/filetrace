@@ -250,10 +250,16 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
         if (!in_span(&sp, p->start_ns, p->last_ns ? p->last_ns : now_ns))
             continue;
 
+        /* Rates rank what is moving now; totals order everything that is idle. */
         uint64_t key;
+        uint64_t tie = UINT32_MAX - p->pid;
         switch (q->sort) {
         case FT_SORT_INBOUND:
-            key = p->q_rx;
+            key = p->q_rx_rate;
+            tie = p->q_rx;
+            break;
+        case FT_SORT_BYTES:
+            key = p->q_tx + p->q_rx;
             break;
         case FT_SORT_CONNECTIONS:
             key = p->q_connections;
@@ -264,11 +270,9 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
         case FT_SORT_TIME:
             key = p->last_ns;
             break;
-        case FT_SORT_RATE:
-            key = p->q_tx_rate;
-            break;
         default:
-            key = p->q_tx;
+            key = p->q_tx_rate;
+            tie = p->q_tx;
             break;
         }
         if (q->min_bytes && (q->sort == FT_SORT_INBOUND ? p->q_rx : p->q_tx) < q->min_bytes)
@@ -276,7 +280,7 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
         candidates_add(&c, (struct candidate){
                                .text = q->sort == FT_SORT_PROCESS ? p->comm : nullptr,
                                .key = key,
-                               .tie = UINT32_MAX - p->pid,
+                               .tie = tie,
                                .entry = p,
                            });
     }

@@ -90,10 +90,9 @@ static void transfers(void)
     CHECK(ft_rows_append(&rows, row, ft_row_transfer_size(row)));
 
     char *text = squeeze(render(FT_VIEW_FILES, &rows, FT_FMT_TABLE, false));
-    CHECK_STR(text,
-              "FILE PID PROCESS REMOTE SENT CONFIDENCE\n"
-              "/data/export/report, \"final\".csv 1842 nginx 203.0.113.42:52144 141 MB EXACT\n"
-              "unknown 2910 python 192.0.2.10:443 12.0 MB UNKNOWN*\n");
+    CHECK_STR(text, "FILE PROCESS DESTINATION BYTES METHOD CONFIDENCE\n"
+                    "/data/export/report, \"final\".csv nginx 203.0.113.42 141 MB sendfile EXACT\n"
+                    "unknown python 192.0.2.10 12.0 MB - UNKNOWN*\n");
     free(text);
 
     text = squeeze(render(FT_VIEW_TRANSFERS, &rows, FT_FMT_TABLE, false));
@@ -175,6 +174,7 @@ static void processes(void)
         .tx_bytes = 1524713390,
         .rx_bytes = 85983232,
         .tx_rate = 13002342,
+        .files = 18,
         .pid = 1842,
         .ppid = 1,
         .uid = 4'000'000'000u,
@@ -188,8 +188,8 @@ static void processes(void)
 
     /* A user ID without an account is shown as the number. */
     char *text = squeeze(render(FT_VIEW_PROCESSES, &rows, FT_FMT_TABLE, true));
-    CHECK_STR(text, "RANK PID PPID PROCESS USER OUTBOUND INBOUND\n"
-                    "1 1842 1 nginx 4000000000 1.42 GB 82.0 MB\n");
+    CHECK_STR(text, "RANK PID PROCESS OUTBOUND FILES CONNECTIONS SENT RECEIVED\n"
+                    "1 1842 nginx 12.4 MB/s 18 12 1.42 GB 82.0 MB\n");
     free(text);
 
     text = render(FT_VIEW_PROCESSES, &rows, FT_FMT_JSONL, false);
@@ -197,7 +197,7 @@ static void processes(void)
               "{\"pid\":1842,\"ppid\":1,\"name\":\"nginx\",\"user\":\"4000000000\","
               "\"uid\":4000000000,\"gid\":0,\"bytes_sent\":1524713390,"
               "\"bytes_received\":85983232,\"bytes_sent_per_second\":13002342,"
-              "\"bytes_received_per_second\":0,\"connections\":12,\"files\":0,\"transfers\":0,"
+              "\"bytes_received_per_second\":0,\"connections\":12,\"files\":18,\"transfers\":0,"
               "\"active_transfers\":0,"
               "\"status\":\"running\"}\n");
     free(text);
@@ -225,8 +225,8 @@ static void connections(void)
     CHECK(ft_rows_append(&rows, &row, sizeof(row)));
 
     char *text = squeeze(render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_TABLE, false));
-    CHECK_STR(text, "PROTO PID PROCESS LOCAL REMOTE STATE\n"
-                    "UDP 3821 python [2001:db8::1]:53001 * ACTIVE\n");
+    CHECK_STR(text, "PID PROCESS PROTOCOL LOCAL REMOTE STATE SENT RECEIVED SOCKET\n"
+                    "3821 python UDP [2001:db8::1]:53001 * ACTIVE 0 B 0 B 18\n");
     free(text);
 
     text = render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_JSONL, false);
