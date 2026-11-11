@@ -21,3 +21,6 @@ for hook in postinstall preremove postremove; do
         cat packaging/scripts/lib.sh "packaging/scripts/$hook.sh"
     } | shellcheck --severity=warning -
 done
+
+sed -e '/^# @lib@$/{' -e 'r packaging/scripts/lib.sh' -e 'd' -e '}' packaging/install.sh.in |
+    shellcheck --severity=warning --shell=sh -

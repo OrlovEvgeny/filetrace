@@ -155,7 +155,7 @@ package_darwin()
 }
 
 rm -rf "$dist/work"
-rm -f "$dist"/*.tar.gz "$dist"/*.deb "$dist"/*.rpm "$dist"/*.apk
+rm -f "$dist"/*.tar.gz "$dist"/*.deb "$dist"/*.rpm "$dist"/*.apk "$dist/install.sh"
 
 found=0
 for stage in "$stages"/*; do
@@ -175,5 +175,9 @@ if [ "$found" -eq 0 ]; then
     echo "package.sh: nothing is staged under dist/stage; run tools/dist/build.sh first" >&2
     exit 1
 fi
+
+sed -e '/^# @lib@$/{' -e "r $packaging/scripts/lib.sh" -e 'd' -e '}' \
+    "$packaging/install.sh.in" >"$dist/install.sh"
+chmod 0755 "$dist/install.sh"
 
 find "$dist" -maxdepth 1 -type f | sort

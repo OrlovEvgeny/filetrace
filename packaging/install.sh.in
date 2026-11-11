@@ -1,0 +1,418 @@
+#!/bin/sh
+# Installs Filetrace.
+#
+#   curl -fsSL https://orlovevgeny.github.io/filetrace/install.sh | sudo sh
+#   curl -fsSL https://orlovevgeny.github.io/filetrace/install.sh | sudo sh -s -- --no-start
+#
+# Run with --help for the options.
+set -eu
+
+repo_url=${FILETRACE_REPO_URL:-https://orlovevgeny.github.io/filetrace}
+release_url=${FILETRACE_RELEASE_URL:-https://github.com/OrlovEvgeny/filetrace/releases/download}
+
+# @lib@
+
+usage()
+{
+    cat <<'TEXT'
+Usage: install.sh [options]
+
+Installs the filetrace command and, on Linux, the filetrace-agent service.
+Where apt, dnf, yum, zypper or apk is present the package repository is set
+up and the package installed, so upgrades arrive with the system's own.
+Elsewhere the release archive is unpacked under the prefix.
+
+Options:
+  --version <version>   Install this version instead of the newest
+  --channel <channel>   stable or lts (default: stable)
+  --method <method>     auto, package or tarball (default: auto)
+  --prefix <dir>        Where the archive is unpacked (default: /usr/local)
+  --no-start            Leave the service disabled and stopped
+  --uninstall           Remove what this script installed
+  --dry-run             Print what would be done and stop
+  -h, --help            Show this help
+
+Environment: FILETRACE_VERSION, FILETRACE_CHANNEL and FILETRACE_NO_START=1
+stand for the options of the same name.
+TEXT
+}
+
+die()
+{
+    ft_warn "$*"
+    exit 1
+}
+
+# fetch <url> <file>
+fetch()
+{
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$2" "$1"
+    else
+        die "curl or wget is needed to download $1"
+    fi
+}
+
+sha256_of()
+{
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
+package_manager()
+{
+    for candidate in apt-get dnf yum zypper apk; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    echo none
+}
+
+# The newest version of the channel, unless one was asked for.
+resolve_version()
+{
+    if [ -z "$version" ]; then
+        fetch "$repo_url/channels/$channel" "$work/channel" ||
+            die "cannot read the newest $channel version from $repo_url"
+        version=$(cat "$work/channel")
+    fi
+    fetch "$repo_url/versions/$version" "$work/tag" || die "version $version is not published"
+    tag=$(cat "$work/tag")
+}
+
+install_package()
+{
+    case $manager in
+    apt-get)
+        install -d -m 0755 /etc/apt/keyrings
+        cp "$work/gpg.key" /etc/apt/keyrings/filetrace.asc
+        chmod 0644 /etc/apt/keyrings/filetrace.asc
+        cat >/etc/apt/sources.list.d/filetrace.sources <<TEXT
+Types: deb
+URIs: $repo_url/apt
+Suites: $channel
+Components: main
+Signed-By: /etc/apt/keyrings/filetrace.asc
+TEXT
+        apt-get update -o Dir::Etc::sourcelist=sources.list.d/filetrace.sources \
+            -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "filetrace${version:+=$version}"
+        ;;
+    dnf | yum)
+        cat >/etc/yum.repos.d/filetrace.repo <<TEXT
+[filetrace]
+name=Filetrace
+baseurl=$repo_url/rpm/$channel/\$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=$repo_url/gpg.key
+TEXT
+        "$manager" install -y "filetrace${version:+-$version}"
+        ;;
+    zypper)
+        rpm --import "$work/gpg.key"
+        zypper --non-interactive removerepo filetrace >/dev/null 2>&1 || true
+        zypper --non-interactive addrepo --refresh "$repo_url/rpm/$channel/\$basearch" filetrace
+        zypper --non-interactive install "filetrace${version:+=$version}"
+        ;;
+    apk)
+        fetch "$repo_url/apk/filetrace.rsa.pub" /etc/apk/keys/filetrace.rsa.pub
+        grep -qxF "$repo_url/apk/$channel" /etc/apk/repositories ||
+            echo "$repo_url/apk/$channel" >>/etc/apk/repositories
+        apk add --update-cache "filetrace${version:+=$version-r0}"
+        ;;
+    esac
+}
+
+uninstall_package()
+{
+    case $manager in
+    apt-get)
+        DEBIAN_FRONTEND=noninteractive apt-get remove -y filetrace
+        rm -f /etc/apt/sources.list.d/filetrace.sources /etc/apt/keyrings/filetrace.asc
+        ;;
+    dnf | yum)
+        "$manager" remove -y filetrace
+        rm -f /etc/yum.repos.d/filetrace.repo
+        ;;
+    zypper)
+        zypper --non-interactive remove filetrace
+        zypper --non-interactive removerepo filetrace >/dev/null 2>&1 || true
+        ;;
+    apk)
+        apk del filetrace
+        sed -i "\\|^$repo_url/apk/|d" /etc/apk/repositories
+        rm -f /etc/apk/keys/filetrace.rsa.pub
+        ;;
+    esac
+}
+
+package_installed()
+{
+    case $manager in
+    apt-get) dpkg-query -W -f '${Status}' filetrace 2>/dev/null | grep -q 'ok installed' ;;
+    dnf | yum | zypper) rpm -q filetrace >/dev/null 2>&1 ;;
+    apk) apk info -e filetrace >/dev/null 2>&1 ;;
+    *) return 1 ;;
+    esac
+}
+
+# The service files a tarball install places, by service manager.
+service_files()
+{
+    case $1 in
+    systemd) echo /etc/systemd/system/filetrace-agent.service ;;
+    openrc | sysv) echo /etc/init.d/filetrace-agent ;;
+    esac
+}
+
+install_service()
+{
+    templates=$tree/share/filetrace
+    case $init in
+    systemd)
+        sed "s|@bindir@|$ft_bindir|g" "$templates/systemd/filetrace-agent.service.in" \
+            >/etc/systemd/system/filetrace-agent.service
+        ;;
+    openrc)
+        sed "s|@bindir@|$ft_bindir|g" "$templates/openrc/filetrace-agent.in" \
+            >/etc/init.d/filetrace-agent
+        chmod 0755 /etc/init.d/filetrace-agent
+        [ -e /etc/conf.d/filetrace-agent ] ||
+            cp "$templates/openrc/filetrace-agent.confd" /etc/conf.d/filetrace-agent
+        ;;
+    sysv)
+        sed "s|@bindir@|$ft_bindir|g" "$templates/sysv/filetrace-agent.in" \
+            >/etc/init.d/filetrace-agent
+        chmod 0755 /etc/init.d/filetrace-agent
+        ;;
+    esac
+    case $init in
+    openrc | sysv)
+        [ ! -d /etc/logrotate.d ] ||
+            cp "$templates/logrotate/filetrace-agent" /etc/logrotate.d/filetrace-agent
+        ;;
+    esac
+    ft_daemon_reload
+}
+
+install_tarball()
+{
+    name=filetrace-$version-$os-$arch
+    fetch "$release_url/$tag/$name.tar.gz" "$work/$name.tar.gz" ||
+        die "cannot download $name.tar.gz of release $tag"
+    fetch "$release_url/$tag/SHA256SUMS" "$work/SHA256SUMS" ||
+        die "cannot download the checksums of release $tag"
+    expected=$(sed -n "s/^\\([0-9a-f]\\{64\\}\\)  $name\\.tar\\.gz\$/\\1/p" "$work/SHA256SUMS")
+    [ -n "$expected" ] || die "release $tag lists no checksum for $name.tar.gz"
+    [ "$(sha256_of "$work/$name.tar.gz")" = "$expected" ] ||
+        die "$name.tar.gz does not match its checksum"
+
+    tar -xzf "$work/$name.tar.gz" -C "$work"
+    tree=$work/$name
+
+    upgrade=0
+    [ ! -x "$ft_bindir/filetrace-agent" ] || upgrade=1
+
+    install -d -m 0755 "$ft_bindir" "$prefix/share/doc/filetrace"
+    install -m 0755 "$tree/bin/filetrace" "$tree/bin/filetrace-agent" "$ft_bindir/"
+    install -m 0644 "$tree"/share/doc/filetrace/* "$prefix/share/doc/filetrace/"
+
+    [ "$os" = linux ] || return 0
+
+    if [ ! -e /etc/filetrace/config.toml ]; then
+        install -d -m 0755 /etc/filetrace
+        install -m 0644 "$tree/etc/filetrace/config.toml" /etc/filetrace/config.toml
+    fi
+    install_service
+}
+
+uninstall_tarball()
+{
+    if [ "$os" = linux ]; then
+        ft_stop
+        ft_disable
+        placed=$(service_files "$init")
+        [ -z "$placed" ] || rm -f "$placed"
+        rm -f /etc/conf.d/filetrace-agent /etc/logrotate.d/filetrace-agent
+        ft_daemon_reload
+    fi
+    rm -f "$ft_bindir/filetrace" "$ft_bindir/filetrace-agent"
+    rm -rf "$prefix/share/doc/filetrace"
+    [ ! -d /etc/filetrace ] || ft_say "/etc/filetrace is left in place"
+}
+
+main()
+{
+    version=${FILETRACE_VERSION:-}
+    channel=${FILETRACE_CHANNEL:-stable}
+    method=auto
+    prefix=/usr/local
+    start=1
+    [ "${FILETRACE_NO_START:-0}" != 1 ] || start=0
+    action=install
+    dry_run=0
+
+    while [ $# -gt 0 ]; do
+        case $1 in
+        --version | --channel | --method | --prefix)
+            [ $# -ge 2 ] || die "$1 needs a value"
+            case $1 in
+            --version) version=$2 ;;
+            --channel) channel=$2 ;;
+            --method) method=$2 ;;
+            --prefix) prefix=$2 ;;
+            esac
+            shift 2
+            ;;
+        --no-start)
+            start=0
+            shift
+            ;;
+        --uninstall)
+            action=uninstall
+            shift
+            ;;
+        --dry-run)
+            dry_run=1
+            shift
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "unknown option: $1 (see --help)"
+            ;;
+        esac
+    done
+    case $channel in
+    stable | lts) ;;
+    *) die "unknown channel: $channel" ;;
+    esac
+    case $method in
+    auto | package | tarball) ;;
+    *) die "unknown method: $method" ;;
+    esac
+
+    case $(uname -s) in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    *) die "$(uname -s) is not supported" ;;
+    esac
+    case $(uname -m) in
+    x86_64 | amd64) arch=amd64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) die "$(uname -m) is not supported" ;;
+    esac
+
+    manager=none
+    init=none
+    if [ "$os" = linux ]; then
+        manager=$(package_manager)
+        init=$(ft_init_system)
+        # The SysV script is written around Debian's start-stop-daemon.
+        if [ "$init" = sysv ] && ! command -v start-stop-daemon >/dev/null 2>&1; then
+            init=none
+        fi
+    fi
+
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 ||
+        die "curl or wget is needed"
+
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+
+    if [ "$action" = uninstall ]; then
+        ft_bindir=$prefix/bin
+        if package_installed; then
+            method=package
+        else
+            method=tarball
+        fi
+    elif [ "$method" != tarball ] && [ "$manager" != none ]; then
+        # A repository without its signing key has not been published yet.
+        if fetch "$repo_url/gpg.key" "$work/gpg.key" 2>/dev/null; then
+            method=package
+        elif [ "$method" = package ]; then
+            die "the package repository at $repo_url is not available"
+        else
+            method=tarball
+        fi
+    elif [ "$method" = package ]; then
+        die "no supported package manager was found"
+    else
+        method=tarball
+    fi
+
+    if [ "$method" = tarball ]; then
+        ft_bindir=$prefix/bin
+        [ "$action" = uninstall ] || resolve_version
+    fi
+
+    if [ "$dry_run" -eq 1 ]; then
+        ft_say "platform: $os $arch"
+        ft_say "action: $action by $method"
+        [ "$action" = uninstall ] || ft_say "version: ${version:-newest in $channel}"
+        if [ "$method" = package ]; then
+            ft_say "package manager: $manager, repository: $repo_url"
+        else
+            ft_say "prefix: $prefix"
+            [ "$action" = uninstall ] || ft_say "archive: $release_url/$tag/filetrace-$version-$os-$arch.tar.gz"
+        fi
+        [ "$os" != linux ] || ft_say "service manager: $init"
+        exit 0
+    fi
+
+    if [ "$os" = linux ] && [ "$(id -u)" -ne 0 ]; then
+        die "root is needed; run the installer with sudo"
+    fi
+
+    if [ "$action" = uninstall ]; then
+        "uninstall_$method"
+        ft_say "Filetrace is removed"
+        exit 0
+    fi
+
+    if [ "$method" = package ]; then
+        upgrade=0
+        ! package_installed || upgrade=1
+        install_package
+    else
+        install_tarball
+    fi
+
+    if [ "$os" != linux ]; then
+        ft_say "installed $ft_bindir/filetrace; 'brew install orlovevgeny/tap/filetrace' keeps it up to date"
+        exit 0
+    fi
+
+    if [ "$upgrade" -eq 1 ]; then
+        # The packages restart a running agent themselves.
+        if [ "$method" = package ]; then
+            :
+        elif "$ft_bindir/filetrace" config validate >/dev/null 2>&1; then
+            ft_restart_if_running
+        else
+            ft_warn "/etc/filetrace/config.toml is not valid for this version, so $ft_service was not restarted"
+        fi
+    elif [ "$start" -eq 1 ]; then
+        ft_host_check
+        ft_enable
+        ft_start
+    else
+        ft_say "the service is installed but not started"
+    fi
+    ft_say "installed; 'sudo filetrace doctor' checks this host"
+}
+
+# Called last, so a download cut short runs nothing.
+main "$@"
