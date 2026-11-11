@@ -68,13 +68,6 @@ gh api --silent -X PUT "repos/$repo/actions/permissions/workflow" \
     -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
 say 'workflows may open pull requests'
 
-if gh api --silent "repos/$repo/pages" 2>/dev/null; then
-    gh api --silent -X PUT "repos/$repo/pages" -f build_type=workflow
-else
-    gh api --silent -X POST "repos/$repo/pages" -f build_type=workflow
-fi
-say 'GitHub Pages is deployed by Actions'
-
 gh api --silent -X PUT "repos/$repo/immutable-releases"
 say 'published releases are immutable'
 
