@@ -1,0 +1,30 @@
+name: Bug report
+description: Something works differently from what the documentation says
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: filetrace version
+      description: The output of `filetrace version`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: filetrace doctor
+      description: The output of `sudo filetrace doctor`, if the problem is about collecting.
+      render: text
+  - type: input
+    id: install
+    attributes:
+      label: How it was installed
+      placeholder: apt, dnf, apk, Homebrew, install.sh, built from source
