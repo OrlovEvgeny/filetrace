@@ -2,6 +2,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -306,6 +308,185 @@ static void scenario_unlink(const char *path, size_t size)
     stop_sink(&sink);
 }
 
+static int listen_loopback(struct sockaddr_in *addr)
+{
+    socklen_t len = sizeof(*addr);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    *addr = (struct sockaddr_in){.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    if (fd < 0 || bind(fd, (struct sockaddr *)addr, sizeof(*addr)) != 0 || listen(fd, 1) != 0 ||
+        getsockname(fd, (struct sockaddr *)addr, &len) != 0)
+        die("listen");
+    return fd;
+}
+
+/*
+ * duplex <request-bytes> <reply-bytes>: a half-closed exchange in which the
+ * reply is peeked at, awaited in full, and read after the connection ended
+ */
+static void scenario_duplex(size_t request, size_t reply)
+{
+    struct sockaddr_in addr;
+    int listener = listen_loopback(&addr);
+    char *buf = calloc(1, request > reply ? request : reply);
+    if (!buf)
+        die("malloc");
+
+    pid_t server = fork();
+    if (server < 0)
+        die("fork");
+    if (server == 0) {
+        int c = accept(listener, nullptr, nullptr);
+        int one = 1;
+        char block[4096];
+        size_t got = 0;
+
+        setsockopt(c, IPPROTO_TCP, TCP_QUICKACK, &one, sizeof(one));
+        if (recv(c, block, 100, MSG_PEEK | MSG_WAITALL) != 100)
+            _exit(1);
+        for (ssize_t n; (n = read(c, block, sizeof(block))) > 0;)
+            got += (size_t)n;
+        /* The reply leaves in pieces so that the peer has to wait for all of it. */
+        for (size_t off = 0; off < reply; off += reply / 3 + 1) {
+            size_t n = reply - off < reply / 3 + 1 ? reply - off : reply / 3 + 1;
+            send_all(c, buf + off, n);
+            usleep(50 * 1000);
+        }
+        close(c);
+        _exit(got == request ? 0 : 1);
+    }
+    close(listener);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0 || connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+        die("connect");
+    send_all(sock, buf, request);
+    shutdown(sock, SHUT_WR);
+
+    int status;
+    waitpid(server, &status, 0);
+    usleep(100 * 1000);
+    /* The peer has gone: the whole reply and its FIN are already queued. */
+    if (recv(sock, buf, 10, MSG_PEEK) != 10)
+        die("peek");
+    if (recv(sock, buf, reply, MSG_WAITALL) != (ssize_t)reply)
+        die("recv");
+    if (recv(sock, buf, 1, 0) != 0)
+        die("expected end of stream");
+    close(sock);
+    free(buf);
+    printf("scenario=duplex pid=%d server=%d port=%d status=%d\n", (int)getpid(), (int)server,
+           ntohs(addr.sin_port), WEXITSTATUS(status));
+}
+
+/* A sink behind small buffers, so that the sender's calls are cut short. */
+static struct sink start_slow_sink(void)
+{
+    struct sockaddr_in addr;
+    struct sink s = {0};
+    int small = 4096;
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    socklen_t len = sizeof(addr);
+
+    addr = (struct sockaddr_in){.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    setsockopt(listener, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+    if (listener < 0 || bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        listen(listener, 1) != 0 || getsockname(listener, (struct sockaddr *)&addr, &len) != 0)
+        die("listen");
+
+    memcpy(&s.addr, &addr, sizeof(addr));
+    s.addr_len = sizeof(addr);
+    s.port = ntohs(addr.sin_port);
+    s.pid = fork();
+    if (s.pid < 0)
+        die("fork");
+    if (s.pid == 0) {
+        char buf[8192];
+        int c = accept(listener, nullptr, nullptr);
+        while (c >= 0 && read(c, buf, sizeof(buf)) > 0)
+            usleep(200);
+        _exit(0);
+    }
+    close(listener);
+    return s;
+}
+
+static int connect_nonblocking(const struct sink *s)
+{
+    int small = 4096;
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+    if (sock < 0 || connect(sock, (const struct sockaddr *)&s->addr, s->addr_len) != 0)
+        die("connect");
+    fcntl(sock, F_SETFL, fcntl(sock, F_GETFL) | O_NONBLOCK);
+    return sock;
+}
+
+static void wait_writable(int sock)
+{
+    struct pollfd pfd = {.fd = sock, .events = POLLOUT};
+    poll(&pfd, 1, 1000);
+}
+
+/* partialsend <path> <bytes>: every send is accepted only in part */
+static void scenario_partial_send(const char *path, size_t size)
+{
+    struct sink sink = start_slow_sink();
+    make_file(path, size);
+
+    int file = open_file(path);
+    int sock = connect_nonblocking(&sink);
+    char *buf = malloc(262144);
+    size_t calls = 0;
+    if (!buf)
+        die("malloc");
+
+    for (ssize_t got; (got = read(file, buf, 262144)) > 0;) {
+        for (size_t off = 0; off < (size_t)got;) {
+            ssize_t n = send(sock, buf + off, (size_t)got - off, 0);
+            calls++;
+            if (n > 0)
+                off += (size_t)n;
+            else if (errno == EAGAIN || errno == EWOULDBLOCK)
+                wait_writable(sock);
+            else
+                die("send");
+        }
+    }
+    close(sock);
+    close(file);
+    free(buf);
+    printf("scenario=partialsend pid=%d port=%d bytes=%zu calls=%zu file=%s\n", (int)getpid(),
+           sink.port, size, calls, path);
+    waitpid(sink.pid, nullptr, 0);
+}
+
+/* partialsendfile <path> <bytes>: every sendfile moves only part of what is left */
+static void scenario_partial_sendfile(const char *path, size_t size)
+{
+    struct sink sink = start_slow_sink();
+    make_file(path, size);
+
+    int file = open_file(path);
+    int sock = connect_nonblocking(&sink);
+    size_t calls = 0;
+
+    for (off_t off = 0; (size_t)off < size;) {
+        ssize_t n = sendfile(sock, file, &off, size - (size_t)off);
+        calls++;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            wait_writable(sock);
+        else if (n <= 0)
+            die("sendfile");
+    }
+    close(sock);
+    close(file);
+    printf("scenario=partialsendfile pid=%d port=%d bytes=%zu calls=%zu file=%s\n", (int)getpid(),
+           sink.port, size, calls, path);
+    waitpid(sink.pid, nullptr, 0);
+}
+
 /* udp <bytes> [ipv6]: unconnected datagram socket */
 static void scenario_udp(size_t size, bool ipv6)
 {
@@ -379,6 +560,12 @@ int main(int argc, char **argv)
         scenario_udp(arg_size(argv[2]), argc > 3 && strcmp(argv[3], "ipv6") == 0);
     else if (strcmp(name, "child") == 0 && argc == 4)
         scenario_child(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "duplex") == 0 && argc == 4)
+        scenario_duplex(arg_size(argv[2]), arg_size(argv[3]));
+    else if (strcmp(name, "partialsend") == 0 && argc == 4)
+        scenario_partial_send(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "partialsendfile") == 0 && argc == 4)
+        scenario_partial_sendfile(argv[2], arg_size(argv[3]));
     else {
         fprintf(stderr, "usage: %s <scenario> <arguments>\n", argv[0]);
         return 2;

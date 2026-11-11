@@ -204,6 +204,38 @@ expect "udp bytes have no file" "$(printf '%s\n' "$csv" | column transfer.bytes)
 expect "udp transfer id" "$(ft transfers --confidence unknown --port "$port" --format quiet |
     grep -c '^tr_s')" 1
 
+# Both directions of a half-closed exchange, byte for byte: a peek, a wait
+# for the whole reply and the end of the stream add nothing.
+report=$("$workload" duplex 300000 70000)
+settle
+expect "duplex server saw the request" "$(field "$report" status)" 0
+port=$(field "$report" port)
+csv=$(ft flows --port "$port" --pid "$(field "$report" pid)" --format csv)
+expect "duplex client sent" "$(printf '%s\n' "$csv" | column sent_bytes)" 300000
+expect "duplex client received" "$(printf '%s\n' "$csv" | column received_bytes)" 70000
+csv=$(ft flows --port "$port" --pid "$(field "$report" server)" --format csv)
+expect "duplex server received" "$(printf '%s\n' "$csv" | column received_bytes)" 300000
+expect "duplex server sent" "$(printf '%s\n' "$csv" | column sent_bytes)" 70000
+
+# Sends that the socket accepts only in part still add up to the file.
+report=$("$workload" partialsend "$data/partial.bin" 3000000)
+settle
+expect_match "partial sends happened" "$(field "$report" calls)" '^[0-9]{3,}$'
+csv=$(ft files --path "$data/partial.bin" --format csv)
+expect "partial send rows" "$(printf '%s\n' "$csv" | rows)" 1
+expect "partial send bytes" "$(printf '%s\n' "$csv" | column transfer.bytes)" 3000000
+expect "partial send confidence" "$(printf '%s\n' "$csv" | column attribution.confidence)" inferred
+csv=$(ft flows --port "$(field "$report" port)" --pid "$(field "$report" pid)" --format csv)
+expect "partial send socket bytes" "$(printf '%s\n' "$csv" | column sent_bytes)" 3000000
+
+report=$("$workload" partialsendfile "$data/partialsf.bin" 3000000)
+settle
+expect_match "partial sendfiles happened" "$(field "$report" calls)" '^[0-9]{2,}$'
+csv=$(ft files --path "$data/partialsf.bin" --format csv)
+expect "partial sendfile rows" "$(printf '%s\n' "$csv" | rows)" 1
+expect "partial sendfile bytes" "$(printf '%s\n' "$csv" | column transfer.bytes)" 3000000
+expect "partial sendfile confidence" "$(printf '%s\n' "$csv" | column attribution.confidence)" exact
+
 # Processes, including the totals of their children.
 report=$("$workload" child "$data/child.bin" 700000)
 settle
