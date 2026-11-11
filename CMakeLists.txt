@@ -29,6 +29,7 @@ target_compile_options(ft_build INTERFACE
     -Wstrict-prototypes
     -Wmissing-prototypes
 )
+target_compile_options(ft_build INTERFACE -fstack-protector-strong)
 target_compile_definitions(ft_build INTERFACE FT_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
 
 # Only these sources rebuild when the version changes.
@@ -56,6 +57,7 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_definitions(ft_build INTERFACE _GNU_SOURCE)
+    target_link_options(ft_build INTERFACE -Wl,-z,relro,-z,now)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     target_compile_definitions(ft_build INTERFACE _DARWIN_C_SOURCE)
 else()
