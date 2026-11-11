@@ -52,9 +52,9 @@ bool ft_record_type_parse(const char *text, enum ft_record_type *type)
 const char *ft_default_socket_path(void)
 {
 #if defined(__linux__)
-    return "/run/filetrace/filetraced.sock";
+    return "/run/filetrace/agent.sock";
 #else
-    return "/var/run/filetrace/filetraced.sock";
+    return "/var/run/filetrace/agent.sock";
 #endif
 }
 

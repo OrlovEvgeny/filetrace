@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage: run.sh <directory with filetrace and filetraced> <workload binary> [auto|trampoline|kprobe]
+# usage: run.sh <directory with filetrace and filetrace-agent> <workload binary> [auto|trampoline|kprobe]
 # Exits 77 when this machine cannot run the collector.
 
 set -u
@@ -9,15 +9,15 @@ workload=$2
 probes=${3:-auto}
 work=$(mktemp -d /tmp/filetrace-it-XXXXXX)
 data=$work/data
-sock=$work/daemon.sock
-daemon_pid=
+sock=$work/agent.sock
+agent_pid=
 failures=0
 checks=0
 
 mkdir -p "$data"
 
 cleanup() {
-    [ -n "$daemon_pid" ] && kill "$daemon_pid" 2>/dev/null
+    [ -n "$agent_pid" ] && kill "$agent_pid" 2>/dev/null
     wait 2>/dev/null
     rm -rf "$work"
 }
@@ -64,24 +64,24 @@ field() {
     printf '%s\n' "$1" | tr ' ' '\n' | awk -F= -v key="$2" '$1 == key { print $2 }'
 }
 
-start_daemon() {
-    "$bin/filetraced" --socket "$sock" --flush-interval 100ms --log-level warn \
+start_agent() {
+    "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms --log-level warn \
         --probes "$probes" "$@" &
-    daemon_pid=$!
+    agent_pid=$!
     i=0
     while [ ! -S "$sock" ] && [ $i -lt 100 ]; do
-        kill -0 "$daemon_pid" 2>/dev/null || return 1
+        kill -0 "$agent_pid" 2>/dev/null || return 1
         sleep 0.1
         i=$((i + 1))
     done
     [ -S "$sock" ]
 }
 
-stop_daemon() {
-    ft daemon stop >/dev/null
-    wait "$daemon_pid"
+stop_agent() {
+    ft agent stop >/dev/null
+    wait "$agent_pid"
     status=$?
-    daemon_pid=
+    agent_pid=
     return $status
 }
 
@@ -99,9 +99,9 @@ if [ $doctor -eq 3 ] || [ $doctor -eq 5 ]; then
 fi
 expect "doctor exit code" "$doctor" 0
 
-start_daemon || { echo "FAIL: the daemon did not start"; exit 1; }
+start_agent || { echo "FAIL: the agent did not start"; exit 1; }
 
-expect "daemon status exit code" "$(ft daemon status >/dev/null; echo $?)" 0
+expect "agent status exit code" "$(ft agent status >/dev/null; echo $?)" 0
 
 # sendfile over IPv4: an exact attribution with exact byte counts.
 report=$("$workload" sendfile "$data/report.csv" 5000000)
@@ -378,17 +378,17 @@ fi
 expect_match "stats no loss" "$stats" '"dropped":0,'
 expect_match "capabilities" "$(ft capabilities | grep '^Sendfile attribution')" 'FULL'
 
-# Usage errors and an absent daemon are distinguishable by exit code.
+# Usage errors and an absent agent are distinguishable by exit code.
 expect "invalid option exit code" "$(ft files --no-such-option >/dev/null 2>&1; echo $?)" 2
 expect "invalid value exit code" "$(ft files --min-bytes lots >/dev/null 2>&1; echo $?)" 2
-expect "no daemon exit code" \
+expect "no agent exit code" \
     "$("$bin/filetrace" --socket "$work/absent.sock" files >/dev/null 2>&1; echo $?)" 4
 
-stop_daemon
-expect "daemon exit code" "$?" 0
+stop_agent
+expect "agent exit code" "$?" 0
 expect "socket removed" "$([ -e "$sock" ] && echo present || echo removed)" removed
 
-start_daemon --mode minimal || { echo "FAIL: the daemon did not start in minimal mode"; exit 1; }
+start_agent --mode minimal || { echo "FAIL: the agent did not start in minimal mode"; exit 1; }
 
 report=$("$workload" sendfile "$data/minimal.bin" 900000)
 settle
@@ -401,8 +401,8 @@ csv=$(ft transfers --port "$(field "$report" port)" --pid "$(field "$report" pid
 expect "minimal: bytes have no file" \
     "$(printf '%s\n' "$csv" | column transfer.confidence)" unknown
 
-stop_daemon
-expect "minimal daemon exit code" "$?" 0
+stop_agent
+expect "minimal agent exit code" "$?" 0
 
 # A configuration file decides what is collected and how the commands print.
 cat >"$work/config.toml" <<CONFIG
@@ -452,10 +452,10 @@ expect_match "config: broken file message" \
 expect "config: commands refuse a broken file" \
     "$("$bin/filetrace" --config "$work/broken.toml" files >/dev/null 2>&1; echo $?)" 6
 expect "config: the agent refuses a broken file" \
-    "$("$bin/filetraced" --config "$work/broken.toml" >/dev/null 2>&1; echo $?)" 6
+    "$("$bin/filetrace-agent" --config "$work/broken.toml" >/dev/null 2>&1; echo $?)" 6
 
-"$bin/filetraced" --config "$work/config.toml" --probes "$probes" 2>"$work/agent.err" &
-daemon_pid=$!
+"$bin/filetrace-agent" --config "$work/config.toml" --probes "$probes" 2>"$work/agent.err" &
+agent_pid=$!
 wait_for_socket
 "$workload" sendfile "$data/secret-key.bin" 400000 >/dev/null
 "$workload" sendfile "$data/public.bin" 400000 >/dev/null
@@ -471,14 +471,14 @@ expect "config: confidence threshold" "$(configured files --path "$data/inferred
 expect "config: ignored protocol" \
     "$(configured flows --protocol udp --port "$(field "$report" port)" | rows)" 0
 expect_match "config: event log size" "$(configured stats --json)" '"event_log_bytes":262144,'
-configured daemon stop >/dev/null
-wait "$daemon_pid"
+configured agent stop >/dev/null
+wait "$agent_pid"
 expect "config: agent exit code" "$?" 0
-daemon_pid=
+agent_pid=
 
 printf '[agent]\nsocket = "%s"\n[file]\ntrack_read = false\n' "$sock" >"$work/noread.toml"
-"$bin/filetraced" --config "$work/noread.toml" --probes "$probes" --log-level warn &
-daemon_pid=$!
+"$bin/filetrace-agent" --config "$work/noread.toml" --probes "$probes" --log-level warn &
+agent_pid=$!
 wait_for_socket
 expect_match "config: read probe off" "$(ft capabilities | grep '^Read+send correlation')" \
     'DISABLED +turned off in the configuration'
@@ -491,10 +491,10 @@ expect "config: no read-write attribution" \
     "$(ft files --path "$data/unread.bin" --format csv | rows)" 0
 expect "config: sendfile still attributed" \
     "$(ft files --path "$data/stillsent.bin" --format csv | rows)" 1
-stop_daemon
+stop_agent
 expect "config: second agent exit code" "$?" 0
 
-# Without a daemon, watch collects for as long as it runs.
+# Without an agent, watch collects for as long as it runs.
 out=$(timeout -s INT 3 "$bin/filetrace" --socket "$work/absent.sock" watch --no-ui \
     --interval 500ms 2>"$work/watch.err")
 expect_match "watch output" "$out" 'ACTIVE FILE TRANSFERS'

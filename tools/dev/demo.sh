@@ -20,9 +20,9 @@ say() {
 say "filetrace doctor: can this kernel be monitored?"
 "$build/filetrace" doctor
 
-"$build/filetraced" --socket "$sock" --log-level warn &
-daemon=$!
-trap 'kill $daemon 2>/dev/null; wait $daemon 2>/dev/null; rm -rf "$data"' EXIT
+"$build/filetrace-agent" --socket "$sock" --log-level warn &
+agent=$!
+trap 'kill $agent 2>/dev/null; wait $agent 2>/dev/null; rm -rf "$data"' EXIT
 while [ ! -S "$sock" ]; do
     sleep 0.1
 done

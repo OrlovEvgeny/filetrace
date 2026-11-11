@@ -14,7 +14,7 @@ enum ft_exit : int {
     FT_EXIT_ERROR = 1,
     FT_EXIT_USAGE = 2,
     FT_EXIT_PERMISSION = 3,
-    FT_EXIT_NO_DAEMON = 4,
+    FT_EXIT_NO_AGENT = 4,
     FT_EXIT_UNSUPPORTED = 5,
     FT_EXIT_CONFIG = 6,
     FT_EXIT_STORAGE = 7,

@@ -1,10 +1,10 @@
-#ifndef FILETRACE_DAEMON_H
-#define FILETRACE_DAEMON_H
+#ifndef FILETRACE_AGENT_H
+#define FILETRACE_AGENT_H
 
 #include "backends/backend.h"
 #include "filetrace/state.h"
 
-struct ft_daemon_config {
+struct ft_agent_config {
     const struct ft_backend_ops *backend;
     struct ft_backend_config backend_cfg;
     struct ft_state_config state_cfg;
@@ -18,13 +18,13 @@ struct ft_daemon_config {
     uint32_t flush_interval_ms;
 };
 
-void ft_daemon_config_defaults(struct ft_daemon_config *cfg);
+void ft_agent_config_defaults(struct ft_agent_config *cfg);
 
-int ft_daemon_run(const struct ft_daemon_config *cfg, struct ft_error *err);
+int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err);
 
 /* Safe to call from a signal handler. */
-void ft_daemon_stop(void);
+void ft_agent_stop(void);
 
-int ft_daemon_main(int argc, char **argv, const char *program);
+int ft_agent_main(int argc, char **argv, const char *program);
 
 #endif

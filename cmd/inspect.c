@@ -88,7 +88,7 @@ static void history_note(const struct inspect *in, FILE *o)
 
     ft_format_time_local(in->end.observed_since_wall_ns, since, sizeof(since));
     fprintf(o,
-            "\n%sHistory starts at %s, when the daemon started.\n"
+            "\n%sHistory starts at %s, when the agent started.\n"
             "Nothing earlier is kept.%s\n",
             styled ? FT_STYLE_DIM : "", since, styled ? FT_STYLE_RESET : "");
 }

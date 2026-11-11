@@ -15,7 +15,7 @@ struct command {
 
 static const char exit_codes[] =
     "\nExit codes:\n"
-    "  0  success                      4  daemon unavailable\n"
+    "  0  success                      4  agent unavailable\n"
     "  1  general error                5  unsupported platform or capability\n"
     "  2  invalid arguments            9  partial results: events were lost in\n"
     "  3  permission denied               the queried time range\n";
@@ -38,7 +38,7 @@ static void help_watch(FILE *o)
           "\n"
           "Live view of what the machine is sending: the file transfers in progress,\n"
           "with the process, the destination, the method and the current rate of\n"
-          "each. When no daemon is running, collection runs in the foreground for as\n"
+          "each. When no agent is running, collection runs in the foreground for as\n"
           "long as the command does.\n"
           "\n"
           "Options:\n"
@@ -260,7 +260,7 @@ static void help_inspect(FILE *o)
           "  --json                  Short for --format json\n"
           "  --output <file>         Write to a file instead of standard output\n"
           "\n"
-          "History begins when the daemon starts and is kept in memory only; every\n"
+          "History begins when the agent starts and is kept in memory only; every\n"
           "report says from when it reaches.\n"
           "\n"
           "Examples:\n"
@@ -305,8 +305,8 @@ static void help_events(FILE *o)
     fputs("  --limit <n>             Only the most recent n events\n"
           "\n"
           "Past events come from a log of bounded size kept in memory: it holds only\n"
-          "the most recent ones and starts empty when the daemon does. Without a\n"
-          "running daemon, --follow collects in the foreground.\n"
+          "the most recent ones and starts empty when the agent does. Without a\n"
+          "running agent, --follow collects in the foreground.\n"
           "\n"
           "Examples:\n"
           "  sudo filetrace events --follow\n"
@@ -381,8 +381,8 @@ static void help_capabilities(FILE *o)
           "  filetrace capabilities [--format table|json] [--json]\n"
           "\n"
           "Features available on this machine, each FULL, PARTIAL, UNAVAILABLE or\n"
-          "DISABLED, with the reason. Asks the running daemon; without one, checks\n"
-          "the machine directly, which needs the same privileges as the daemon.\n"
+          "DISABLED, with the reason. Asks the running agent; without one, checks\n"
+          "the machine directly, which needs the same privileges as the agent.\n"
           "\n"
           "Examples:\n"
           "  filetrace capabilities\n"
@@ -396,22 +396,22 @@ static void help_version(FILE *o)
     fputs("Usage:\n"
           "  filetrace version\n"
           "\n"
-          "Version, build and platform information, and whether the daemon is\n"
+          "Version, build and platform information, and whether the agent is\n"
           "running.\n",
           o);
 }
 
-static void help_daemon(FILE *o)
+static void help_agent(FILE *o)
 {
     fputs("Usage:\n"
-          "  filetrace daemon run [options]\n"
-          "  filetrace daemon status\n"
-          "  filetrace daemon stop\n"
+          "  filetrace agent run [options]\n"
+          "  filetrace agent status\n"
+          "  filetrace agent stop\n"
           "\n"
-          "run     Collect in the foreground and serve queries, like filetraced.\n"
-          "        Service managers should start filetraced directly.\n"
-          "status  Report whether a daemon is serving the socket.\n"
-          "stop    Ask the running daemon to stop.\n"
+          "run     Collect in the foreground and serve queries, like filetrace-agent.\n"
+          "        Service managers should start filetrace-agent directly.\n"
+          "status  Report whether an agent is serving the socket.\n"
+          "stop    Ask the running agent to stop.\n"
           "\n"
           "Options of 'run':\n"
           "  --mode <mode>             minimal or standard (default: standard)\n"
@@ -425,9 +425,9 @@ static void help_daemon(FILE *o)
           "  --log-level <level>       error, warn, info or debug (default: info)\n"
           "\n"
           "Examples:\n"
-          "  sudo filetrace daemon run\n"
-          "  sudo filetrace daemon run --mode minimal\n"
-          "  sudo filetrace daemon status\n"
+          "  sudo filetrace agent run\n"
+          "  sudo filetrace agent run --mode minimal\n"
+          "  sudo filetrace agent status\n"
           "\n"
           "'status' exits with 0 when running, 4 when stopped, 9 when degraded.\n",
           o);
@@ -492,7 +492,7 @@ static const struct command commands[] = {
     {"top", "Highest-volume processes, files or destinations", ft_cmd_top, help_top},
     {"transfers", "Transfer records, with unattributed bytes", ft_cmd_transfers, help_transfers},
     {"capabilities", "Supported features", ft_cmd_capabilities, help_capabilities},
-    {"daemon", "Run or control the background daemon", ft_cmd_daemon, help_daemon},
+    {"agent", "Run or control the background agent", ft_cmd_agent, help_agent},
     {"help", "Help for a command", cmd_help, help_help},
 };
 
@@ -520,7 +520,7 @@ void ft_help_overview(FILE *o)
     fprintf(o,
             "\n"
             "Global options:\n"
-            "  --socket <path>   Daemon socket (default: %s,\n"
+            "  --socket <path>   Agent socket (default: %s,\n"
             "                    or $FILETRACE_SOCKET, or the configured one)\n"
             "  --config <path>   Configuration file (see 'filetrace help config')\n"
             "  -h, --help        Show help\n"
@@ -565,7 +565,7 @@ void ft_status_overview(const struct ft_cli *cli, FILE *o)
         break;
     default:
         fputs("\u25cb NOT RUNNING   'sudo filetrace watch' collects for as long as it runs;\n"
-              "                'sudo filetrace daemon run' collects in the background\n",
+              "                'sudo filetrace agent run' collects in the background\n",
               o);
         break;
     }
@@ -663,9 +663,9 @@ int main(int argc, char **argv)
     if (!command)
         return ft_usage_error(nullptr, "unknown command '%s'", name);
 
-    /* 'daemon run' forwards its options, including --help, to the daemon. */
+    /* 'agent run' forwards its options, including --help, to the agent. */
     if (command->run != cmd_help && wants_help(&args) &&
-        !(command->run == ft_cmd_daemon && ft_args_peek(&args) &&
+        !(command->run == ft_cmd_agent && ft_args_peek(&args) &&
           strcmp(ft_args_peek(&args), "run") == 0)) {
         ft_help_command(stdout, name);
         return FT_EXIT_OK;

@@ -4,7 +4,7 @@ add_executable(ft_unit_tests
     unit/test_model.c
     unit/test_table.c
     unit/test_state.c
-    unit/test_daemon.c
+    unit/test_agent.c
     unit/test_config.c
     unit/test_views.c
 )

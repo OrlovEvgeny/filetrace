@@ -23,7 +23,7 @@ static void diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *o
     snprintf(out->result, sizeof(out->result), "Monitoring unavailable");
     snprintf(out->advice, sizeof(out->advice),
              "This build collects on Linux only. Here the filetrace command can still\n"
-             "query a daemon whose socket is reachable and report diagnostics.");
+             "query an agent whose socket is reachable and report diagnostics.");
 }
 
 static struct ft_backend *open_backend(const struct ft_backend_config *cfg,

@@ -1,6 +1,6 @@
 #include "cmd/cli.h"
 
-#include "daemon/config.h"
+#include "agent/config.h"
 
 #include <string.h>
 
@@ -20,9 +20,9 @@ bool ft_cli_timestamps(const struct ft_cli *cli)
     return !cli->config || cli->config->timestamps;
 }
 
-const struct ft_daemon_config *ft_cli_collector_config(const struct ft_cli *cli)
+const struct ft_agent_config *ft_cli_collector_config(const struct ft_cli *cli)
 {
-    return cli->config ? &cli->config->daemon : nullptr;
+    return cli->config ? &cli->config->agent : nullptr;
 }
 
 int ft_cli_load_config(struct ft_cli *cli)
@@ -43,7 +43,7 @@ int ft_cli_load_config(struct ft_cli *cli)
     ft_config_finish(config);
     cli->config = config;
     if (!cli->socket_path)
-        cli->socket_path = config->daemon.socket_path;
+        cli->socket_path = config->agent.socket_path;
     return FT_EXIT_OK;
 }
 

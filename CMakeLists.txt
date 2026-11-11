@@ -138,20 +138,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(ft_backend SYSTEM PRIVATE ${LIBBPF_INCLUDE_DIRS})
 endif()
 
-add_library(ft_daemon STATIC
-    daemon/config.c
-    daemon/lifecycle.c
-    daemon/server.c
+add_library(ft_agent STATIC
+    agent/config.c
+    agent/lifecycle.c
+    agent/server.c
 )
-target_link_libraries(ft_daemon PUBLIC ft_core ft_backend)
-target_include_directories(ft_daemon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(ft_agent PUBLIC ft_core ft_backend)
+target_include_directories(ft_agent PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ---------------------------------------------------------------------------
 # Executables
 # ---------------------------------------------------------------------------
 
-add_executable(filetraced daemon/main.c)
-target_link_libraries(filetraced PRIVATE ft_daemon)
+add_executable(filetrace-agent agent/main.c)
+target_link_libraries(filetrace-agent PRIVATE ft_agent)
 
 add_library(ft_cli STATIC
     cmd/args.c
@@ -168,12 +168,12 @@ add_library(ft_cli STATIC
     ui/terminal.c
     ui/watch.c
 )
-target_link_libraries(ft_cli PUBLIC ft_daemon)
+target_link_libraries(ft_cli PUBLIC ft_agent)
 
 add_executable(filetrace cmd/filetrace.c)
 target_link_libraries(filetrace PRIVATE ft_cli)
 
-install(TARGETS filetrace filetraced RUNTIME DESTINATION bin)
+install(TARGETS filetrace filetrace-agent RUNTIME DESTINATION bin)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(ft_bench_syscalls benchmarks/syscalls.c)

@@ -1,4 +1,4 @@
-#include "daemon/config.h"
+#include "agent/config.h"
 
 #include "filetrace/format.h"
 
@@ -9,7 +9,7 @@
 static void on_signal(int signo)
 {
     (void)signo;
-    ft_daemon_stop();
+    ft_agent_stop();
 }
 
 static void usage(FILE *out, const char *program)
@@ -73,7 +73,7 @@ static bool option_value(int argc, char **argv, int *i, const char *name, const 
 
 static int run(struct ft_config *config, int argc, char **argv, const char *program)
 {
-    struct ft_daemon_config *cfg = &config->daemon;
+    struct ft_agent_config *cfg = &config->agent;
     struct ft_error err = {0};
     const char *config_path = nullptr;
 
@@ -164,13 +164,13 @@ static int run(struct ft_config *config, int argc, char **argv, const char *prog
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    int code = ft_daemon_run(cfg, &err);
+    int code = ft_agent_run(cfg, &err);
     if (code != FT_EXIT_OK)
         fprintf(stderr, "%s\n", err.msg);
     return code;
 }
 
-int ft_daemon_main(int argc, char **argv, const char *program)
+int ft_agent_main(int argc, char **argv, const char *program)
 {
     struct ft_config *config = ft_config_new();
     if (!config) {

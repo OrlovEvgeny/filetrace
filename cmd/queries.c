@@ -26,7 +26,7 @@ static void print_footer(const struct ft_output *out, const struct ft_rows *rows
     if (rows->count == 0)
         fprintf(out->stream, "No %s observed since %s.", what, since);
     else
-        fprintf(out->stream, "Observed since %s. History is not kept across daemon restarts.",
+        fprintf(out->stream, "Observed since %s. History is not kept across agent restarts.",
                 since);
     fprintf(out->stream, "%s\n", styled ? FT_STYLE_RESET : "");
 }

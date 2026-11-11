@@ -1,6 +1,6 @@
 #include "unit/test.h"
 
-#include "daemon/daemon.h"
+#include "agent/agent.h"
 #include "filetrace/client.h"
 #include "filetrace/clock.h"
 
@@ -148,25 +148,25 @@ static void pause_ms(long ms)
     nanosleep(&ts, nullptr);
 }
 
-/* peer_fd is the client's end of a session socket, which the daemon must not hold. */
-static pid_t start_daemon(const struct ft_backend_ops *ops, const char *socket_path, int session_fd,
-                          int peer_fd)
+/* peer_fd is the client's end of a session socket, which the agent must not hold. */
+static pid_t start_agent(const struct ft_backend_ops *ops, const char *socket_path, int session_fd,
+                         int peer_fd)
 {
     pid_t pid = fork();
     if (pid == 0) {
-        struct ft_daemon_config cfg;
+        struct ft_agent_config cfg;
         struct ft_error err = {0};
 
         if (peer_fd >= 0)
             close(peer_fd);
 
-        ft_daemon_config_defaults(&cfg);
+        ft_agent_config_defaults(&cfg);
         cfg.backend = ops;
         cfg.socket_path = socket_path;
         cfg.session_fd = session_fd;
         cfg.flush_interval_ms = 20;
         ft_log_set_level(FT_LOG_ERROR);
-        _exit(ft_daemon_run(&cfg, &err));
+        _exit(ft_agent_run(&cfg, &err));
     }
     return pid;
 }
@@ -230,9 +230,9 @@ static void serves_queries_over_a_socket(void)
     struct ft_query q;
 
     CHECK(mkdtemp(dir) != nullptr);
-    snprintf(path, sizeof(path), "%s/daemon.sock", dir);
+    snprintf(path, sizeof(path), "%s/agent.sock", dir);
 
-    pid_t pid = start_daemon(&scripted_ops, path, -1, -1);
+    pid_t pid = start_agent(&scripted_ops, path, -1, -1);
     for (int attempt = 0; attempt < 200 && !c; attempt++) {
         c = ft_client_connect(path, &err);
         if (!c)
@@ -256,14 +256,14 @@ static void serves_queries_over_a_socket(void)
     CHECK(end.observed_since_wall_ns != 0);
     CHECK_U64(end.lost_events, 0);
 
-    /* A path filter travels with the query and is applied by the daemon. */
+    /* A path filter travels with the query and is applied by the agent. */
     ft_query_init(&q, FT_Q_TRANSFERS);
     ft_strlcpy(q.path, "/nowhere/*", sizeof(q.path));
     r.rows = 0;
     CHECK_U64(ft_client_query(c, &q, on_row, &r, &end, &err), FT_EXIT_OK);
     CHECK_U64(r.rows, 0);
 
-    /* A query the daemon cannot evaluate is an error, not an empty result. */
+    /* A query the agent cannot evaluate is an error, not an empty result. */
     q.flags = FT_QF_PATH_REGEX;
     ft_strlcpy(q.path, "(unclosed", sizeof(q.path));
     CHECK_U64(ft_client_query(c, &q, on_row, &r, &end, &err), FT_EXIT_USAGE);
@@ -297,8 +297,8 @@ static void serves_queries_over_a_socket(void)
     ft_query_init(&q, FT_Q_STATS);
     CHECK_U64(ft_client_query(c, &q, on_row, &r, &end, &err), FT_EXIT_OK);
 
-    /* A second daemon refuses to take over a socket that is being served. */
-    pid_t second = start_daemon(&scripted_ops, path, -1, -1);
+    /* A second agent refuses to take over a socket that is being served. */
+    pid_t second = start_agent(&scripted_ops, path, -1, -1);
     CHECK_U64(wait_exit(second), FT_EXIT_ERROR);
 
     CHECK_U64(ft_client_shutdown(c, &err), FT_EXIT_OK);
@@ -307,7 +307,7 @@ static void serves_queries_over_a_socket(void)
 
     CHECK(access(path, F_OK) != 0);
     CHECK(ft_client_connect(path, &err) == nullptr);
-    CHECK_U64(err.code, FT_EXIT_NO_DAEMON);
+    CHECK_U64(err.code, FT_EXIT_NO_AGENT);
 
     rmdir(dir);
     free(r.transfer);
@@ -320,7 +320,7 @@ static void serves_a_single_session(void)
     int pair[2];
 
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
-    pid_t pid = start_daemon(&scripted_ops, nullptr, pair[1], pair[0]);
+    pid_t pid = start_agent(&scripted_ops, nullptr, pair[1], pair[0]);
     close(pair[1]);
 
     struct ft_client *c = ft_client_adopt(pair[0]);
@@ -341,7 +341,7 @@ static void reports_a_backend_that_cannot_start(void)
     int pair[2];
 
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
-    pid_t pid = start_daemon(&refusing_ops, nullptr, pair[1], pair[0]);
+    pid_t pid = start_agent(&refusing_ops, nullptr, pair[1], pair[0]);
     close(pair[1]);
 
     struct ft_client *c = ft_client_adopt(pair[0]);
@@ -383,7 +383,7 @@ static void streams_events_to_a_follower(void)
     int pair[2];
 
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
-    pid_t pid = start_daemon(&ticking_ops, nullptr, pair[1], pair[0]);
+    pid_t pid = start_agent(&ticking_ops, nullptr, pair[1], pair[0]);
     close(pair[1]);
 
     struct ft_client *c = ft_client_adopt(pair[0]);
@@ -403,7 +403,7 @@ static void streams_events_to_a_follower(void)
     CHECK_U64(wait_exit(pid), FT_EXIT_OK);
 }
 
-void test_daemon(void)
+void test_agent(void)
 {
     serves_queries_over_a_socket();
     serves_a_single_session();

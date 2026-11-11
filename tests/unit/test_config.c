@@ -1,6 +1,6 @@
 #include "unit/test.h"
 
-#include "daemon/config.h"
+#include "agent/config.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -82,15 +82,15 @@ static void reads_the_proposed_file(void)
     CHECK_U64(load(cfg, proposed, &err), FT_EXIT_OK);
     ft_config_finish(cfg);
     CHECK(cfg->enabled);
-    CHECK_U64(cfg->daemon.backend_cfg.queue_bytes, 64u * 1024 * 1024);
-    CHECK_U64(cfg->daemon.backend_cfg.drain_batch, 4096);
-    CHECK(cfg->daemon.backend_cfg.track_read);
-    CHECK(cfg->daemon.backend_cfg.track_sendfile);
-    CHECK_U64(cfg->daemon.state_cfg.min_confidence, FT_CONF_INFERRED);
-    CHECK_U64(cfg->daemon.state_cfg.exclude_process_count, 1);
-    CHECK_STR(cfg->daemon.state_cfg.exclude_processes[0], "systemd");
-    CHECK_U64(cfg->daemon.state_cfg.exclude_path_count, 2);
-    CHECK_STR(cfg->daemon.state_cfg.exclude_paths[1], "/sys/*");
+    CHECK_U64(cfg->agent.backend_cfg.queue_bytes, 64u * 1024 * 1024);
+    CHECK_U64(cfg->agent.backend_cfg.drain_batch, 4096);
+    CHECK(cfg->agent.backend_cfg.track_read);
+    CHECK(cfg->agent.backend_cfg.track_sendfile);
+    CHECK_U64(cfg->agent.state_cfg.min_confidence, FT_CONF_INFERRED);
+    CHECK_U64(cfg->agent.state_cfg.exclude_process_count, 1);
+    CHECK_STR(cfg->agent.state_cfg.exclude_processes[0], "systemd");
+    CHECK_U64(cfg->agent.state_cfg.exclude_path_count, 2);
+    CHECK_STR(cfg->agent.state_cfg.exclude_paths[1], "/sys/*");
     CHECK_STR(cfg->format, "table");
 
     CHECK_U64(cfg->warning_count, 7);
@@ -141,29 +141,29 @@ static void applies_every_kind_of_value(void)
 
     CHECK_U64(code, FT_EXIT_OK);
     ft_config_finish(cfg);
-    CHECK_U64(cfg->daemon.backend_cfg.mode, FT_MODE_MINIMAL);
-    CHECK_U64(cfg->daemon.backend_cfg.probes, FT_PROBES_KPROBE);
-    CHECK_STR(cfg->daemon.socket_path, "/run/ft/a \"b\".sock");
-    CHECK_U64(cfg->daemon.flush_interval_ms, 100);
+    CHECK_U64(cfg->agent.backend_cfg.mode, FT_MODE_MINIMAL);
+    CHECK_U64(cfg->agent.backend_cfg.probes, FT_PROBES_KPROBE);
+    CHECK_STR(cfg->agent.socket_path, "/run/ft/a \"b\".sock");
+    CHECK_U64(cfg->agent.flush_interval_ms, 100);
     CHECK_U64(cfg->log_level, FT_LOG_DEBUG);
-    CHECK(cfg->daemon.state_cfg.ignore_udp);
-    CHECK(cfg->daemon.state_cfg.ignore_ipv6);
-    CHECK(!cfg->daemon.state_cfg.ignore_tcp);
-    CHECK(!cfg->daemon.backend_cfg.track_read);
-    CHECK(cfg->daemon.backend_cfg.track_sendfile);
-    CHECK_U64(cfg->daemon.backend_cfg.corr_window_ns, 5 * FT_NS_PER_SEC);
-    CHECK_U64(cfg->daemon.state_cfg.min_confidence, FT_CONF_EXACT);
-    CHECK_U64(cfg->daemon.state_cfg.inferred_min_bytes, 4096);
-    CHECK_U64(cfg->daemon.state_cfg.inferred_min_permille, 200);
-    CHECK_U64(cfg->daemon.state_cfg.max_transfers, 1000);
-    CHECK_U64(cfg->daemon.backend_cfg.agg_entries, 2048);
+    CHECK(cfg->agent.state_cfg.ignore_udp);
+    CHECK(cfg->agent.state_cfg.ignore_ipv6);
+    CHECK(!cfg->agent.state_cfg.ignore_tcp);
+    CHECK(!cfg->agent.backend_cfg.track_read);
+    CHECK(cfg->agent.backend_cfg.track_sendfile);
+    CHECK_U64(cfg->agent.backend_cfg.corr_window_ns, 5 * FT_NS_PER_SEC);
+    CHECK_U64(cfg->agent.state_cfg.min_confidence, FT_CONF_EXACT);
+    CHECK_U64(cfg->agent.state_cfg.inferred_min_bytes, 4096);
+    CHECK_U64(cfg->agent.state_cfg.inferred_min_permille, 200);
+    CHECK_U64(cfg->agent.state_cfg.max_transfers, 1000);
+    CHECK_U64(cfg->agent.backend_cfg.agg_entries, 2048);
     CHECK_STR(cfg->format, "jsonl");
     CHECK(!cfg->timestamps);
     CHECK_U64(cfg->exclude_path_count, 2);
     CHECK_U64(cfg->warning_count, 0);
     /* Minimal mode shrinks what the file left unset. */
-    CHECK_U64(cfg->daemon.backend_cfg.queue_bytes, 1024 * 1024);
-    CHECK_U64(cfg->daemon.state_cfg.event_log_bytes, 256 * 1024);
+    CHECK_U64(cfg->agent.backend_cfg.queue_bytes, 1024 * 1024);
+    CHECK_U64(cfg->agent.state_cfg.event_log_bytes, 256 * 1024);
     ft_config_free(cfg);
 }
 
@@ -221,9 +221,9 @@ static void prints_what_it_reads(void)
 
     CHECK_U64(load(second, text, &err), FT_EXIT_OK);
     ft_config_finish(second);
-    CHECK_U64(second->daemon.backend_cfg.queue_bytes, first->daemon.backend_cfg.queue_bytes);
-    CHECK_U64(second->daemon.backend_cfg.drain_batch, 4096);
-    CHECK_U64(second->daemon.state_cfg.event_log_bytes, first->daemon.state_cfg.event_log_bytes);
+    CHECK_U64(second->agent.backend_cfg.queue_bytes, first->agent.backend_cfg.queue_bytes);
+    CHECK_U64(second->agent.backend_cfg.drain_batch, 4096);
+    CHECK_U64(second->agent.state_cfg.event_log_bytes, first->agent.state_cfg.event_log_bytes);
     CHECK_U64(second->exclude_path_count, 2);
     CHECK_STR(second->exclude_paths[0], "/proc/*");
     CHECK_U64(second->warning_count, first->warning_count);
@@ -239,9 +239,8 @@ static void prints_what_it_reads(void)
     struct ft_config *reread = ft_config_new();
     CHECK_U64(load(reread, text, &err), FT_EXIT_OK);
     CHECK_U64(reread->warning_count, 0);
-    CHECK_U64(reread->daemon.state_cfg.max_flows, defaults->daemon.state_cfg.max_flows);
-    CHECK_U64(reread->daemon.backend_cfg.corr_window_ns,
-              defaults->daemon.backend_cfg.corr_window_ns);
+    CHECK_U64(reread->agent.state_cfg.max_flows, defaults->agent.state_cfg.max_flows);
+    CHECK_U64(reread->agent.backend_cfg.corr_window_ns, defaults->agent.backend_cfg.corr_window_ns);
 
     free(text);
     ft_config_free(first);

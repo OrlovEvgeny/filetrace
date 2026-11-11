@@ -1,6 +1,6 @@
 #include "cmd/cli.h"
 
-#include "daemon/daemon.h"
+#include "agent/agent.h"
 #include "filetrace/format.h"
 
 #include <errno.h>
@@ -29,7 +29,7 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s)
         return FT_EXIT_ERROR;
     }
     if (pid == 0) {
-        struct ft_daemon_config cfg;
+        struct ft_agent_config cfg;
         struct ft_error err = {0};
 
         close(pair[0]);
@@ -38,10 +38,10 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s)
         if (ft_cli_collector_config(cli))
             cfg = *ft_cli_collector_config(cli);
         else
-            ft_daemon_config_defaults(&cfg);
+            ft_agent_config_defaults(&cfg);
         cfg.socket_path = nullptr;
         cfg.session_fd = pair[1];
-        _exit(ft_daemon_run(&cfg, &err));
+        _exit(ft_agent_run(&cfg, &err));
     }
 
     close(pair[1]);
@@ -64,7 +64,7 @@ int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_s
     if (s->client)
         return FT_EXIT_OK;
 
-    if (err.code != FT_EXIT_NO_DAEMON || !allow_foreground) {
+    if (err.code != FT_EXIT_NO_AGENT || !allow_foreground) {
         fprintf(stderr, "%s\n", err.msg);
         return err.code;
     }
@@ -82,7 +82,7 @@ int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_s
         ft_session_close(s);
         return code;
     }
-    fprintf(stderr, "The Filetrace daemon is not running; monitoring in the foreground for this\n"
+    fprintf(stderr, "The Filetrace agent is not running; monitoring in the foreground for this\n"
                     "session. Only activity from now on is shown.\n");
     return FT_EXIT_OK;
 }
@@ -121,15 +121,15 @@ enum ft_agent_state ft_agent_ask(const struct ft_cli *cli, struct ft_row_stats *
     return code == FT_EXIT_OK ? FT_AGENT_RUNNING : FT_AGENT_UNREACHABLE;
 }
 
-static int daemon_status(const struct ft_cli *cli)
+static int agent_status(const struct ft_cli *cli)
 {
     struct ft_error err = {0};
     struct ft_client *c = ft_client_connect(cli->socket_path, &err);
 
     if (!c) {
-        if (err.code == FT_EXIT_NO_DAEMON) {
-            printf("Monitoring: STOPPED\n\nStart it with:\n  sudo filetrace daemon run\n");
-            return FT_EXIT_NO_DAEMON;
+        if (err.code == FT_EXIT_NO_AGENT) {
+            printf("Monitoring: STOPPED\n\nStart it with:\n  sudo filetrace agent run\n");
+            return FT_EXIT_NO_AGENT;
         }
         fprintf(stderr, "%s\n", err.msg);
         return err.code;
@@ -164,7 +164,7 @@ static int daemon_status(const struct ft_cli *cli)
     return row.health == FT_HEALTH_OK ? FT_EXIT_OK : FT_EXIT_PARTIAL;
 }
 
-static int daemon_stop(const struct ft_cli *cli)
+static int agent_stop(const struct ft_cli *cli)
 {
     struct ft_error err = {0};
     struct ft_client *c = ft_client_connect(cli->socket_path, &err);
@@ -179,34 +179,34 @@ static int daemon_stop(const struct ft_cli *cli)
         fprintf(stderr, "%s\n", err.msg);
         return code;
     }
-    printf("The daemon is stopping.\n");
+    printf("The agent is stopping.\n");
     return FT_EXIT_OK;
 }
 
-int ft_cmd_daemon(const struct ft_cli *cli, struct ft_args *a)
+int ft_cmd_agent(const struct ft_cli *cli, struct ft_args *a)
 {
     const char *action = ft_args_take(a);
 
     if (!action)
-        return ft_usage_error("daemon", "missing action (expected run, status or stop)");
+        return ft_usage_error("agent", "missing action (expected run, status or stop)");
 
     if (strcmp(action, "status") == 0) {
         if (!ft_args_done(a))
-            return ft_usage_error("daemon", "unknown argument '%s'", ft_args_peek(a));
-        return daemon_status(cli);
+            return ft_usage_error("agent", "unknown argument '%s'", ft_args_peek(a));
+        return agent_status(cli);
     }
     if (strcmp(action, "stop") == 0) {
         if (!ft_args_done(a))
-            return ft_usage_error("daemon", "unknown argument '%s'", ft_args_peek(a));
-        return daemon_stop(cli);
+            return ft_usage_error("agent", "unknown argument '%s'", ft_args_peek(a));
+        return agent_stop(cli);
     }
     if (strcmp(action, "run") == 0) {
-        /* Hand over to the daemon's own option parser, keeping --config and --socket. */
+        /* Hand over to the agent's own option parser, keeping --config and --socket. */
         int extra = a->argc - a->pos;
         char **argv = calloc((size_t)extra + 6, sizeof(char *));
         char config_opt[] = "--config";
         char socket_opt[] = "--socket";
-        char name[] = "filetrace daemon run";
+        char name[] = "filetrace agent run";
         int n = 0;
 
         if (!argv)
@@ -223,9 +223,9 @@ int ft_cmd_daemon(const struct ft_cli *cli, struct ft_args *a)
         for (int i = 0; i < extra; i++)
             argv[n++] = a->argv[a->pos + i];
 
-        int code = ft_daemon_main(n, argv, "filetrace daemon run");
+        int code = ft_agent_main(n, argv, "filetrace agent run");
         free(argv);
         return code;
     }
-    return ft_usage_error("daemon", "unknown action '%s' (expected run, status or stop)", action);
+    return ft_usage_error("agent", "unknown action '%s' (expected run, status or stop)", action);
 }

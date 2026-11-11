@@ -17,7 +17,7 @@ for applet in $(busybox --list); do
 done
 echo "root:x:0:0:root:/:/bin/sh" >"$root/etc/passwd"
 
-for binary in filetrace filetraced tests/ft_workload tests/ft_unit_tests ft_bench_syscalls; do
+for binary in filetrace filetrace-agent tests/ft_workload tests/ft_unit_tests ft_bench_syscalls; do
     cp "$build/$binary" "$root/ft/bin/"
     ldd "$build/$binary" | awk '$3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }'
 done | sort -u | while read -r lib; do

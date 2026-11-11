@@ -1,4 +1,4 @@
-#include "daemon/daemon.h"
+#include "agent/agent.h"
 
 #include "filetrace/client.h"
 #include "filetrace/clock.h"
@@ -40,8 +40,8 @@ struct client {
     unsigned char in[sizeof(struct ft_frame_hdr) + sizeof(struct ft_query)];
 };
 
-struct daemon {
-    const struct ft_daemon_config *cfg;
+struct agent {
+    const struct ft_agent_config *cfg;
     struct ft_state *state;
     struct ft_backend *backend;
     int listen_fd;
@@ -59,12 +59,12 @@ struct daemon {
 
 static volatile sig_atomic_t stop_requested;
 
-void ft_daemon_stop(void)
+void ft_agent_stop(void)
 {
     stop_requested = 1;
 }
 
-void ft_daemon_config_defaults(struct ft_daemon_config *cfg)
+void ft_agent_config_defaults(struct ft_agent_config *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->backend = ft_backend_native();
@@ -77,7 +77,7 @@ void ft_daemon_config_defaults(struct ft_daemon_config *cfg)
 
 static void on_event(void *ctx, const struct ft_event *ev)
 {
-    struct daemon *d = ctx;
+    struct agent *d = ctx;
     ft_state_ingest(d->state, ev);
 }
 
@@ -131,7 +131,7 @@ static int open_listener(const char *path, struct ft_error *err)
     }
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
         close(fd);
-        ft_error_set(err, FT_EXIT_ERROR, "A daemon is already serving %s.", path);
+        ft_error_set(err, FT_EXIT_ERROR, "An agent is already serving %s.", path);
         return -1;
     }
     unlink(path);
@@ -209,7 +209,7 @@ static void reply_error(struct client *c, int code, const char *fmt, ...)
 
 static void on_record(void *ctx, const struct ft_row_event *row)
 {
-    struct daemon *d = ctx;
+    struct agent *d = ctx;
     struct ft_row_event *live = d->live;
 
     for (size_t i = 0; i < d->nclients; i++) {
@@ -246,7 +246,7 @@ static void follow_end(struct client *c)
     c->follow_missed = 0;
 }
 
-static void sample_rates(struct daemon *d, uint64_t now_ns)
+static void sample_rates(struct agent *d, uint64_t now_ns)
 {
     struct ft_self_usage usage;
     ft_sysinfo_self(&usage);
@@ -263,7 +263,7 @@ static void sample_rates(struct daemon *d, uint64_t now_ns)
     d->rate_cpu_ns = usage.cpu_ns;
 }
 
-static void reply_stats(struct daemon *d, struct client *c, uint64_t now_ns)
+static void reply_stats(struct agent *d, struct client *c, uint64_t now_ns)
 {
     struct ft_row_stats row = {0};
     struct ft_backend_stats bs = {0};
@@ -300,7 +300,7 @@ static void reply_stats(struct daemon *d, struct client *c, uint64_t now_ns)
     reply(c, FT_MSG_END, &end, sizeof(end));
 }
 
-static void reply_capabilities(struct daemon *d, struct client *c)
+static void reply_capabilities(struct agent *d, struct client *c)
 {
     struct ft_capabilities caps = {0};
     struct ft_msg_end end = {.rows = FT_FEAT_COUNT, .observed_since_wall_ns = d->start_wall_ns};
@@ -314,7 +314,7 @@ static void reply_capabilities(struct daemon *d, struct client *c)
     reply(c, FT_MSG_END, &end, sizeof(end));
 }
 
-static void handle_query(struct daemon *d, struct client *c, const void *payload, size_t size)
+static void handle_query(struct agent *d, struct client *c, const void *payload, size_t size)
 {
     struct ft_query *q = calloc(1, sizeof(*q));
 
@@ -368,7 +368,7 @@ static void handle_query(struct daemon *d, struct client *c, const void *payload
     free(q);
 }
 
-static void client_add(struct daemon *d, int fd, bool session)
+static void client_add(struct agent *d, int fd, bool session)
 {
     if (d->nclients == MAX_CLIENTS) {
         close(fd);
@@ -385,7 +385,7 @@ static void client_add(struct daemon *d, int fd, bool session)
 #endif
 }
 
-static void client_drop(struct daemon *d, size_t index)
+static void client_drop(struct agent *d, size_t index)
 {
     struct client *c = &d->clients[index];
     if (c->session)
@@ -423,7 +423,7 @@ static bool client_write(struct client *c)
 }
 
 /* Returns false when the client is gone or sent something invalid. */
-static bool client_read(struct daemon *d, struct client *c)
+static bool client_read(struct agent *d, struct client *c)
 {
     for (;;) {
         ssize_t n = read(c->fd, c->in + c->in_len, sizeof(c->in) - c->in_len);
@@ -447,8 +447,8 @@ static bool client_read(struct daemon *d, struct client *c)
 
             if (hdr.version != FT_WIRE_VERSION) {
                 reply_error(c, FT_EXIT_ERROR,
-                            "The daemon speaks protocol version %u, the client %u. "
-                            "Upgrade filetrace and filetraced together.",
+                            "The agent speaks protocol version %u, the client %u. "
+                            "Upgrade filetrace and filetrace-agent together.",
                             FT_WIRE_VERSION, hdr.version);
             } else if (hdr.type == FT_MSG_QUERY) {
                 handle_query(d, c, c->in + sizeof(hdr), hdr.length);
@@ -467,14 +467,14 @@ static bool client_read(struct daemon *d, struct client *c)
     }
 }
 
-static void accept_clients(struct daemon *d)
+static void accept_clients(struct agent *d)
 {
     for (;;) {
         int fd = accept(d->listen_fd, nullptr, nullptr);
         if (fd < 0)
             return;
         if (!peer_allowed(fd)) {
-            ft_log(FT_LOG_WARN, "rejected a client that is neither root nor the daemon's user");
+            ft_log(FT_LOG_WARN, "rejected a client that is neither root nor the agent's user");
             close(fd);
             continue;
         }
@@ -482,7 +482,7 @@ static void accept_clients(struct daemon *d)
     }
 }
 
-static int fail_session(const struct ft_daemon_config *cfg, const struct ft_error *err)
+static int fail_session(const struct ft_agent_config *cfg, const struct ft_error *err)
 {
     if (cfg->session_fd >= 0) {
         struct ft_msg_error e = {.code = (uint32_t)err->code};
@@ -493,9 +493,9 @@ static int fail_session(const struct ft_daemon_config *cfg, const struct ft_erro
     return err->code;
 }
 
-int ft_daemon_run(const struct ft_daemon_config *cfg, struct ft_error *err)
+int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
 {
-    struct daemon *d = calloc(1, sizeof(*d));
+    struct agent *d = calloc(1, sizeof(*d));
     if (!d)
         return ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
 

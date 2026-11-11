@@ -114,14 +114,14 @@ struct ft_client *ft_client_connect(const char *socket_path, struct ft_error *er
         if (saved == EACCES || saved == EPERM)
             ft_error_set(err, FT_EXIT_PERMISSION,
                          "Permission denied.\n\n"
-                         "The daemon socket %s is not accessible to this user.\n"
+                         "The agent socket %s is not accessible to this user.\n"
                          "Run the command with sudo.",
                          socket_path);
         else
-            ft_error_set(err, FT_EXIT_NO_DAEMON,
-                         "The Filetrace daemon is not running (%s: %s).\n\n"
+            ft_error_set(err, FT_EXIT_NO_AGENT,
+                         "The Filetrace agent is not running (%s: %s).\n\n"
                          "Start it with:\n"
-                         "  sudo filetrace daemon run\n\n"
+                         "  sudo filetrace agent run\n\n"
                          "To check what this machine supports:\n"
                          "  sudo filetrace doctor",
                          socket_path, strerror(saved));
@@ -152,7 +152,7 @@ static int broken(const struct ft_client *c, struct ft_error *err)
 {
     if (c->stop && *c->stop)
         return FT_EXIT_OK;
-    return ft_error_set(err, FT_EXIT_NO_DAEMON, "The connection to the daemon was lost.");
+    return ft_error_set(err, FT_EXIT_NO_AGENT, "The connection to the agent was lost.");
 }
 
 int ft_client_query(struct ft_client *c, const struct ft_query *q, ft_client_row_fn *on_row,
@@ -170,8 +170,8 @@ int ft_client_query(struct ft_client *c, const struct ft_query *q, ft_client_row
         if (hdr.magic != FT_WIRE_MAGIC || hdr.version != FT_WIRE_VERSION ||
             hdr.length > FT_WIRE_MAX_PAYLOAD)
             return ft_error_set(err, FT_EXIT_ERROR,
-                                "The daemon speaks a different protocol version. "
-                                "Upgrade filetrace and filetraced together.");
+                                "The agent speaks a different protocol version. "
+                                "Upgrade filetrace and filetrace-agent together.");
         if (hdr.length && !read_all(c, c->payload, hdr.length))
             return broken(c, err);
 

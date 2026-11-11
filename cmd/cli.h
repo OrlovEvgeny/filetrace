@@ -22,7 +22,7 @@ constexpr uint32_t FT_FORMATS_ALL = FT_FMT_BIT(FT_FMT_COUNT) - 1;
 constexpr uint32_t FT_FORMATS_REPORT = FT_FMT_BIT(FT_FMT_TABLE) | FT_FMT_BIT(FT_FMT_JSON);
 
 struct ft_config;
-struct ft_daemon_config;
+struct ft_agent_config;
 
 struct ft_cli {
     const char *socket_path;
@@ -42,7 +42,7 @@ enum ft_format ft_cli_format(const struct ft_cli *cli, uint32_t accepted);
 bool ft_cli_timestamps(const struct ft_cli *cli);
 
 /* Settings for a collector started by a command, or nullptr for the built-in ones. */
-const struct ft_daemon_config *ft_cli_collector_config(const struct ft_cli *cli);
+const struct ft_agent_config *ft_cli_collector_config(const struct ft_cli *cli);
 
 struct ft_args {
     int argc;
@@ -171,7 +171,7 @@ struct ft_session {
     pid_t collector; /* a collector started for this session, or 0 */
 };
 
-/* With allow_foreground, starts a collector for the session when no daemon is reachable. */
+/* With allow_foreground, starts a collector for the session when no agent is reachable. */
 int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_session *s);
 void ft_session_close(struct ft_session *s);
 
@@ -200,7 +200,7 @@ void ft_rows_free(struct ft_rows *rows);
 void ft_rows_clear(struct ft_rows *rows);
 bool ft_rows_append(struct ft_rows *rows, const void *payload, size_t size);
 
-/* Copies row i into out, zero-filling whatever the daemon did not send. */
+/* Copies row i into out, zero-filling whatever the agent did not send. */
 void ft_rows_get(const struct ft_rows *rows, size_t i, void *out, size_t out_size);
 
 void ft_rows_collect(void *ctx, uint16_t type, const void *payload, size_t size);
@@ -245,7 +245,7 @@ int ft_cmd_stats(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_version(const struct ft_cli *cli, struct ft_args *a);
-int ft_cmd_daemon(const struct ft_cli *cli, struct ft_args *a);
+int ft_cmd_agent(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_config(const struct ft_cli *cli, struct ft_args *a);
 
 /* Returns false when the command is unknown. */

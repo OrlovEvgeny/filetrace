@@ -1,17 +1,17 @@
 #ifndef FILETRACE_CONFIG_H
 #define FILETRACE_CONFIG_H
 
-#include "daemon/daemon.h"
+#include "agent/agent.h"
 
 #include <stdio.h>
 
 #define FT_CONFIG_MAX_PATTERNS 32
 #define FT_CONFIG_MAX_WARNINGS 16
 
-/* Settings from a configuration file. daemon points into this structure, which is
+/* Settings from a configuration file. agent points into this structure, which is
    therefore created on the heap and never copied. */
 struct ft_config {
-    struct ft_daemon_config daemon;
+    struct ft_agent_config agent;
     bool enabled;
     enum ft_log_level log_level;
     char socket_path[104];

@@ -142,7 +142,7 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
     } else {
         printf("  %-18s%s\n", "Agent:",
                d->exit_code == FT_EXIT_OK || d->exit_code == FT_EXIT_PARTIAL
-                   ? "not running; start it with 'sudo filetrace daemon run'"
+                   ? "not running; start it with 'sudo filetrace agent run'"
                    : "not running");
     }
 
@@ -292,9 +292,9 @@ int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a)
             return ft_usage_error("capabilities", "unknown argument '%s'", ft_args_peek(a));
     }
 
-    /* A running daemon knows what is attached; without one the backend checks the machine. */
+    /* A running agent knows what is attached; without one the backend checks the machine. */
     struct capability_rows caps = {0};
-    const char *source = "the running daemon";
+    const char *source = "the running agent";
     struct ft_error err = {0};
     struct ft_client *c = ft_client_connect(cli->socket_path, &err);
     int code = FT_EXIT_OK;
@@ -319,7 +319,7 @@ int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a)
             ft_strlcpy(caps.rows[f].reason, d->caps.items[f].reason, sizeof(caps.rows[f].reason));
         }
         caps.count = FT_FEAT_COUNT;
-        source = "a check of this machine (no daemon is running)";
+        source = "a check of this machine (no agent is running)";
         if (d->exit_code == FT_EXIT_PERMISSION || d->exit_code == FT_EXIT_UNSUPPORTED)
             code = d->exit_code;
         free(d);
@@ -394,7 +394,7 @@ int ft_cmd_version(const struct ft_cli *cli, struct ft_args *a)
     printf("Compiler:       GCC %d.%d.%d\n", __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
 #endif
     printf("Build:          %s\n", FT_BUILD_TYPE);
-    printf("Daemon:         %s\n", c ? "Running"
+    printf("Agent:          %s\n", c ? "Running"
                                    : err.code == FT_EXIT_PERMISSION
                                        ? "Running (socket not accessible)"
                                        : "Not running");

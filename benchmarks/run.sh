@@ -1,6 +1,6 @@
 #!/bin/sh
-# usage: run.sh <directory with filetrace and filetraced> <syscalls benchmark binary> [probes]
-# Needs the same privileges as the daemon. Build with CMAKE_BUILD_TYPE=Release.
+# usage: run.sh <directory with filetrace and filetrace-agent> <syscalls benchmark binary> [probes]
+# Needs the same privileges as the agent. Build with CMAKE_BUILD_TYPE=Release.
 
 set -eu
 
@@ -8,9 +8,9 @@ bin=$1
 bench=$2
 probes=${3:-auto}
 work=$(mktemp -d /tmp/filetrace-bench-XXXXXX)
-sock=$work/daemon.sock
-daemon=
-trap '[ -n "$daemon" ] && kill "$daemon" 2>/dev/null; wait 2>/dev/null; rm -rf "$work"' EXIT
+sock=$work/agent.sock
+agent=
+trap '[ -n "$agent" ] && kill "$agent" 2>/dev/null; wait 2>/dev/null; rm -rf "$work"' EXIT
 
 ft() {
     "$bin/filetrace" --socket "$sock" "$@"
@@ -23,8 +23,8 @@ json_number() {
 run_mode() {
     mode=$1
     if [ "$mode" != off ]; then
-        "$bin/filetraced" --socket "$sock" --mode "$mode" --probes "$probes" --log-level error &
-        daemon=$!
+        "$bin/filetrace-agent" --socket "$sock" --mode "$mode" --probes "$probes" --log-level error &
+        agent=$!
         while [ ! -S "$sock" ]; do
             sleep 0.1
         done
@@ -42,9 +42,9 @@ run_mode() {
         sleep 5
         stats=$(ft stats --format json)
         echo "idle_cpu_percent $(json_number "$stats" cpu_percent)" >>"$work/$mode.txt"
-        ft daemon stop >/dev/null
-        wait "$daemon"
-        daemon=
+        ft agent stop >/dev/null
+        wait "$agent"
+        agent=
     fi
 }
 

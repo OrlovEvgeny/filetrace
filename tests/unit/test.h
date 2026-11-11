@@ -46,7 +46,7 @@ void test_format(void);
 void test_model(void);
 void test_table(void);
 void test_state(void);
-void test_daemon(void);
+void test_agent(void);
 void test_views(void);
 void test_config(void);
 

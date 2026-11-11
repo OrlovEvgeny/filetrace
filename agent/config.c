@@ -1,4 +1,4 @@
-#include "daemon/config.h"
+#include "agent/config.h"
 
 #include "filetrace/format.h"
 
@@ -21,11 +21,11 @@ struct ft_config *ft_config_new(void)
     if (!cfg)
         return nullptr;
 
-    ft_daemon_config_defaults(&cfg->daemon);
+    ft_agent_config_defaults(&cfg->agent);
     ft_strlcpy(cfg->socket_path, ft_default_socket_path(), sizeof(cfg->socket_path));
-    cfg->daemon.socket_path = cfg->socket_path;
-    cfg->daemon.state_cfg.exclude_processes = (const char *const *)cfg->exclude_processes;
-    cfg->daemon.state_cfg.exclude_paths = (const char *const *)cfg->exclude_paths;
+    cfg->agent.socket_path = cfg->socket_path;
+    cfg->agent.state_cfg.exclude_processes = (const char *const *)cfg->exclude_processes;
+    cfg->agent.state_cfg.exclude_paths = (const char *const *)cfg->exclude_paths;
     cfg->enabled = true;
     cfg->log_level = FT_LOG_INFO;
     cfg->correlation_enabled = true;
@@ -57,8 +57,8 @@ void ft_config_free(struct ft_config *cfg)
 
 void ft_config_finish(struct ft_config *cfg)
 {
-    struct ft_backend_config *backend = &cfg->daemon.backend_cfg;
-    struct ft_state_config *state = &cfg->daemon.state_cfg;
+    struct ft_backend_config *backend = &cfg->agent.backend_cfg;
+    struct ft_state_config *state = &cfg->agent.state_cfg;
 
     backend->track_read = cfg->correlation_enabled && cfg->track_read;
     backend->track_sendfile = cfg->correlation_enabled && cfg->track_sendfile;
@@ -376,7 +376,7 @@ constexpr uint64_t MB = 1024 * 1024;
 static bool apply_agent(struct ft_config *cfg, const char *key, struct value *v, char *why,
                         size_t size, bool *known)
 {
-    struct ft_backend_config *backend = &cfg->daemon.backend_cfg;
+    struct ft_backend_config *backend = &cfg->agent.backend_cfg;
     char text[32];
     uint64_t n;
 
@@ -413,13 +413,13 @@ static bool apply_agent(struct ft_config *cfg, const char *key, struct value *v,
     if (strcmp(key, "flush_interval") == 0) {
         if (!want_duration(v, 10 * FT_NS_PER_MS, 60 * FT_NS_PER_SEC, &n, why, size))
             return false;
-        cfg->daemon.flush_interval_ms = (uint32_t)(n / FT_NS_PER_MS);
+        cfg->agent.flush_interval_ms = (uint32_t)(n / FT_NS_PER_MS);
         return true;
     }
     if (strcmp(key, "event_log_size") == 0) {
         if (!want_size(v, 64 * KB, 256 * MB, true, &n, why, size))
             return false;
-        cfg->daemon.state_cfg.event_log_bytes = (size_t)n;
+        cfg->agent.state_cfg.event_log_bytes = (size_t)n;
         cfg->event_log_size_set = true;
         return true;
     }
@@ -437,7 +437,7 @@ static bool apply_agent(struct ft_config *cfg, const char *key, struct value *v,
 static bool apply_network(struct ft_config *cfg, const char *key, struct value *v, char *why,
                           size_t size, bool *known)
 {
-    struct ft_state_config *state = &cfg->daemon.state_cfg;
+    struct ft_state_config *state = &cfg->agent.state_cfg;
     bool *ignore = strcmp(key, "tcp") == 0    ? &state->ignore_tcp
                    : strcmp(key, "udp") == 0  ? &state->ignore_udp
                    : strcmp(key, "ipv4") == 0 ? &state->ignore_ipv4
@@ -483,7 +483,7 @@ static bool apply_file(struct ft_config *cfg, const char *key, struct value *v, 
 static bool apply_correlation(struct ft_config *cfg, const char *key, struct value *v, char *why,
                               size_t size, bool *known)
 {
-    struct ft_state_config *state = &cfg->daemon.state_cfg;
+    struct ft_state_config *state = &cfg->agent.state_cfg;
     char text[32];
     uint64_t n;
 
@@ -491,7 +491,7 @@ static bool apply_correlation(struct ft_config *cfg, const char *key, struct val
         return want_bool(v, &cfg->correlation_enabled, why, size);
     if (strcmp(key, "window") == 0)
         return want_duration(v, FT_NS_PER_MS, 60 * FT_NS_PER_SEC,
-                             &cfg->daemon.backend_cfg.corr_window_ns, why, size);
+                             &cfg->agent.backend_cfg.corr_window_ns, why, size);
     if (strcmp(key, "confidence_threshold") == 0) {
         enum ft_confidence level;
         if (want_string(v, text, sizeof(text), why, size) && ft_confidence_parse(text, &level) &&
@@ -550,8 +550,8 @@ static bool apply_storage(struct ft_config *cfg, const char *key, struct value *
 static bool apply_limits(struct ft_config *cfg, const char *key, struct value *v, char *why,
                          size_t size, bool *known)
 {
-    struct ft_state_config *state = &cfg->daemon.state_cfg;
-    struct ft_backend_config *backend = &cfg->daemon.backend_cfg;
+    struct ft_state_config *state = &cfg->agent.state_cfg;
+    struct ft_backend_config *backend = &cfg->agent.backend_cfg;
     size_t *table = strcmp(key, "processes") == 0   ? &state->max_processes
                     : strcmp(key, "sockets") == 0   ? &state->max_sockets
                     : strcmp(key, "flows") == 0     ? &state->max_flows
@@ -792,8 +792,8 @@ static const char *log_level_name(enum ft_log_level level)
 
 void ft_config_print(const struct ft_config *cfg, FILE *o)
 {
-    const struct ft_backend_config *backend = &cfg->daemon.backend_cfg;
-    const struct ft_state_config *state = &cfg->daemon.state_cfg;
+    const struct ft_backend_config *backend = &cfg->agent.backend_cfg;
+    const struct ft_state_config *state = &cfg->agent.state_cfg;
     static const char unavailable[] = "# Not available in this build; true is ignored with a "
                                       "warning.\n";
 
@@ -804,7 +804,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     print_string(o, "socket", cfg->socket_path);
     print_size(o, "ring_buffer_size", backend->queue_bytes);
     fprintf(o, "event_batch_size = %u\n", backend->drain_batch);
-    print_duration(o, "flush_interval", (uint64_t)cfg->daemon.flush_interval_ms * FT_NS_PER_MS);
+    print_duration(o, "flush_interval", (uint64_t)cfg->agent.flush_interval_ms * FT_NS_PER_MS);
     print_size(o, "event_log_size", state->event_log_bytes);
     print_string(o, "log_level", log_level_name(cfg->log_level));
 
