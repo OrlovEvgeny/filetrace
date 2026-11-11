@@ -122,6 +122,7 @@ add_library(ft_core STATIC
     core/format.c
     core/metrics.c
     core/model.c
+    core/net.c
     core/poller.c
     core/query.c
     core/state.c
@@ -143,7 +144,9 @@ endif()
 add_library(ft_agent STATIC
     agent/config.c
     agent/lifecycle.c
+    agent/prometheus.c
     agent/server.c
+    agent/telemetry.c
     exporters/prometheus.c
 )
 target_link_libraries(ft_agent PUBLIC ft_core ft_backend)

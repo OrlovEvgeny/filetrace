@@ -74,7 +74,11 @@ static const char every_section[] = "[agent]\n"
                                     "exclude_paths = [\"/proc/*\", \"/sys/*\"]\n"
                                     "\n"
                                     "[limits]\n"
-                                    "metric_series = 512\n";
+                                    "metric_series = 512\n"
+                                    "\n"
+                                    "[prometheus]\n"
+                                    "enabled = true\n"
+                                    "listen = \"127.0.0.1:9900\"\n";
 
 static void reads_every_section(void)
 {
@@ -95,6 +99,8 @@ static void reads_every_section(void)
     CHECK_STR(cfg->agent.state_cfg.exclude_paths[1], "/sys/*");
     CHECK_STR(cfg->format, "table");
     CHECK_U64(cfg->agent.state_cfg.max_metric_series, 512);
+    CHECK(cfg->agent.prometheus.enabled);
+    CHECK_STR(cfg->agent.prometheus.listen, "127.0.0.1:9900");
 
     CHECK_U64(cfg->warning_count, 7);
     CHECK(warned(cfg, "[network] tc_egress"));
@@ -231,6 +237,8 @@ static void prints_what_it_reads(void)
     CHECK_STR(second->exclude_paths[0], "/proc/*");
     CHECK_U64(second->warning_count, first->warning_count);
     CHECK_U64(second->storage_retention_ns, first->storage_retention_ns);
+    CHECK(second->agent.prometheus.enabled);
+    CHECK_STR(second->agent.prometheus.listen, "127.0.0.1:9900");
 
     /* Printing the defaults reads back without a warning. */
     free(text);

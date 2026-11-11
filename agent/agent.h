@@ -4,6 +4,11 @@
 #include "backends/backend.h"
 #include "filetrace/state.h"
 
+struct ft_prometheus_config {
+    bool enabled;
+    char listen[64];
+};
+
 struct ft_agent_config {
     const struct ft_backend_ops *backend;
     struct ft_backend_config backend_cfg;
@@ -16,6 +21,8 @@ struct ft_agent_config {
     int session_fd;
 
     uint32_t flush_interval_ms;
+
+    struct ft_prometheus_config prometheus;
 };
 
 void ft_agent_config_defaults(struct ft_agent_config *cfg);

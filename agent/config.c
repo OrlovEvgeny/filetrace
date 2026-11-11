@@ -34,6 +34,8 @@ struct ft_config *ft_config_new(void)
     cfg->track_process_lifecycle = true;
     cfg->timestamps = true;
     ft_strlcpy(cfg->format, "table", sizeof(cfg->format));
+    ft_strlcpy(cfg->agent.prometheus.listen, "127.0.0.1:9464",
+               sizeof(cfg->agent.prometheus.listen));
     ft_strlcpy(cfg->storage_path, "/var/lib/filetrace", sizeof(cfg->storage_path));
     cfg->storage_retention_ns = 7 * 24 * 3600 * FT_NS_PER_SEC;
     return cfg;
@@ -611,15 +613,33 @@ static bool apply_filters(struct ft_config *cfg, const char *key, struct value *
     return false;
 }
 
+static bool apply_prometheus(struct ft_config *cfg, const char *key, struct value *v, char *why,
+                             size_t size, bool *known)
+{
+    struct ft_prometheus_config *prometheus = &cfg->agent.prometheus;
+
+    if (strcmp(key, "enabled") == 0)
+        return want_bool(v, &prometheus->enabled, why, size);
+    if (strcmp(key, "listen") == 0)
+        return want_string(v, prometheus->listen, sizeof(prometheus->listen), why, size);
+    *known = false;
+    return false;
+}
+
 static const struct {
     const char *name;
     bool (*apply)(struct ft_config *cfg, const char *key, struct value *v, char *why, size_t size,
                   bool *known);
 } sections[] = {
-    {"agent", apply_agent},     {"network", apply_network},
-    {"file", apply_file},       {"correlation", apply_correlation},
-    {"storage", apply_storage}, {"limits", apply_limits},
-    {"output", apply_output},   {"filters", apply_filters},
+    {"agent", apply_agent},
+    {"network", apply_network},
+    {"file", apply_file},
+    {"correlation", apply_correlation},
+    {"storage", apply_storage},
+    {"limits", apply_limits},
+    {"output", apply_output},
+    {"filters", apply_filters},
+    {"prometheus", apply_prometheus},
 };
 
 static bool parse(struct parser *ps, struct ft_config *cfg)
@@ -862,4 +882,8 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fputs("\n[filters]\n", o);
     print_patterns(o, "exclude_processes", cfg->exclude_processes, cfg->exclude_process_count);
     print_patterns(o, "exclude_paths", cfg->exclude_paths, cfg->exclude_path_count);
+
+    fputs("\n[prometheus]\n", o);
+    fprintf(o, "enabled = %s\n", yes_no(cfg->agent.prometheus.enabled));
+    print_string(o, "listen", cfg->agent.prometheus.listen);
 }

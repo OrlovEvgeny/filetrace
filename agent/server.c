@@ -1,8 +1,8 @@
-#include "agent/agent.h"
+#include "agent/telemetry.h"
 
 #include "filetrace/client.h"
 #include "filetrace/clock.h"
-#include "filetrace/poller.h"
+#include "filetrace/net.h"
 #include "filetrace/sysinfo.h"
 
 #include <errno.h>
@@ -49,6 +49,7 @@ struct agent {
     size_t nclients;
     struct ft_row_event *live; /* a record on its way to followers */
     struct ft_poller poller;
+    struct ft_scrape *scrape;
 
     uint64_t start_wall_ns;
     uint64_t rate_mono_ns;
@@ -88,23 +89,6 @@ static void set_nonblocking(int fd)
     if (flags >= 0)
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     fcntl(fd, F_SETFD, FD_CLOEXEC);
-}
-
-static bool peer_allowed(int fd)
-{
-    uid_t uid;
-#if defined(__linux__)
-    struct ucred cred;
-    socklen_t len = sizeof(cred);
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0)
-        return false;
-    uid = cred.uid;
-#else
-    gid_t gid;
-    if (getpeereid(fd, &uid, &gid) != 0)
-        return false;
-#endif
-    return uid == 0 || uid == geteuid();
 }
 
 static int open_listener(const char *path, struct ft_error *err)
@@ -264,37 +248,43 @@ static void sample_rates(struct agent *d, uint64_t now_ns)
     d->rate_cpu_ns = usage.cpu_ns;
 }
 
-static void reply_stats(struct agent *d, struct client *c, uint64_t now_ns)
+static void fill_stats(void *agent, uint64_t now_ns, struct ft_row_stats *row)
 {
-    struct ft_row_stats row = {0};
+    struct agent *d = agent;
     struct ft_backend_stats bs = {0};
     struct ft_self_usage usage;
-    struct ft_msg_end end = {.rows = 1};
 
     if (d->events_per_sec_milli == 0 && d->cpu_milli_percent == 0)
         sample_rates(d, now_ns);
 
     d->cfg->backend->stats(d->backend, &bs);
     ft_sysinfo_self(&usage);
-    ft_state_fill_stats(d->state, now_ns, &row);
+    ft_state_fill_stats(d->state, now_ns, row);
 
-    row.start_wall_ns = d->start_wall_ns;
-    row.now_wall_ns = ft_clock_wall_ns();
-    row.events_received = bs.events + row.events_dropped;
-    row.events_per_sec_milli = d->events_per_sec_milli;
-    row.cpu_milli_percent = d->cpu_milli_percent;
-    row.rss_bytes = usage.rss_bytes;
-    row.open_fds = usage.open_fds;
-    row.queue_bytes = bs.queue_bytes;
-    row.queue_peak_bytes = bs.queue_peak_bytes;
-    row.pid = (uint32_t)getpid();
+    row->start_wall_ns = d->start_wall_ns;
+    row->now_wall_ns = ft_clock_wall_ns();
+    row->events_received = bs.events + row->events_dropped;
+    row->events_per_sec_milli = d->events_per_sec_milli;
+    row->cpu_milli_percent = d->cpu_milli_percent;
+    row->rss_bytes = usage.rss_bytes;
+    row->open_fds = usage.open_fds;
+    row->queue_bytes = bs.queue_bytes;
+    row->queue_peak_bytes = bs.queue_peak_bytes;
+    row->pid = (uint32_t)getpid();
     if (d->cfg->backend->describe)
-        d->cfg->backend->describe(d->backend, row.backend, sizeof(row.backend));
+        d->cfg->backend->describe(d->backend, row->backend, sizeof(row->backend));
     else
-        ft_strlcpy(row.backend, d->cfg->backend->name, sizeof(row.backend));
-    ft_strlcpy(row.mode, ft_mode_name(d->cfg->backend_cfg.mode), sizeof(row.mode));
-    ft_strlcpy(row.version, FT_VERSION, sizeof(row.version));
+        ft_strlcpy(row->backend, d->cfg->backend->name, sizeof(row->backend));
+    ft_strlcpy(row->mode, ft_mode_name(d->cfg->backend_cfg.mode), sizeof(row->mode));
+    ft_strlcpy(row->version, FT_VERSION, sizeof(row->version));
+}
 
+static void reply_stats(struct agent *d, struct client *c, uint64_t now_ns)
+{
+    struct ft_row_stats row = {0};
+    struct ft_msg_end end = {.rows = 1};
+
+    fill_stats(d, now_ns, &row);
     end.health = row.health;
     end.observed_since_wall_ns = d->start_wall_ns;
     reply(c, FT_MSG_ROW_STATS, &row, sizeof(row));
@@ -474,7 +464,7 @@ static void accept_clients(struct agent *d)
         int fd = accept(d->listen_fd, nullptr, nullptr);
         if (fd < 0)
             return;
-        if (!peer_allowed(fd)) {
+        if (!ft_net_peer_trusted(fd)) {
             ft_log(FT_LOG_WARN, "rejected a client that is neither root nor the agent's user");
             close(fd);
             continue;
@@ -494,6 +484,62 @@ static int fail_session(const struct ft_agent_config *cfg, const struct ft_error
     return err->code;
 }
 
+static void agent_close(struct agent *d)
+{
+    while (d->nclients)
+        client_drop(d, d->nclients - 1);
+    ft_scrape_close(d->scrape);
+    if (d->listen_fd >= 0) {
+        close(d->listen_fd);
+        unlink(d->cfg->socket_path);
+    }
+    if (d->backend)
+        d->cfg->backend->close(d->backend);
+    ft_state_destroy(d->state);
+    free(d->live);
+    free(d);
+}
+
+static bool agent_open(struct agent *d, struct ft_error *err)
+{
+    const struct ft_agent_config *cfg = d->cfg;
+
+    struct ft_state_config state_cfg = cfg->state_cfg;
+    if (!state_cfg.lookup_process)
+        state_cfg.lookup_process = cfg->backend->lookup_process;
+    d->state = ft_state_create(&state_cfg);
+    d->live = malloc(sizeof(*d->live));
+    if (!d->state || !d->live) {
+        ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+        return false;
+    }
+    d->state->on_record = on_record;
+    d->state->on_record_ctx = d;
+
+    struct ft_sink sink = {.ctx = d, .emit = on_event};
+    d->backend = cfg->backend->open(&cfg->backend_cfg, &sink, err);
+    if (!d->backend)
+        return false;
+
+    if (cfg->socket_path) {
+        d->listen_fd = open_listener(cfg->socket_path, err);
+        if (d->listen_fd < 0)
+            return false;
+    }
+
+    struct ft_telemetry_source src = {.state = d->state, .agent = d, .stats = fill_stats};
+    struct ft_host_info host;
+    ft_sysinfo_host(&host);
+    ft_strlcpy(src.host, host.hostname, sizeof(src.host));
+
+    if (cfg->prometheus.enabled) {
+        d->scrape = ft_scrape_open(&cfg->prometheus, &src, err);
+        if (!d->scrape)
+            return false;
+    }
+    return true;
+}
+
 int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
 {
     struct agent *d = calloc(1, sizeof(*d));
@@ -505,39 +551,9 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
     stop_requested = 0;
     signal(SIGPIPE, SIG_IGN);
 
-    struct ft_state_config state_cfg = cfg->state_cfg;
-    if (!state_cfg.lookup_process)
-        state_cfg.lookup_process = cfg->backend->lookup_process;
-    d->state = ft_state_create(&state_cfg);
-    d->live = malloc(sizeof(*d->live));
-    if (!d->state || !d->live) {
-        ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
-        ft_state_destroy(d->state);
-        free(d->live);
-        free(d);
+    if (!agent_open(d, err)) {
+        agent_close(d);
         return fail_session(cfg, err);
-    }
-    d->state->on_record = on_record;
-    d->state->on_record_ctx = d;
-
-    struct ft_sink sink = {.ctx = d, .emit = on_event};
-    d->backend = cfg->backend->open(&cfg->backend_cfg, &sink, err);
-    if (!d->backend) {
-        ft_state_destroy(d->state);
-        free(d->live);
-        free(d);
-        return fail_session(cfg, err);
-    }
-
-    if (cfg->socket_path) {
-        d->listen_fd = open_listener(cfg->socket_path, err);
-        if (d->listen_fd < 0) {
-            cfg->backend->close(d->backend);
-            ft_state_destroy(d->state);
-            free(d->live);
-            free(d);
-            return fail_session(cfg, err);
-        }
     }
     if (cfg->session_fd >= 0)
         client_add(d, cfg->session_fd, true);
@@ -560,11 +576,12 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
         ft_poller_begin(p, next_flush_ns);
         size_t listen_slot =
             d->listen_fd >= 0 ? ft_poller_add(p, d->listen_fd, POLLIN) : FT_POLLER_NONE;
-        size_t backend_slot = backend_fd >= 0 ? ft_poller_add(p, backend_fd, POLLIN) : FT_POLLER_NONE;
+        size_t backend_slot =
+            backend_fd >= 0 ? ft_poller_add(p, backend_fd, POLLIN) : FT_POLLER_NONE;
         size_t first_client = p->count;
         for (size_t i = 0; i < d->nclients; i++)
-            ft_poller_add(p, d->clients[i].fd,
-                          d->clients[i].out_len ? POLLIN | POLLOUT : POLLIN);
+            ft_poller_add(p, d->clients[i].fd, d->clients[i].out_len ? POLLIN | POLLOUT : POLLIN);
+        ft_scrape_poll(d->scrape, p);
 
         int ready = ft_poller_wait(p, ft_clock_mono_ns());
         if (ready < 0 && errno != EINTR) {
@@ -583,7 +600,7 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
             if (now_ns >= next_flush_ns)
                 next_flush_ns = now_ns + interval_ns;
         }
-        if (ready <= 0)
+        if (ready < 0)
             continue;
 
         /* Dropping a client moves the last one into its place, so walk backwards. */
@@ -601,18 +618,10 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
         }
         if (ft_poller_revents(p, listen_slot) & POLLIN)
             accept_clients(d);
+        ft_scrape_dispatch(d->scrape, p, now_ns);
     }
 
     ft_log(FT_LOG_INFO, "stopping");
-    while (d->nclients)
-        client_drop(d, d->nclients - 1);
-    if (d->listen_fd >= 0) {
-        close(d->listen_fd);
-        unlink(cfg->socket_path);
-    }
-    cfg->backend->close(d->backend);
-    ft_state_destroy(d->state);
-    free(d->live);
-    free(d);
+    agent_close(d);
     return FT_EXIT_OK;
 }

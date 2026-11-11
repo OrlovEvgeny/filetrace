@@ -4,6 +4,8 @@
 #include "filetrace/client.h"
 #include "filetrace/clock.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -149,8 +151,9 @@ static void pause_ms(long ms)
 }
 
 /* peer_fd is the client's end of a session socket, which the agent must not hold. */
-static pid_t start_agent(const struct ft_backend_ops *ops, const char *socket_path, int session_fd,
-                         int peer_fd)
+static pid_t start_agent_with(const struct ft_backend_ops *ops, const char *socket_path,
+                              int session_fd, int peer_fd,
+                              void (*adjust)(struct ft_agent_config *cfg, void *arg), void *arg)
 {
     pid_t pid = fork();
     if (pid == 0) {
@@ -165,10 +168,18 @@ static pid_t start_agent(const struct ft_backend_ops *ops, const char *socket_pa
         cfg.socket_path = socket_path;
         cfg.session_fd = session_fd;
         cfg.flush_interval_ms = 20;
+        if (adjust)
+            adjust(&cfg, arg);
         ft_log_set_level(FT_LOG_ERROR);
         _exit(ft_agent_run(&cfg, &err));
     }
     return pid;
+}
+
+static pid_t start_agent(const struct ft_backend_ops *ops, const char *socket_path, int session_fd,
+                         int peer_fd)
+{
+    return start_agent_with(ops, socket_path, session_fd, peer_fd, nullptr, nullptr);
 }
 
 static int wait_exit(pid_t pid)
@@ -403,10 +414,96 @@ static void streams_events_to_a_follower(void)
     CHECK_U64(wait_exit(pid), FT_EXIT_OK);
 }
 
+/* A port that was free a moment ago. */
+static uint16_t free_port(void)
+{
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    socklen_t len = sizeof(addr);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    getsockname(fd, (struct sockaddr *)&addr, &len);
+    close(fd);
+    return ntohs(addr.sin_port);
+}
+
+/* The whole response to one GET, or an empty string while nothing listens on the port. */
+static void http_get(uint16_t port, const char *target, char *out, size_t size)
+{
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+        .sin_port = htons(port),
+    };
+    char request[128];
+    size_t len = 0;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    out[0] = '\0';
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+        int n = snprintf(request, sizeof(request), "GET %s HTTP/1.1\r\nHost: test\r\n\r\n", target);
+        if (write(fd, request, (size_t)n) == n) {
+            ssize_t got;
+            while (len + 1 < size && (got = read(fd, out + len, size - 1 - len)) > 0)
+                len += (size_t)got;
+            out[len] = '\0';
+        }
+    }
+    close(fd);
+}
+
+static void serve_metrics(struct ft_agent_config *cfg, void *arg)
+{
+    cfg->prometheus.enabled = true;
+    snprintf(cfg->prometheus.listen, sizeof(cfg->prometheus.listen), "127.0.0.1:%u",
+             *(uint16_t *)arg);
+}
+
+static void serves_metrics_to_a_scraper(void)
+{
+    static const char sent[] =
+        "filetrace_file_sent_bytes_total{process_executable_name=\"nginx\","
+        "filetrace_transfer_method=\"sendfile\",filetrace_transfer_confidence=\"exact\"} "
+        "148293012\n";
+    uint16_t port = free_port();
+    char *page = malloc(65536);
+    int pair[2];
+
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    pid_t pid = start_agent_with(&scripted_ops, nullptr, pair[1], pair[0], serve_metrics, &port);
+    close(pair[1]);
+
+    for (int attempt = 0; attempt < 200; attempt++) {
+        http_get(port, "/metrics", page, 65536);
+        if (strstr(page, sent))
+            break;
+        pause_ms(10);
+    }
+    CHECK(strncmp(page, "HTTP/1.1 200 OK\r\n", 17) == 0);
+    CHECK(strstr(page, "Content-Type: text/plain; version=0.0.4"));
+    CHECK(
+        strstr(page, "target_info{service_name=\"filetrace\",service_version=\"" FT_VERSION "\""));
+    CHECK(strstr(page, sent));
+    CHECK(strstr(page, "filetrace_network_io_bytes_total{process_executable_name=\"nginx\","
+                       "network_transport=\"tcp\",network_io_direction=\"transmit\"} 148293012\n"));
+    CHECK(strstr(page, "filetrace_transfers_active{filetrace_transfer_confidence=\"exact\"} 1\n"));
+    CHECK(strstr(page, "filetrace_events_processed_total 4\n"));
+
+    http_get(port, "/metrics?x=1", page, 65536);
+    CHECK(strncmp(page, "HTTP/1.1 200 OK\r\n", 17) == 0);
+    http_get(port, "/", page, 65536);
+    CHECK(strncmp(page, "HTTP/1.1 404 ", 13) == 0);
+
+    close(pair[0]);
+    CHECK_U64(wait_exit(pid), FT_EXIT_OK);
+    free(page);
+}
+
 void test_agent(void)
 {
     serves_queries_over_a_socket();
     serves_a_single_session();
     streams_events_to_a_follower();
     reports_a_backend_that_cannot_start();
+    serves_metrics_to_a_scraper();
 }
