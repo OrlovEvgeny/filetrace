@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package filetrace.v1;
+
+// What a Filetrace agent has observed on its host: which files were sent over
+// the network, by which process, and where they went.
+service FiletraceService {
+  // The agent's identity, health and totals.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+  // The transfers the agent holds, each covering its whole observed lifetime.
+  rpc ListTransfers(ListTransfersRequest) returns (ListTransfersResponse);
+
+  // Transfer activity as the agent records it, until the caller cancels.
+  rpc WatchTransfers(WatchTransfersRequest) returns (stream WatchTransfersResponse);
+}
+
+// How sure the agent is that the bytes of a transfer came from the file.
+enum Confidence {
+  CONFIDENCE_UNSPECIFIED = 0;
+  // Bytes were sent and no file could be associated with them.
+  CONFIDENCE_UNKNOWN = 1;
+  // A thread read the file and then sent on the socket.
+  CONFIDENCE_INFERRED = 2;
+  // Provenance followed through intermediate operations.
+  CONFIDENCE_STRONG = 3;
+  // The kernel moved the file's data to the socket in one operation.
+  CONFIDENCE_EXACT = 4;
+}
+
+// The system calls that carried a file to a socket.
+enum Method {
+  METHOD_UNSPECIFIED = 0;
+  METHOD_SENDFILE = 1;
+  // A read of the file followed by a send.
+  METHOD_READ_WRITE = 2;
+}
+
+enum Transport {
+  TRANSPORT_UNSPECIFIED = 0;
+  TRANSPORT_TCP = 1;
+  TRANSPORT_UDP = 2;
+}
+
+message Process {
+  uint32 pid = 1;
+  uint32 parent_pid = 2;
+  // The kernel's name for the process, at most 15 bytes.
+  string name = 3;
+  // Path of the executable; empty when it was not observed.
+  string executable = 4;
+}
+
+// A file is identified by device and inode; the rest describes it as it was
+// when first seen.
+message File {
+  // Empty when the path is not known.
+  string path = 1;
+  uint64 inode = 2;
+  uint64 device = 3;
+  uint64 size = 4;
+  uint32 owner_uid = 5;
+  string filesystem = 6;
+  // The file has no remaining links.
+  bool deleted = 7;
+  // The path was longer than the agent keeps.
+  bool path_truncated = 8;
+}
+
+message Endpoint {
+  // An IPv4 or IPv6 address in text form; empty when not known.
+  string address = 1;
+  uint32 port = 2;
+}
+
+message Connection {
+  // Stable for the lifetime of the socket.
+  uint64 socket_id = 1;
+  Transport transport = 2;
+  Endpoint local = 3;
+  Endpoint remote = 4;
+}
+
+message Transfer {
+  uint64 id = 1;
+  Process process = 2;
+  // Absent for sent bytes that no file accounts for.
+  File file = 3;
+  Connection connection = 4;
+  Method method = 5;
+  Confidence confidence = 6;
+  // What the confidence rests on, such as "direct_file_to_socket_transfer".
+  repeated string evidence = 7;
+  // Accepted by the local socket; not bytes on the wire.
+  uint64 bytes_sent = 8;
+  // Read from the file by the sending thread; set for METHOD_READ_WRITE.
+  uint64 bytes_read = 9;
+  // Over the last one to two seconds.
+  uint64 bytes_per_second = 10;
+  uint64 operations = 11;
+  fixed64 start_time_unix_nano = 12;
+  fixed64 last_time_unix_nano = 13;
+  bool active = 14;
+  // Events were lost while the transfer was in progress.
+  bool incomplete = 15;
+}
+
+// Every field that is set narrows the result.
+message TransferFilter {
+  uint32 pid = 1;
+  // Process name; "*" matches any run of characters.
+  string process = 2;
+  // File path; "*" matches any run of characters, "/" included.
+  string path = 3;
+  // Remote address or CIDR network, such as "203.0.113.0/24".
+  string remote = 4;
+  // Local or remote port.
+  uint32 port = 5;
+  Transport transport = 6;
+  Method method = 7;
+  Confidence confidence = 8;
+}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  string version = 1;
+  string host = 2;
+  // "linux", "macos" or "freebsd".
+  string platform = 3;
+  // The collection backend and how it instruments the kernel.
+  string backend = 4;
+  // "minimal" or "standard".
+  string mode = 5;
+  // Nothing earlier than this is known to the agent.
+  fixed64 start_time_unix_nano = 6;
+  // Events were lost within the last minute.
+  bool degraded = 7;
+  uint64 events_processed = 8;
+  uint64 events_dropped = 9;
+  uint64 bytes_sent = 10;
+  uint64 bytes_received = 11;
+  uint32 active_transfers = 12;
+  uint32 active_processes = 13;
+  uint32 open_connections = 14;
+}
+
+message ListTransfersRequest {
+  TransferFilter filter = 1;
+  // Only transfers still in progress.
+  bool active_only = 2;
+  // Also list sent bytes that no file accounts for, as CONFIDENCE_UNKNOWN.
+  bool include_unattributed = 3;
+  // Smallest number of bytes sent.
+  uint64 min_bytes = 4;
+  // The most transfers to return, most recently active first. At most 1000,
+  // which is also what 0 asks for.
+  uint32 limit = 5;
+}
+
+message ListTransfersResponse {
+  repeated Transfer transfers = 1;
+  // Nothing earlier than this is known to the agent.
+  fixed64 observed_since_unix_nano = 2;
+  // Events the agent lost so far; above zero, the list may be incomplete.
+  uint64 lost_events = 3;
+}
+
+message WatchTransfersRequest {
+  TransferFilter filter = 1;
+}
+
+message WatchTransfersResponse {
+  TransferEvent event = 1;
+  // Events left out before this one because the caller read too slowly.
+  uint64 missed = 2;
+}
+
+// File bytes attributed to a socket during one collection interval.
+message TransferEvent {
+  // Increases with every record the agent makes.
+  uint64 sequence = 1;
+  fixed64 time_unix_nano = 2;
+  Process process = 3;
+  File file = 4;
+  Connection connection = 5;
+  Method method = 6;
+  // That of the whole association so far; unspecified while it is below the
+  // reporting thresholds.
+  Confidence confidence = 7;
+  uint64 bytes_sent = 8;
+  uint64 bytes_read = 9;
+}

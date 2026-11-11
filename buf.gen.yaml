@@ -4,6 +4,7 @@ plugins:
   - remote: buf.build/community/protobuf-c:v1.5.2
     out: gen
 inputs:
+  - directory: proto
   - module: buf.build/opentelemetry/opentelemetry:v1.11.1
     paths:
       - opentelemetry/proto/common/v1
