@@ -3,7 +3,7 @@
 
 const DOCS_HOST = "filetrace.mintlify.site";
 
-const DOWNLOADS = /^\/(?:install\.sh|gpg\.key|(?:apt|rpm|apk|dist|channels|versions)\/)/;
+const DOWNLOADS = /^\/(?:(?:install\.sh|gpg\.key)$|(?:apt|rpm|apk|dist|channels|versions)\/)/;
 
 // Mintlify names its own hosts in the files that list the pages: sitemap.xml,
 // robots.txt, llms.txt and the Markdown copies of the pages.
