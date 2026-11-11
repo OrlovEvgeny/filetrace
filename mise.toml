@@ -76,6 +76,10 @@ run = "tools/dev/linux.sh"
 description = "Build and run the unit and integration tests in the Linux container"
 run = "tools/dev/linux.sh sh -c 'cmake --preset dev && cmake --build --preset dev && ctest --preset dev'"
 
+[tasks."test:sanitize"]
+description = "Run the unit tests under AddressSanitizer and UndefinedBehaviorSanitizer"
+run = "tools/dev/linux.sh sh -c 'cmake --preset sanitize && cmake --build --preset sanitize && ctest --preset sanitize -R ^unit$'"
+
 [tasks."test:vm"]
 description = "Run the integration tests on the 6.1 and 6.12 kernels under QEMU"
 run = [
