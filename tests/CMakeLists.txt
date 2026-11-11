@@ -12,6 +12,8 @@ add_executable(ft_unit_tests
     unit/test_views.c
 )
 target_link_libraries(ft_unit_tests PRIVATE ft_cli)
+set_property(SOURCE unit/test_agent.c unit/test_otlp.c
+    APPEND PROPERTY COMPILE_DEFINITIONS FT_VERSION="${FT_VERSION_STRING}")
 target_include_directories(ft_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME unit COMMAND ft_unit_tests)
 set_tests_properties(unit PROPERTIES TIMEOUT 60)

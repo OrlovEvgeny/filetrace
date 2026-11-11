@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(filetrace
-    VERSION 0.1.0
     DESCRIPTION "File-to-network observability"
     LANGUAGES C
 )
+
+include(cmake/Version.cmake)
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -28,9 +29,20 @@ target_compile_options(ft_build INTERFACE
     -Wstrict-prototypes
     -Wmissing-prototypes
 )
-target_compile_definitions(ft_build INTERFACE
-    FT_VERSION="${PROJECT_VERSION}"
-    FT_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+target_compile_definitions(ft_build INTERFACE FT_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+
+# Only these sources rebuild when the version changes.
+set_property(
+    SOURCE
+        agent/lifecycle.c
+        agent/server.c
+        agent/telemetry.c
+        cmd/diagnostics.c
+        exporters/otlp.c
+        rpc/grpc_client.c
+    APPEND PROPERTY COMPILE_DEFINITIONS
+        FT_VERSION="${FT_VERSION_STRING}"
+        FT_COMMIT="${FT_COMMIT_STRING}"
 )
 target_include_directories(ft_build INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
