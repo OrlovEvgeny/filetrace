@@ -278,6 +278,14 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         ft_strlcpy(q->process, v, sizeof(q->process));
         return 1;
     }
+    if (OPTION(FT_QO_SCRIPT, "--script")) {
+        if (r < 0)
+            return -1;
+        if (strlen(v) >= sizeof(q->script))
+            return bad_value(qa, "--script", v, "a shorter pattern");
+        ft_strlcpy(q->script, v, sizeof(q->script));
+        return 1;
+    }
     if (OPTION(FT_QO_FILE, "--file") || OPTION(FT_QO_FILE, "--path")) {
         if (r < 0)
             return -1;
@@ -495,6 +503,8 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t fo
         {FT_QO_PID, "  --pid <pid>             Only this process\n"},
         {FT_QO_PROCESS, "  --process <name>        Only processes with this name ('*' wildcards;\n"
                         "                          alias: --name)\n"},
+        {FT_QO_SCRIPT, "  --script <pattern>      Only processes running this script: a path,\n"
+                       "                          module:<name> or pool:<name> ('*' wildcards)\n"},
         {FT_QO_USER, "  --user <user>           Only processes of this user\n"},
         {FT_QO_SCOPE, "  --cgroup <id|dir>       Only processes in this cgroup\n"
                       "  --namespace <inode>     Only processes in this network, PID or mount\n"

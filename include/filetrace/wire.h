@@ -95,6 +95,7 @@ struct ft_query {
     struct ft_endpoint remote; /* family 0: any */
     struct ft_endpoint local;
     char process[64];
+    char script[1024]; /* of the process; matched as process is */
     char path[FT_PATH_MAX];
 };
 

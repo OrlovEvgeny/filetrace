@@ -47,6 +47,17 @@ static bool match_name(const char *pattern, const char *name)
     return pattern[0] == '\0' || ft_glob_match(pattern, name);
 }
 
+static bool match_script(const struct ft_query *q, const char *script)
+{
+    return q->script[0] == '\0' || (script && script[0] && ft_glob_match(q->script, script));
+}
+
+static const char *script_of(const struct ft_state *st, uint32_t pid)
+{
+    const struct ft_process *p = ft_table_find(st->processes, &pid);
+    return p ? p->script : nullptr;
+}
+
 static bool match_addr(const struct ft_endpoint *filter, uint8_t host_bits,
                        const struct ft_endpoint *ep)
 {
@@ -257,7 +268,7 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
             continue;
         if (!process_in_scope(q, p))
             continue;
-        if (!match_name(q->process, p->comm))
+        if (!match_name(q->process, p->comm) || !match_script(q, p->script))
             continue;
         if ((q->flags & FT_QF_ACTIVE) && (p->exited || p->q_connections == 0))
             continue;
@@ -696,7 +707,7 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
             continue;
         if (q->pid && q->pid != t->pid)
             continue;
-        if (!match_name(q->process, t->comm))
+        if (!match_name(q->process, t->comm) || !match_script(q, script_of(st, t->pid)))
             continue;
         if (q->method != FT_METHOD_ANY && q->method != t->method)
             continue;
@@ -750,7 +761,7 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
             continue;
         if (q->pid && q->pid != s->pid)
             continue;
-        if (!match_name(q->process, s->comm))
+        if (!match_name(q->process, s->comm) || !match_script(q, script_of(st, s->pid)))
             continue;
         if (bytes < q->min_bytes)
             continue;
@@ -805,6 +816,12 @@ bool ft_state_record_matches(const struct ft_query *q, uint64_t from_ns, uint64_
         return false;
     if (!match_name(q->process, row->comm))
         return false;
+    if (q->script[0]) {
+        struct ft_process_strings text;
+        ft_row_event_strings(row, &text);
+        if (!match_script(q, text.script))
+            return false;
+    }
     if (q->path[0] && !(about_file && ft_glob_match(q->path, row->text)))
         return false;
     if (network_filter && !(row->sock_id && match_tuple(q, row->proto, &row->local, &row->remote)))

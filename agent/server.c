@@ -336,6 +336,7 @@ static void handle_query(struct agent *d, struct client *c, const void *payload,
     }
     memcpy(q, payload, size < sizeof(*q) ? size : sizeof(*q));
     q->process[sizeof(q->process) - 1] = '\0';
+    q->script[sizeof(q->script) - 1] = '\0';
     q->path[sizeof(q->path) - 1] = '\0';
 
     uint64_t now_ns = ft_clock_mono_ns();

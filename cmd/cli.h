@@ -98,12 +98,14 @@ enum ft_query_opt : uint32_t {
     FT_QO_OUTPUT = 1u << 18,     /* --format, --output */
     FT_QO_FILE_MATCH = 1u << 19, /* --path-regex, --min-size */
     FT_QO_RESOLVE = 1u << 20,    /* --resolve-hostnames */
+    FT_QO_SCRIPT = 1u << 21,
 };
 
 #define FT_SORT_BIT(sort) (1u << (sort))
 
-constexpr uint32_t FT_OPTS_PROCESSES = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
-                                       FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
+constexpr uint32_t FT_OPTS_PROCESSES = FT_QO_PID | FT_QO_PROCESS | FT_QO_SCRIPT | FT_QO_USER |
+                                       FT_QO_SCOPE | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT |
+                                       FT_QO_OUTPUT;
 constexpr uint32_t FT_SORTS_PROCESSES =
     FT_SORT_BIT(FT_SORT_OUTBOUND) | FT_SORT_BIT(FT_SORT_INBOUND) | FT_SORT_BIT(FT_SORT_BYTES) |
     FT_SORT_BIT(FT_SORT_CONNECTIONS) | FT_SORT_BIT(FT_SORT_TIME) | FT_SORT_BIT(FT_SORT_PID) |
@@ -125,10 +127,10 @@ constexpr uint32_t FT_SORTS_FLOWS = FT_SORT_BIT(FT_SORT_OUTBOUND) | FT_SORT_BIT(
                                     FT_SORT_BIT(FT_SORT_PID) | FT_SORT_BIT(FT_SORT_PROCESS);
 
 constexpr uint32_t FT_OPTS_TRANSFERS =
-    FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE | FT_QO_FILE | FT_QO_FILE_MATCH |
-    FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_CONFIDENCE | FT_QO_METHOD |
-    FT_QO_MIN_BYTES | FT_QO_ACTIVITY | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT |
-    FT_QO_RESOLVE;
+    FT_QO_PID | FT_QO_PROCESS | FT_QO_SCRIPT | FT_QO_USER | FT_QO_SCOPE | FT_QO_FILE |
+    FT_QO_FILE_MATCH | FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_CONFIDENCE |
+    FT_QO_METHOD | FT_QO_MIN_BYTES | FT_QO_ACTIVITY | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT |
+    FT_QO_OUTPUT | FT_QO_RESOLVE;
 
 constexpr uint32_t FT_OPTS_WATCH = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
                                    FT_QO_FILE | FT_QO_REMOTE | FT_QO_PROTOCOL | FT_QO_CONFIDENCE |
@@ -136,9 +138,9 @@ constexpr uint32_t FT_OPTS_WATCH = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_Q
 constexpr uint32_t FT_SORTS_WATCH = FT_SORT_BIT(FT_SORT_RATE) | FT_SORT_BIT(FT_SORT_BYTES) |
                                     FT_SORT_BIT(FT_SORT_PROCESS) | FT_SORT_BIT(FT_SORT_FILE);
 
-constexpr uint32_t FT_OPTS_EVENTS = FT_QO_PID | FT_QO_PROCESS | FT_QO_FILE | FT_QO_REMOTE |
-                                    FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_FAMILY |
-                                    FT_QO_TIME | FT_QO_LIMIT | FT_QO_OUTPUT;
+constexpr uint32_t FT_OPTS_EVENTS = FT_QO_PID | FT_QO_PROCESS | FT_QO_SCRIPT | FT_QO_FILE |
+                                    FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL |
+                                    FT_QO_FAMILY | FT_QO_TIME | FT_QO_LIMIT | FT_QO_OUTPUT;
 constexpr uint32_t FT_FORMATS_EVENTS =
     FT_FMT_BIT(FT_FMT_TABLE) | FT_FMT_BIT(FT_FMT_JSON) | FT_FMT_BIT(FT_FMT_JSONL);
 constexpr uint32_t FT_SORTS_TRANSFERS = FT_SORT_BIT(FT_SORT_TIME) | FT_SORT_BIT(FT_SORT_BYTES) |
