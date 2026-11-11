@@ -1190,6 +1190,261 @@ static void tables_stay_bounded(void)
     fixture_close(&f);
 }
 
+/* What /proc holds for a few processes; arguments are written with '|' for the NULs. */
+static struct {
+    uint32_t pid;
+    char args[FT_CMDLINE_MAX];
+    size_t len;
+    char cwd[FT_PATH_MAX];
+} procfs[4];
+static unsigned procfs_reads;
+
+static void procfs_set(uint32_t pid, const char *args, const char *cwd)
+{
+    size_t slot = 0;
+    while (slot + 1 < FT_ARRAY_LEN(procfs) && procfs[slot].pid && procfs[slot].pid != pid)
+        slot++;
+    procfs[slot].pid = pid;
+    procfs[slot].len = 0;
+    for (const char *p = args; *p && procfs[slot].len + 1 < sizeof(procfs[slot].args); p++)
+        procfs[slot].args[procfs[slot].len++] = *p == '|' ? '\0' : *p;
+    procfs[slot].args[procfs[slot].len++] = '\0';
+    ft_strlcpy(procfs[slot].cwd, cwd, sizeof(procfs[slot].cwd));
+}
+
+static void procfs_clear(void)
+{
+    memset(procfs, 0, sizeof(procfs));
+    procfs_reads = 0;
+}
+
+static bool procfs_read(uint32_t pid, struct ft_process_text *out)
+{
+    procfs_reads++;
+    for (size_t i = 0; i < FT_ARRAY_LEN(procfs); i++) {
+        if (procfs[i].pid != pid)
+            continue;
+        out->args_len = procfs[i].len < sizeof(out->args) ? procfs[i].len : sizeof(out->args);
+        memcpy(out->args, procfs[i].args, out->args_len);
+        ft_strlcpy(out->cwd, procfs[i].cwd, sizeof(out->cwd));
+        return true;
+    }
+    return false;
+}
+
+static void fixture_open_procfs(struct fixture *f, bool arguments)
+{
+    struct ft_state_config cfg;
+
+    ft_state_config_defaults(&cfg);
+    cfg.read_process_text = procfs_read;
+    cfg.command_line_arguments = arguments;
+    procfs_clear();
+    fixture_open_with(f, &cfg);
+}
+
+static void emit_fork(struct fixture *f, uint32_t pid, uint32_t ppid, const char *comm,
+                      uint64_t start_s)
+{
+    struct ft_event ev = {.type = FT_EVENT_PROCESS_FORK, .ts_ns = f->now};
+    ev.process.pid = pid;
+    ev.process.ppid = ppid;
+    ev.process.start_ns = start_s * FT_NS_PER_SEC;
+    ft_strlcpy(ev.process.comm, comm, sizeof(ev.process.comm));
+    ft_state_ingest(f->st, &ev);
+}
+
+static struct ft_process_strings transfer_strings(struct fixture *f, uint32_t pid)
+{
+    struct ft_process_strings s = {"", "", ""};
+    struct ft_query q;
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.pid = pid;
+    run_query(f, &q);
+    if (f->rows.count == 1)
+        ft_row_transfer_strings(&f->rows.transfers[0], &s);
+    return s;
+}
+
+/* An interpreter's records say what it runs, as read when it started it. */
+static void processes_carry_their_command_line(void)
+{
+    struct fixture f;
+    struct ft_query q;
+    struct ft_process_strings s;
+    struct ft_endpoint remote = endpoint(203, 0, 113, 42, 443);
+
+    fixture_open_procfs(&f, true);
+    procfs_set(PID_A, "python3|-W|ignore|export.py|--token=abc", "/srv/app");
+    emit_exec(&f, PID_A, 1, "python3", 1000);
+    emit_file(&f, 11, "/data/users.csv", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 4096, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+
+    s = transfer_strings(&f, PID_A);
+    CHECK_STR(s.command_line, "python3 -W ignore export.py --token=abc");
+    CHECK_STR(s.cwd, "/srv/app");
+    CHECK_STR(s.script, "/srv/app/export.py");
+    CHECK_U64(ft_row_transfer_size(&f.rows.transfers[0]),
+              offsetof(struct ft_row_transfer, path) + sizeof("/data/users.csv") +
+                  sizeof("python3 -W ignore export.py --token=abc") + sizeof("/srv/app") +
+                  sizeof("/srv/app/export.py"));
+
+    ft_query_init(&q, FT_Q_PROCESSES);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    ft_row_process_strings(&f.rows.processes[0], &s);
+    CHECK_STR(s.script, "/srv/app/export.py");
+    CHECK_STR(s.cwd, "/srv/app");
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.event_types = 1u << FT_REC_PROCESS_EXEC | 1u << FT_REC_FILE_TRANSFER;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    ft_row_event_strings(&f.rows.events[0], &s);
+    CHECK_STR(f.rows.events[0].text, "/usr/sbin/python3");
+    CHECK_STR(s.command_line, "python3 -W ignore export.py --token=abc");
+    ft_row_event_strings(&f.rows.events[1], &s);
+    CHECK_STR(f.rows.events[1].text, "/data/users.csv");
+    CHECK_STR(s.script, "/srv/app/export.py");
+
+    /* The script keeps the directory it was started in; the directory itself follows. */
+    procfs_set(PID_A, "python3|-W|ignore|export.py|--token=abc", "/tmp");
+    unsigned reads = procfs_reads;
+    f.now += FT_NS_PER_SEC;
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 10, 0);
+    CHECK_U64(procfs_reads, reads);
+    f.now += 10 * FT_NS_PER_SEC;
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 10, 0);
+    CHECK_U64(procfs_reads, reads + 1);
+    s = transfer_strings(&f, PID_A);
+    CHECK_STR(s.cwd, "/tmp");
+    CHECK_STR(s.script, "/srv/app/export.py");
+
+    /* Once it has exited its ID is not read again: another process may hold it. */
+    emit_exit(&f, PID_A, 1000);
+    procfs_set(PID_A, "sshd", "/");
+    f.now += 30 * FT_NS_PER_SEC;
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 10, 0);
+    s = transfer_strings(&f, PID_A);
+    CHECK_STR(s.command_line, "python3 -W ignore export.py --token=abc");
+
+    /* A program that is gone before its start is read leaves nothing behind. */
+    procfs_set(PID_B, "python3|old.py", "/srv");
+    emit_exec(&f, PID_B, 1, "python3", 2000);
+    procfs_set(PID_B, "", "");
+    procfs[1].pid = 0;
+    emit_exec(&f, PID_B, 1, "python3", 2000);
+    emit_flow(&f, SOCK_B, PID_B, FT_PROTO_TCP, remote, 4096, 0);
+    emit_transfer(&f, SOCK_B, PID_B, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+    s = transfer_strings(&f, PID_B);
+    CHECK_STR(s.command_line, "");
+    CHECK(!(f.rows.transfers[0].flags & FT_XFER_PROCESS_TEXT));
+    fixture_close(&f);
+}
+
+/* A PHP-FPM worker is forked, then names itself after its pool; it is read again once it sends. */
+static void forked_workers_are_read_again(void)
+{
+    constexpr uint32_t MASTER = 700;
+    constexpr uint32_t WORKER = 701;
+    struct fixture f;
+    struct ft_process_strings s;
+    struct ft_endpoint remote = endpoint(203, 0, 113, 42, 443);
+
+    fixture_open_procfs(&f, true);
+    procfs_set(MASTER, "php-fpm: master process (/etc/php/8.2/fpm/php-fpm.conf)", "/");
+    emit_exec(&f, MASTER, 1, "php-fpm8.2", 100);
+    emit_fork(&f, WORKER, MASTER, "php-fpm8.2", 200);
+
+    struct ft_process *worker = ft_table_find(f.st->processes, &WORKER);
+    CHECK(worker && worker->command_line &&
+          strcmp(worker->command_line, "php-fpm: master process (/etc/php/8.2/fpm/php-fpm.conf)") ==
+              0);
+    CHECK(worker && !worker->script);
+
+    procfs_set(WORKER, "php-fpm: pool site1|||", "/");
+    emit_file(&f, 12, "/var/www/site1/backup.zip", false);
+    emit_flow(&f, SOCK_A, WORKER, FT_PROTO_TCP, remote, 8192, 0);
+    emit_transfer(&f, SOCK_A, WORKER, 12, FT_METHOD_SENDFILE, 8192, 0, 0);
+    s = transfer_strings(&f, WORKER);
+    CHECK_STR(s.command_line, "php-fpm: pool site1");
+    CHECK_STR(s.script, "pool:site1");
+    fixture_close(&f);
+}
+
+/* Without arguments the command line is the program alone; the script is still derived. */
+static void arguments_can_be_left_out(void)
+{
+    struct fixture f;
+    struct ft_process_strings s;
+
+    fixture_open_procfs(&f, false);
+    procfs_set(PID_A, "/usr/bin/python3|export.py|--password|hunter2", "/srv/app");
+    emit_exec(&f, PID_A, 1, "python3", 1000);
+    emit_file(&f, 11, "/data/users.csv", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 42, 443), 4096, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+
+    s = transfer_strings(&f, PID_A);
+    CHECK_STR(s.command_line, "/usr/bin/python3");
+    CHECK_STR(s.script, "/srv/app/export.py");
+    const struct ft_row_transfer *row = &f.rows.transfers[0];
+    CHECK(memmem(row, ft_row_transfer_size(row), "hunter2", 7) == nullptr);
+
+    struct ft_query q;
+    ft_query_init(&q, FT_Q_EVENTS);
+    run_query(&f, &q);
+    for (size_t i = 0; i < f.rows.count; i++)
+        CHECK(memmem(&f.rows.events[i], ft_row_event_size(&f.rows.events[i]), "hunter2", 7) ==
+              nullptr);
+    fixture_close(&f);
+}
+
+/* Each string is capped and a row stays within a frame; evicted processes free theirs. */
+static void process_text_is_bounded(void)
+{
+    static char args[FT_CMDLINE_MAX * 2];
+    static char cwd[FT_PATH_MAX * 2];
+    struct ft_state_config cfg;
+    struct fixture f;
+    struct ft_process_strings s;
+
+    memset(args, 'a', sizeof(args) - 1);
+    memcpy(args, "python3|", 8);
+    memset(cwd, 'd', sizeof(cwd) - 1);
+    cwd[0] = '/';
+
+    ft_state_config_defaults(&cfg);
+    cfg.read_process_text = procfs_read;
+    cfg.max_processes = 64;
+    procfs_clear();
+    fixture_open_with(&f, &cfg);
+    procfs_set(PID_A, args, cwd);
+    emit_exec(&f, PID_A, 1, "python3", 1000);
+    emit_file(&f, 11, "/data/users.csv", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 42, 443), 4096, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+
+    s = transfer_strings(&f, PID_A);
+    CHECK_U64(strlen(s.command_line), FT_CMDLINE_MAX - 1);
+    CHECK_U64(strlen(s.cwd), FT_PATH_MAX - 1);
+    CHECK(strlen(s.script) < FT_PATH_MAX);
+    CHECK(ft_row_transfer_size(&f.rows.transfers[0]) <= FT_WIRE_MAX_PAYLOAD);
+    CHECK(sizeof(struct ft_row_event) <= FT_WIRE_MAX_PAYLOAD);
+
+    for (uint32_t pid = 10; pid < 300; pid++) {
+        procfs_set(PID_B, "python3|x.py", "/srv");
+        procfs[1].pid = pid;
+        emit_exec(&f, pid, 1, "python3", pid);
+    }
+    struct ft_row_stats stats = {0};
+    ft_state_fill_stats(f.st, f.now, &stats);
+    CHECK_U64(stats.processes.count, 64);
+    fixture_close(&f);
+}
+
 void test_state(void)
 {
     sendfile_is_exact();
@@ -1210,4 +1465,8 @@ void test_state(void)
     background_files_need_the_whole_read();
     confidence_threshold();
     tables_stay_bounded();
+    processes_carry_their_command_line();
+    forked_workers_are_read_again();
+    arguments_can_be_left_out();
+    process_text_is_bounded();
 }
