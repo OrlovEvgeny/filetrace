@@ -129,7 +129,6 @@ static void set_host(struct value *v, const struct ft_endpoint *ep)
     v->absent = host == nullptr;
 }
 
-/* The remote end, by name when one is known. */
 static void set_remote(struct value *v, const struct ft_endpoint *ep, bool with_port)
 {
     const char *host = host_of(ep);

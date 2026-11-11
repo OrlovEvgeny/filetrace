@@ -32,8 +32,7 @@ struct ft_state_config {
     bool ignore_ipv4;
     bool ignore_ipv6;
 
-    /* Patterns, borrowed for the life of the state: nothing is recorded about a process
-       whose name matches, nor about a file whose path does. */
+    /* Borrowed patterns: a matching process name or file path leaves no record. */
     const char *const *exclude_processes;
     size_t exclude_process_count;
     const char *const *exclude_paths;
@@ -231,8 +230,7 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev);
 /* Forgets processes that exited without ever touching the network. */
 void ft_state_sweep(struct ft_state *st, uint64_t now_ns);
 
-/* Returns false for an association that is not reported: an inferred one still below
-   the configured thresholds, or any below the configured confidence. */
+/* Returns false for an association that is not reported. */
 bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,
                        enum ft_confidence *confidence, uint32_t *evidence);
 

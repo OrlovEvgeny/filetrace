@@ -8,8 +8,7 @@
 #define FT_CONFIG_MAX_PATTERNS 32
 #define FT_CONFIG_MAX_WARNINGS 16
 
-/* Settings from a configuration file. agent points into this structure, which is
-   therefore created on the heap and never copied. */
+/* Never copied: agent points into the structure itself. */
 struct ft_config {
     struct ft_agent_config agent;
     bool enabled;
@@ -30,8 +29,7 @@ struct ft_config {
     char *exclude_paths[FT_CONFIG_MAX_PATTERNS];
     size_t exclude_path_count;
 
-    /* Settings a file may state that this build cannot honour; each one that asks for
-       something adds a warning. */
+    /* Accepted and kept, though this build cannot honour them. */
     bool tc_egress;
     bool track_open;
     bool track_mmap;
@@ -55,8 +53,7 @@ const char *ft_config_default_path(void);
 struct ft_config *ft_config_new(void);
 void ft_config_free(struct ft_config *cfg);
 
-/* Reads path, or the default file when path is nullptr; only the default file may be
-   absent. Returns FT_EXIT_OK, or FT_EXIT_CONFIG with err naming the file and line. */
+/* A nullptr path means the default file, which alone may be absent. */
 int ft_config_load(struct ft_config *cfg, const char *path, struct ft_error *err);
 
 /* Settings that depend on others, applied once the file and the command line are read. */

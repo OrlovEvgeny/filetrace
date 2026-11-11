@@ -31,8 +31,7 @@ struct ft_cli {
     const struct ft_config *config; /* nullptr for the commands that run without one */
 };
 
-/* Reads the configuration file into cli; reports what is wrong with it and returns
-   FT_EXIT_CONFIG when it cannot be used. */
+/* Reports an unusable configuration file itself and returns FT_EXIT_CONFIG. */
 int ft_cli_load_config(struct ft_cli *cli);
 void ft_cli_free_config(struct ft_cli *cli);
 const char *ft_config_default_path_text(void);
@@ -62,8 +61,7 @@ int ft_args_value(struct ft_args *a, const char *name, const char **value);
 [[gnu::format(printf, 2, 3)]]
 int ft_usage_error(const char *command, const char *fmt, ...);
 
-/* Takes --format <name>, --json or --jsonl, limited to the formats in accepted.
-   Returns 1 with *format set, 0 for another argument, -1 after reporting a bad value. */
+/* Returns 1 with *format set, 0 for another argument, -1 after reporting a bad value. */
 int ft_args_format(struct ft_args *a, const char *command, uint32_t accepted,
                    enum ft_format *format);
 
@@ -230,14 +228,12 @@ struct ft_view_column {
 void ft_view_table(enum ft_view_id view, const struct ft_rows *rows, size_t limit,
                    const struct ft_view_column *columns, size_t ncolumns, FILE *out);
 
-/* Remote addresses are shown by host name where a reverse lookup has found one. */
 void ft_view_resolve_hosts(bool on);
 
 /* Starts the lookups for the remote addresses of the rows and gives them a moment. */
 void ft_view_prefetch_hosts(enum ft_view_id view, const struct ft_rows *rows);
 
-/* The host name of an address, or nullptr while none is known; the first call for an
-   address starts its lookup in the background. */
+/* nullptr while no name is known; the first call for an address starts its lookup. */
 const char *ft_resolver_name(const struct ft_endpoint *addr);
 
 /* Returns once every lookup started so far has finished, or after the timeout. */

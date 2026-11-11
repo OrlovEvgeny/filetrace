@@ -41,8 +41,7 @@ struct ft_watch_options {
     bool timestamps;                   /* head each appended snapshot with its time */
     bool resolve;                      /* show remote addresses by host name */
 
-    /* The filters shared by every view, the order of the transfers, and the rows per
-       table (limit 0: as many as fit). */
+    /* Filters of every view; its sort orders the transfers, its limit caps each table. */
     struct ft_query filter;
 };
 

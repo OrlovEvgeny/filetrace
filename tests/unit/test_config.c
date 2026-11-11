@@ -33,53 +33,52 @@ static bool warned(const struct ft_config *cfg, const char *about)
     return false;
 }
 
-/* The file as first proposed for the product: every key is known, and the ones that ask
-   for what cannot be done are answered with a warning each. */
-static const char proposed[] = "[agent]\n"
-                               "enabled = true\n"
-                               "ring_buffer_size = \"64MB\"\n"
-                               "event_batch_size = 4096\n"
-                               "\n"
-                               "[network]\n"
-                               "tcp = true\n"
-                               "udp = true\n"
-                               "ipv4 = true\n"
-                               "ipv6 = true\n"
-                               "tc_egress = true\n"
-                               "\n"
-                               "[file]\n"
-                               "track_open = true\n"
-                               "track_read = true\n"
-                               "track_mmap = true\n"
-                               "track_sendfile = true\n"
-                               "track_splice = true\n"
-                               "\n"
-                               "[correlation]\n"
-                               "enabled = true\n"
-                               "track_fd_lifecycle = true\n"
-                               "track_process_lifecycle = true\n"
-                               "track_io_uring = true\n"
-                               "confidence_threshold = \"inferred\"\n"
-                               "\n"
-                               "[storage]\n"
-                               "enabled = true\n"
-                               "path = \"/var/lib/filetrace\"\n"
-                               "retention = \"7d\"\n"
-                               "\n"
-                               "[output]\n"
-                               "format = \"table\"\n"
-                               "timestamps = true\n"
-                               "\n"
-                               "[filters]\n"
-                               "exclude_processes = [\"systemd\"]\n"
-                               "exclude_paths = [\"/proc/*\", \"/sys/*\"]\n";
+/* Every key is known; each one asking for what cannot be done draws a warning. */
+static const char every_section[] = "[agent]\n"
+                                    "enabled = true\n"
+                                    "ring_buffer_size = \"64MB\"\n"
+                                    "event_batch_size = 4096\n"
+                                    "\n"
+                                    "[network]\n"
+                                    "tcp = true\n"
+                                    "udp = true\n"
+                                    "ipv4 = true\n"
+                                    "ipv6 = true\n"
+                                    "tc_egress = true\n"
+                                    "\n"
+                                    "[file]\n"
+                                    "track_open = true\n"
+                                    "track_read = true\n"
+                                    "track_mmap = true\n"
+                                    "track_sendfile = true\n"
+                                    "track_splice = true\n"
+                                    "\n"
+                                    "[correlation]\n"
+                                    "enabled = true\n"
+                                    "track_fd_lifecycle = true\n"
+                                    "track_process_lifecycle = true\n"
+                                    "track_io_uring = true\n"
+                                    "confidence_threshold = \"inferred\"\n"
+                                    "\n"
+                                    "[storage]\n"
+                                    "enabled = true\n"
+                                    "path = \"/var/lib/filetrace\"\n"
+                                    "retention = \"7d\"\n"
+                                    "\n"
+                                    "[output]\n"
+                                    "format = \"table\"\n"
+                                    "timestamps = true\n"
+                                    "\n"
+                                    "[filters]\n"
+                                    "exclude_processes = [\"systemd\"]\n"
+                                    "exclude_paths = [\"/proc/*\", \"/sys/*\"]\n";
 
-static void reads_the_proposed_file(void)
+static void reads_every_section(void)
 {
     struct ft_config *cfg = ft_config_new();
     struct ft_error err = {0};
 
-    CHECK_U64(load(cfg, proposed, &err), FT_EXIT_OK);
+    CHECK_U64(load(cfg, every_section, &err), FT_EXIT_OK);
     ft_config_finish(cfg);
     CHECK(cfg->enabled);
     CHECK_U64(cfg->agent.backend_cfg.queue_bytes, 64u * 1024 * 1024);
@@ -213,7 +212,7 @@ static void prints_what_it_reads(void)
     char *text = nullptr;
     size_t size = 0;
 
-    CHECK_U64(load(first, proposed, &err), FT_EXIT_OK);
+    CHECK_U64(load(first, every_section, &err), FT_EXIT_OK);
     ft_config_finish(first);
     FILE *mem = open_memstream(&text, &size);
     ft_config_print(first, mem);
@@ -251,7 +250,7 @@ static void prints_what_it_reads(void)
 
 void test_config(void)
 {
-    reads_the_proposed_file();
+    reads_every_section();
     applies_every_kind_of_value();
     reports_what_is_wrong();
     prints_what_it_reads();
