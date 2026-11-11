@@ -44,9 +44,14 @@ says "events names --state with a value" 2 "filetrace: --state does not apply to
     events --state=closed
 says "watch names --json, an output option it lacks" 2 \
     "filetrace: --json does not apply to 'watch'" watch --json
+says "connections names --script" 2 "filetrace: --script does not apply to 'connections'" \
+    connections --script '/srv/*'
 # An option the command reads itself still reaches the agent, which is not running.
 says "events reads --limit itself" 4 "" events --limit 3
 says "top files takes --protocol" 4 "" top files --protocol tcp
+says "files takes --script" 4 "" files --script 'pool:*'
+says "processes takes --script" 4 "" processes --script=/srv/app/export.py
+says "events takes --script" 4 "" events --script 'module:*'
 
 printf '%d checks, %d failed\n' "$checks" "$failures"
 [ "$failures" -eq 0 ]

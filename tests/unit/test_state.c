@@ -1445,6 +1445,64 @@ static void process_text_is_bounded(void)
     fixture_close(&f);
 }
 
+/* --script selects by what a process runs, wherever the process appears. */
+static void scripts_select_records(void)
+{
+    struct fixture f;
+    struct ft_query q;
+    struct ft_endpoint remote = endpoint(203, 0, 113, 42, 443);
+
+    fixture_open_procfs(&f, true);
+    procfs_set(PID_A, "python3|/srv/app/export.py", "/srv/app");
+    procfs_set(PID_B, "nginx: worker process", "/");
+    emit_exec(&f, PID_A, 1, "python3", 1000);
+    emit_exec(&f, PID_B, 1, "nginx", 1000);
+    emit_file(&f, 11, "/data/users.csv", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 9000, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+    emit_flow(&f, SOCK_B, PID_B, FT_PROTO_TCP, remote, 4096, 0);
+    emit_transfer(&f, SOCK_B, PID_B, 11, FT_METHOD_SENDFILE, 4096, 0, 0);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    ft_strlcpy(q.script, "/srv/app/*", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.transfers[0].pid, PID_A);
+    ft_strlcpy(q.script, "*", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    ft_strlcpy(q.script, "pool:*", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+
+    /* The bytes no file accounts for belong to the process as well. */
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.flags |= FT_QF_INCLUDE_UNKNOWN;
+    q.confidence = FT_CONF_UNKNOWN;
+    ft_strlcpy(q.script, "/srv/app/export.py", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.transfers[0].bytes, 9000 - 4096);
+
+    ft_query_init(&q, FT_Q_PROCESSES);
+    ft_strlcpy(q.script, "/srv/*", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.processes[0].pid, PID_A);
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.event_types = 1u << FT_REC_FILE_TRANSFER;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    ft_strlcpy(q.script, "/srv/*", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.events[0].pid, PID_A);
+    fixture_close(&f);
+}
+
 void test_state(void)
 {
     sendfile_is_exact();
@@ -1469,4 +1527,5 @@ void test_state(void)
     forked_workers_are_read_again();
     arguments_can_be_left_out();
     process_text_is_bounded();
+    scripts_select_records();
 }
