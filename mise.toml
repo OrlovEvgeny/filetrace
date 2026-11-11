@@ -10,6 +10,7 @@ buf = "1"
 # Formatting differs between releases, so the exact version is part of the style.
 clang-format = "23.1.4"
 cmake = "4"
+git-cliff = "2"
 nfpm = "2"
 ninja = "1"
 shellcheck = "0.11"
@@ -113,3 +114,11 @@ run = "tests/packaging/run.sh"
 [tasks."dist:macos"]
 description = "Build the macOS binaries with their libraries linked in into dist/"
 run = "tools/dist/darwin.sh"
+
+[tasks.version]
+description = "Print the version this tree builds as"
+run = "tools/release/version.sh current"
+
+[tasks.changelog]
+description = "Preview the notes of a release cut from this commit"
+run = "tools/release/notes.sh"
