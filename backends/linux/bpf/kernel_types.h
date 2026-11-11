@@ -2,6 +2,9 @@
 #ifndef FILETRACE_LINUX_BPF_KERNEL_TYPES_H
 #define FILETRACE_LINUX_BPF_KERNEL_TYPES_H
 
+/* What bpftool's vmlinux.h defines: libbpf then names the x86 registers as the kernel does. */
+#define __VMLINUX_H__
+
 typedef unsigned char __u8;
 typedef unsigned short __u16;
 typedef unsigned int __u32;
