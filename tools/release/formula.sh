@@ -1,12 +1,34 @@
 #!/bin/sh
-# usage: formula.sh <version> <tag> <SHA256SUMS>
-# Prints the Homebrew formula that installs the archives of a release.
+# usage: formula.sh [--line] <version> <tag> <SHA256SUMS>
+# Prints the Homebrew formula filetrace, which installs the archives of a
+# release. With --line, prints the keg-only filetrace@<line> instead, which
+# follows the releases of one line.
 set -eu
+
+line=
+if [ "${1:-}" = --line ]; then
+    line=$(printf '%s\n' "${2:-}" | cut -d. -f1-2)
+    shift
+fi
+if [ $# -ne 3 ]; then
+    echo "usage: formula.sh [--line] <version> <tag> <SHA256SUMS>" >&2
+    exit 2
+fi
 
 version=$1
 tag=$2
 sums=$3
 base=${FILETRACE_RELEASE_URL:-https://github.com/OrlovEvgeny/filetrace/releases/download}/$tag
+
+class=Filetrace
+keg_only=
+if [ -n "$line" ]; then
+    # Homebrew names the class of filetrace@26.11 FiletraceAT2611.
+    class=FiletraceAT$(printf '%s\n' "$line" | tr -d .)
+    keg_only='
+  keg_only :versioned_formula
+'
+fi
 
 # archive <platform>: the url and sha256 lines of one archive.
 archive()
@@ -27,12 +49,12 @@ linux_arm64=$(archive linux-arm64)
 linux_amd64=$(archive linux-amd64)
 
 cat <<FORMULA
-class Filetrace < Formula
+class $class < Formula
   desc "See which files a machine sends over the network, and where they go"
   homepage "https://github.com/OrlovEvgeny/filetrace"
   version "$version"
   license "MIT"
-
+$keg_only
   on_macos do
     depends_on macos: :sequoia
 
