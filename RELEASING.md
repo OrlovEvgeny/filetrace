@@ -44,8 +44,9 @@ which can also be started from the Actions tab. The workflow
 5. opens the branch of a new line;
 6. rebuilds the apt, yum and apk repositories from every published release
    and deploys them, with the installer, to GitHub Pages;
-7. updates the formula in the Homebrew tap `OrlovEvgeny/homebrew-filetrace`,
-   for the newest release only;
+7. writes the formula `filetrace@<line>` in the Homebrew tap
+   `OrlovEvgeny/homebrew-filetrace`, and `filetrace` too when the release is
+   the newest one;
 8. opens a pull request that adds the notes to `CHANGELOG.md`.
 
 A candidate stops after step 4.
@@ -86,7 +87,7 @@ Three secrets of the `release` environment hold the keys:
 |---|---|---|
 | `FILETRACE_GPG_KEY` | OpenPGP private key for the apt and yum repositories and the rpm packages | the package repositories are not updated |
 | `FILETRACE_APK_KEY` | RSA private key for the apk repository and packages | the same |
-| `HOMEBREW_TAP_KEY` | SSH deploy key with write access to `OrlovEvgeny/homebrew-filetrace` | the formula is not updated |
+| `HOMEBREW_TAP_KEY` | SSH deploy key with write access to `OrlovEvgeny/homebrew-filetrace` | the formulae are not updated |
 
 `tools/release/keys.sh <directory>` creates the first two;
 `tools/release/github-setup.sh --keys <directory>` stores them and creates

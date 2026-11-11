@@ -63,7 +63,7 @@ and the agent speak one protocol version.
 
 | Channel | How |
 |---|---|
-| Homebrew, on macOS 15 or later and on Linux | `brew install orlovevgeny/filetrace/filetrace`; the programs only, without a service |
+| Homebrew, on macOS 15 or later and on Linux | `brew install orlovevgeny/filetrace/filetrace` for the newest release, `orlovevgeny/filetrace/filetrace@26.11` to stay on a line; the programs only, without a service |
 | Debian, Ubuntu | `apt`, from `https://orlovevgeny.github.io/filetrace/apt` |
 | Fedora, RHEL and derivatives, openSUSE | `dnf`, `yum` or `zypper`, from `https://orlovevgeny.github.io/filetrace/rpm` |
 | Alpine | `apk`, from `https://orlovevgeny.github.io/filetrace/apk` |

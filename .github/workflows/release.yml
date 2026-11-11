@@ -226,7 +226,7 @@ jobs:
         run: echo "::warning::the signing keys or the R2 credentials are not set, so the download site is left as it is"
 
       - name: Check out the Homebrew tap
-        if: env.TAPPED == 'true' && needs.plan.outputs.latest == 'true'
+        if: env.TAPPED == 'true' && needs.plan.outputs.prerelease != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/homebrew-filetrace
@@ -234,13 +234,17 @@ jobs:
           path: tap
           # The key reaches the tap alone and is needed for the push below.
           persist-credentials: true # zizmor: ignore[artipacked]
-      - name: Update the Homebrew formula
-        if: env.TAPPED == 'true' && needs.plan.outputs.latest == 'true'
+      - name: Update the Homebrew formulae
+        if: env.TAPPED == 'true' && needs.plan.outputs.prerelease != 'true'
         run: |
           mkdir -p tap/Formula
-          tools/release/formula.sh "$VERSION" "$TAG" dist/SHA256SUMS >tap/Formula/filetrace.rb
+          tools/release/formula.sh --line "$VERSION" "$TAG" dist/SHA256SUMS >"tap/Formula/filetrace@$LINE.rb"
+          # A patch of an older line leaves filetrace on the newest release.
+          if [ "$LATEST" = true ]; then
+              tools/release/formula.sh "$VERSION" "$TAG" dist/SHA256SUMS >tap/Formula/filetrace.rb
+          fi
           cd tap
-          git add Formula/filetrace.rb
+          git add Formula
           if ! git diff --cached --quiet; then
               git -c user.name='github-actions[bot]' \
                   -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
