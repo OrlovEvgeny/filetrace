@@ -935,6 +935,105 @@ static void event_floods_stay_in_their_class(void)
     fixture_close(&f);
 }
 
+static void fixture_open_with(struct fixture *f, const struct ft_state_config *cfg)
+{
+    memset(f, 0, sizeof(*f));
+    f->st = ft_state_create(cfg);
+    f->rows.transfers = calloc(16, sizeof(struct ft_row_transfer));
+    f->rows.events = calloc(16, sizeof(struct ft_row_event));
+    f->now = ft_clock_mono_ns();
+    f->st->start_ns = f->now;
+}
+
+static void configured_exclusions(void)
+{
+    static const char *const processes[] = {"systemd*", "sshd"};
+    static const char *const paths[] = {"/proc/*", "/sys/*"};
+    struct ft_state_config cfg;
+    struct fixture f;
+    struct ft_query q;
+
+    ft_state_config_defaults(&cfg);
+    cfg.exclude_processes = processes;
+    cfg.exclude_process_count = FT_ARRAY_LEN(processes);
+    cfg.exclude_paths = paths;
+    cfg.exclude_path_count = FT_ARRAY_LEN(paths);
+    cfg.ignore_udp = true;
+    cfg.ignore_ipv6 = true;
+    fixture_open_with(&f, &cfg);
+
+    emit_exec(&f, PID_A, 1, "nginx", 1000);
+    emit_exec(&f, PID_B, 1, "systemd-resolve", 1001);
+    emit_file(&f, 11, "/var/www/a.bin", false);
+    emit_file(&f, 12, "/proc/meminfo", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 1, 443), 5000, 0);
+    emit_flow(&f, SOCK_B, PID_B, FT_PROTO_TCP, endpoint(203, 0, 113, 2, 443), 7000, 0);
+    emit_flow(&f, 0x1003, PID_A, FT_PROTO_UDP, endpoint(203, 0, 113, 3, 53), 300, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 2000, 0, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 12, FT_METHOD_SENDFILE, 1000, 0, 0);
+    emit_transfer(&f, SOCK_B, PID_B, 11, FT_METHOD_SENDFILE, 7000, 0, 0);
+    emit_transfer(&f, 0x1003, PID_A, 11, FT_METHOD_SENDFILE, 300, 0, 0);
+
+    /* Neither the excluded process nor the ignored protocol left any trace. */
+    ft_query_init(&q, FT_Q_PROCESSES);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.processes[0].pid, PID_A);
+    CHECK_U64(f.rows.processes[0].tx_bytes, 5000);
+    ft_query_init(&q, FT_Q_CONNECTIONS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_STR(f.rows.transfers[0].path, "/var/www/a.bin");
+    CHECK_U64(f.rows.transfers[0].bytes, 2000);
+
+    /* The bytes of an excluded file stay counted on the socket, without a file. */
+    q.flags = FT_QF_INCLUDE_UNKNOWN;
+    q.confidence = FT_CONF_UNKNOWN;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.transfers[0].bytes, 3000);
+
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.pid = PID_B;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 0);
+    struct ft_row_stats stats = {0};
+    ft_state_fill_stats(f.st, f.now, &stats);
+    CHECK_U64(stats.tx_bytes, 5000);
+    fixture_close(&f);
+}
+
+static void confidence_threshold(void)
+{
+    struct ft_state_config cfg;
+    struct fixture f;
+    struct ft_query q;
+
+    ft_state_config_defaults(&cfg);
+    cfg.min_confidence = FT_CONF_EXACT;
+    fixture_open_with(&f, &cfg);
+    emit_exec(&f, PID_A, 1, "python", 1000);
+    emit_file(&f, 11, "/data/exact.bin", false);
+    emit_file(&f, 12, "/data/inferred.bin", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, endpoint(203, 0, 113, 1, 443), 200000, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 11, FT_METHOD_SENDFILE, 100000, 0, 0);
+    emit_transfer(&f, SOCK_A, PID_A, 12, FT_METHOD_READ_SEND, 100000, 100000, 8);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    q.flags = FT_QF_INCLUDE_UNKNOWN;
+    q.sort = FT_SORT_FILE;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 2);
+    CHECK_STR(f.rows.transfers[0].path, "/data/exact.bin");
+    /* What the inferred association would have claimed is reported as unattributed. */
+    CHECK_U64(f.rows.transfers[1].confidence, FT_CONF_UNKNOWN);
+    CHECK_U64(f.rows.transfers[1].bytes, 100000);
+    fixture_close(&f);
+}
+
 static void tables_stay_bounded(void)
 {
     struct ft_state_config cfg;
@@ -983,5 +1082,7 @@ void test_state(void)
     events_are_logged_in_order();
     event_log_keeps_the_most_recent();
     event_floods_stay_in_their_class();
+    configured_exclusions();
+    confidence_threshold();
     tables_stay_bounded();
 }

@@ -1,5 +1,7 @@
 #include "filetrace/state.h"
 
+#include "filetrace/format.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +16,7 @@ void ft_state_config_defaults(struct ft_state_config *cfg)
         .event_log_bytes = 1024 * 1024,
         .inferred_min_bytes = 1024,
         .inferred_min_permille = 50,
+        .min_confidence = FT_CONF_INFERRED,
         .active_window_ns = 5 * FT_NS_PER_SEC,
         .idle_socket_ns = 30 * FT_NS_PER_SEC,
         .closed_retention_ns = 60 * FT_NS_PER_SEC,
@@ -107,6 +110,15 @@ void ft_state_destroy(struct ft_state *st)
     free(st);
 }
 
+static bool matches_any(const char *const *patterns, size_t count, const char *text)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (ft_glob_match(patterns[i], text))
+            return true;
+    }
+    return false;
+}
+
 /* Start times read back from the system are rounded to scheduler ticks. */
 static bool same_start(uint64_t a, uint64_t b)
 {
@@ -133,6 +145,7 @@ static struct ft_process *process_record(struct ft_state *st, const struct ft_ev
     p->cgroup_id = e->cgroup_id;
     p->start_ns = e->start_ns;
     ft_strlcpy(p->comm, e->comm, sizeof(p->comm));
+    p->excluded = matches_any(st->cfg.exclude_processes, st->cfg.exclude_process_count, p->comm);
     return p;
 }
 
@@ -162,7 +175,7 @@ static bool ingest_exec(struct ft_state *st, const struct ft_ev_process *e)
     p->exited = false;
     if (e->exe[0])
         ft_strlcpy(p->exe, e->exe, sizeof(p->exe));
-    return true;
+    return !p->excluded;
 }
 
 static bool ingest_fork(struct ft_state *st, const struct ft_ev_process *e)
@@ -171,7 +184,7 @@ static bool ingest_fork(struct ft_state *st, const struct ft_ev_process *e)
     const struct ft_process *parent = ft_table_find(st->processes, &e->ppid);
     if (!p->exe[0] && parent)
         ft_strlcpy(p->exe, parent->exe, sizeof(p->exe));
-    return true;
+    return !p->excluded;
 }
 
 static bool ingest_exit(struct ft_state *st, const struct ft_event *ev)
@@ -185,7 +198,7 @@ static bool ingest_exit(struct ft_state *st, const struct ft_event *ev)
     p->exited = true;
     p->exit_ns = ev->ts_ns;
     p->exit_status = e->exit_status;
-    return true;
+    return !p->excluded;
 }
 
 void ft_state_sweep(struct ft_state *st, uint64_t now_ns)
@@ -217,10 +230,20 @@ static bool endpoint_equal(const struct ft_endpoint *a, const struct ft_endpoint
     return a->port == b->port && ft_addr_equal(a, b);
 }
 
-static void socket_set_owner(struct ft_state *st, struct ft_socket *s, uint32_t pid)
+static bool network_ignored(const struct ft_state *st, uint16_t proto,
+                            const struct ft_endpoint *local, const struct ft_endpoint *remote)
 {
-    const struct ft_process *p = process_ensure(st, pid);
-    s->pid = pid;
+    uint8_t family = local->family ? local->family : remote->family;
+
+    if ((proto == FT_PROTO_TCP && st->cfg.ignore_tcp) ||
+        (proto == FT_PROTO_UDP && st->cfg.ignore_udp))
+        return true;
+    return (family == 4 && st->cfg.ignore_ipv4) || (family == 6 && st->cfg.ignore_ipv6);
+}
+
+static void socket_set_owner(struct ft_socket *s, const struct ft_process *p)
+{
+    s->pid = p->pid;
     ft_strlcpy(s->comm, p->comm, sizeof(s->comm));
 }
 
@@ -229,6 +252,11 @@ static bool ingest_socket(struct ft_state *st, const struct ft_event *ev)
     const struct ft_ev_socket *e = &ev->socket;
 
     if (e->state == FT_SOCK_CLOSED && !ft_table_find(st->sockets, &e->sock_id))
+        return false;
+    if (network_ignored(st, e->proto, &e->local, &e->remote))
+        return false;
+    const struct ft_process *owner = e->pid ? process_ensure(st, e->pid) : nullptr;
+    if (owner && owner->excluded)
         return false;
 
     bool created;
@@ -249,8 +277,8 @@ static bool ingest_socket(struct ft_state *st, const struct ft_event *ev)
         if (endpoint_known(&e->remote))
             s->remote = e->remote;
     }
-    if (e->pid)
-        socket_set_owner(st, s, e->pid);
+    if (owner)
+        socket_set_owner(s, owner);
     return true;
 }
 
@@ -258,6 +286,12 @@ static bool ingest_flow(struct ft_state *st, const struct ft_event *ev)
 {
     const struct ft_ev_flow *e = &ev->flow;
     bool created;
+
+    if (network_ignored(st, e->proto, &e->local, &e->remote))
+        return false;
+    struct ft_process *p = process_ensure(st, e->pid);
+    if (p->excluded)
+        return false;
 
     struct ft_socket *s = ft_table_insert(st->sockets, &e->sock_id, &created);
     if (created) {
@@ -283,7 +317,7 @@ static bool ingest_flow(struct ft_state *st, const struct ft_event *ev)
     s->rx_bytes += e->rx_bytes;
     ft_rate_add(&s->tx_rate, ev->ts_ns, e->tx_bytes);
     ft_rate_add(&s->rx_rate, ev->ts_ns, e->rx_bytes);
-    socket_set_owner(st, s, e->pid);
+    socket_set_owner(s, p);
 
     struct ft_flow_key key;
     memset(&key, 0, sizeof(key));
@@ -310,7 +344,6 @@ static bool ingest_flow(struct ft_state *st, const struct ft_event *ev)
     ft_rate_add(&f->tx_rate, ev->ts_ns, e->tx_bytes);
     ft_rate_add(&f->rx_rate, ev->ts_ns, e->rx_bytes);
 
-    struct ft_process *p = process_ensure(st, e->pid);
     p->tx_bytes += e->tx_bytes;
     p->rx_bytes += e->rx_bytes;
     p->last_ns = ev->ts_ns;
@@ -350,7 +383,9 @@ static bool ingest_file(struct ft_state *st, const struct ft_event *ev)
             f->path = copy;
         }
     }
-    return true;
+    f->excluded =
+        f->path && matches_any(st->cfg.exclude_paths, st->cfg.exclude_path_count, f->path);
+    return !f->excluded;
 }
 
 static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
@@ -358,6 +393,18 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     const struct ft_ev_transfer *e = &ev->transfer;
     struct ft_transfer_key key;
     bool created;
+
+    /* With protocols ignored, a socket that was never recorded is one of theirs. */
+    bool ignoring =
+        st->cfg.ignore_tcp || st->cfg.ignore_udp || st->cfg.ignore_ipv4 || st->cfg.ignore_ipv6;
+    if (ignoring && !ft_table_find(st->sockets, &e->sock_id))
+        return false;
+    const struct ft_file *file = ft_table_touch(st->files, &e->file);
+    if (file && file->excluded)
+        return false;
+    const struct ft_process *p = process_ensure(st, e->pid);
+    if (p->excluded)
+        return false;
 
     memset(&key, 0, sizeof(key));
     key.sock_id = e->sock_id;
@@ -367,7 +414,6 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
 
     struct ft_transfer *t = ft_table_insert(st->transfers, &key, &created);
     if (created) {
-        const struct ft_process *p = process_ensure(st, e->pid);
         t->id = ++st->next_transfer_id;
         t->sock_id = e->sock_id;
         t->file = e->file;
@@ -382,9 +428,6 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     t->ops += e->ops;
     t->alternations += e->alternations;
     ft_rate_add(&t->rate, ev->ts_ns, e->bytes);
-
-    /* Keep the file's metadata for as long as transfers refer to it. */
-    ft_table_touch(st->files, &e->file);
     return true;
 }
 
@@ -659,7 +702,7 @@ bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,
     case FT_METHOD_SENDFILE:
         *confidence = FT_CONF_EXACT;
         *evidence = evd | FT_EVD_DIRECT_TRANSFER;
-        return true;
+        break;
 
     case FT_METHOD_READ_SEND:
         if (t->bytes < st->cfg.inferred_min_bytes)
@@ -673,11 +716,12 @@ bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,
             evd |= FT_EVD_BYTE_BALANCE;
         *confidence = FT_CONF_INFERRED;
         *evidence = evd;
-        return true;
+        break;
 
     default:
         return false;
     }
+    return *confidence >= st->cfg.min_confidence;
 }
 
 uint64_t ft_state_lost_between(const struct ft_state *st, uint64_t from_ns, uint64_t to_ns,

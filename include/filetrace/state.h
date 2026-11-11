@@ -19,9 +19,25 @@ struct ft_state_config {
     uint64_t inferred_min_bytes;
     uint32_t inferred_min_permille; /* attributed bytes per 1000 bytes read */
 
+    /* Associations below this level are not reported at all. */
+    enum ft_confidence min_confidence;
+
     uint64_t active_window_ns;    /* updated this recently: still in progress */
     uint64_t idle_socket_ns;      /* connectionless socket silent this long: idle */
     uint64_t closed_retention_ns; /* closed sockets stay listed this long */
+
+    /* Traffic of an ignored protocol or address family is not recorded. */
+    bool ignore_tcp;
+    bool ignore_udp;
+    bool ignore_ipv4;
+    bool ignore_ipv6;
+
+    /* Patterns, borrowed for the life of the state: nothing is recorded about a process
+       whose name matches, nor about a file whose path does. */
+    const char *const *exclude_processes;
+    size_t exclude_process_count;
+    const char *const *exclude_paths;
+    size_t exclude_path_count;
 
     /* Describes a process that was running before observation started. */
     bool (*lookup_process)(uint32_t pid, struct ft_ev_process *out);
@@ -57,6 +73,7 @@ struct ft_process {
     struct ft_rate rx_rate;
     int32_t exit_status;
     bool exited;
+    bool excluded;
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
 
@@ -130,6 +147,7 @@ struct ft_file {
     char fs_type[FT_FS_TYPE_MAX];
     bool deleted;
     bool path_truncated;
+    bool excluded;
     char *path;
 };
 
@@ -213,7 +231,8 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev);
 /* Forgets processes that exited without ever touching the network. */
 void ft_state_sweep(struct ft_state *st, uint64_t now_ns);
 
-/* Returns false for an inferred association still below the configured thresholds. */
+/* Returns false for an association that is not reported: an inferred one still below
+   the configured thresholds, or any below the configured confidence. */
 bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,
                        enum ft_confidence *confidence, uint32_t *evidence);
 
