@@ -1,5 +1,7 @@
 #include "backends/linux/linux.h"
 
+#include "filetrace/sysinfo.h"
+
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <stdio.h>
@@ -232,6 +234,12 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     ft_diagnosis_add(out, caps.perfmon || caps.sys_admin ? FT_CHECK_OK : FT_CHECK_FAIL, false,
                      "CAP_PERFMON", "%s",
                      caps.perfmon || !caps.sys_admin ? "" : "through CAP_SYS_ADMIN");
+
+    if (!ft_sysinfo_host_pid_namespace())
+        ft_diagnosis_add(out, FT_CHECK_WARN, true, "PID namespace",
+                         "not the host's: command lines of processes older than the agent, "
+                         "PHP-FPM pool names, and inspect's cgroup and open files are not read; "
+                         "run it in the host's PID namespace, as with docker run --pid=host");
 
     if (lockdown_blocks_reads()) {
         ft_diagnosis_add(out, FT_CHECK_FAIL, false, "Kernel lockdown",
