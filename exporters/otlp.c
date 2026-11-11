@@ -34,7 +34,7 @@ typedef Opentelemetry__Proto__Collector__Metrics__V1__ExportMetricsServiceRespon
 /* A request stays well under the 4 MB that a collector accepts by default. */
 constexpr size_t MAX_BATCH_BYTES = 3 * 1024 * 1024;
 constexpr size_t RECORD_OVERHEAD = 1024; /* attribute keys and framing of one log record */
-constexpr size_t MAX_ATTRS = 24;
+constexpr size_t MAX_ATTRS = 32;
 
 /* protobuf-c reads strings through pointers that are not const. */
 static char *text_of(const char *s)
@@ -142,6 +142,7 @@ struct merge_key {
 struct ft_otlp_logs {
     size_t max_records;
     bool file_paths;
+    bool command_line;
     unsigned char *rows; /* struct ft_row_event up to its text's end, each aligned */
     size_t rows_len;
     size_t rows_cap;
@@ -150,13 +151,14 @@ struct ft_otlp_logs {
     struct ft_table *merged; /* key: struct merge_key, value: size_t offset into rows */
 };
 
-struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths)
+struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths, bool command_line)
 {
     struct ft_otlp_logs *b = calloc(1, sizeof(*b));
     if (!b)
         return nullptr;
     b->max_records = max_records;
     b->file_paths = file_paths;
+    b->command_line = command_line;
     b->merged = ft_table_create(max_records, sizeof(struct merge_key), sizeof(size_t));
     if (!b->merged) {
         free(b);
@@ -195,10 +197,27 @@ static bool carries_bytes(const struct ft_row_event *e)
            e->type == FT_REC_FILE_TRANSFER;
 }
 
-static size_t stored_size(size_t text_len)
+static size_t stored_size(size_t text_bytes)
 {
-    return (offsetof(struct ft_row_event, text) + text_len + 1 + alignof(struct ft_row_event) - 1) &
+    return (offsetof(struct ft_row_event, text) + text_bytes + alignof(struct ft_row_event) - 1) &
            ~(alignof(struct ft_row_event) - 1);
+}
+
+/* The process strings of the record that the batch's settings let leave. */
+static bool exported_strings(const struct ft_otlp_logs *b, const struct ft_row_event *row,
+                             struct ft_process_strings *out)
+{
+    if (!(row->flags & FT_EVENT_PROCESS_TEXT))
+        return false;
+    ft_row_event_strings(row, out);
+    if (!b->command_line)
+        out->command_line = "";
+    if (!b->file_paths) {
+        out->cwd = "";
+        if (out->script[0] == '/')
+            out->script = "";
+    }
+    return out->command_line[0] || out->cwd[0] || out->script[0];
 }
 
 static struct ft_row_event *row_at(const struct ft_otlp_logs *b, size_t offset)
@@ -210,7 +229,12 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
 {
     bool keep_text = b->file_paths || !about_file(row);
     size_t text_len = keep_text ? strnlen(row->text, FT_PATH_MAX - 1) : 0;
-    size_t size = stored_size(text_len);
+    struct ft_process_strings strings;
+    bool with_strings = exported_strings(b, row, &strings);
+    size_t strings_size = with_strings ? strlen(strings.command_line) + strlen(strings.cwd) +
+                                             strlen(strings.script) + 3
+                                       : 0;
+    size_t size = stored_size(text_len + 1 + strings_size);
     struct merge_key key;
 
     if (carries_bytes(row)) {
@@ -231,7 +255,8 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
             sum->time_ns = row->time_ns;
             /* The latest record knows best how sure the association is. */
             sum->confidence = row->confidence;
-            sum->flags = row->flags;
+            sum->flags = (uint8_t)((row->flags & ~FT_EVENT_PROCESS_TEXT) |
+                                   (sum->flags & FT_EVENT_PROCESS_TEXT));
             return true;
         }
     }
@@ -251,6 +276,11 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
     struct ft_row_event *stored = row_at(b, b->rows_len);
     memset(stored, 0, size);
     memcpy(stored, row, offsetof(struct ft_row_event, text) + text_len);
+    stored->flags &= (uint8_t)~FT_EVENT_PROCESS_TEXT;
+    if (with_strings) {
+        ft_process_strings_pack(stored->text + text_len + 1, strings_size, &strings);
+        stored->flags |= FT_EVENT_PROCESS_TEXT;
+    }
 
     if (carries_bytes(row)) {
         size_t *offset = ft_table_insert(b->merged, &key, nullptr);
@@ -293,6 +323,16 @@ static void describe(struct attrs *l, const struct ft_row_event *e)
     }
     if (about_process(e) && e->text[0])
         attr_string(l, FT_ATTR_PROCESS_PATH, e->text);
+    if (e->flags & FT_EVENT_PROCESS_TEXT) {
+        struct ft_process_strings s;
+        ft_row_event_strings(e, &s);
+        if (s.command_line[0])
+            attr_string(l, FT_ATTR_PROCESS_COMMAND_LINE, s.command_line);
+        if (s.cwd[0])
+            attr_string(l, FT_ATTR_PROCESS_WORKING_DIRECTORY, s.cwd);
+        if (s.script[0])
+            attr_string(l, FT_ATTR_PROCESS_SCRIPT, s.script);
+    }
     if (e->type == FT_REC_PROCESS_EXIT) {
         if (WIFSIGNALED(e->exit_status))
             attr_int(l, FT_ATTR_PROCESS_EXIT_SIGNAL, (uint64_t)WTERMSIG(e->exit_status));
@@ -408,7 +448,7 @@ uint8_t *ft_otlp_logs_encode(struct ft_otlp_logs *b, const struct ft_metric_attr
 
         if (record)
             scope_logs.log_records[scope_logs.n_log_records++] = record;
-        offset += stored_size(strlen(row->text));
+        offset += stored_size(ft_row_event_size(row) - offsetof(struct ft_row_event, text));
     }
 
     if (!a.failed) {

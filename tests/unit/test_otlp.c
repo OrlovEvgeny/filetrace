@@ -94,7 +94,7 @@ static void release(LogsRequest *request)
 
 static void describes_a_transfer_with_standard_names(void)
 {
-    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true);
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false);
     struct ft_row_event *row = transfer_row(8192, 1000);
 
     CHECK(ft_otlp_logs_add(batch, row));
@@ -144,7 +144,7 @@ static void describes_a_transfer_with_standard_names(void)
 
 static void sums_the_parts_of_one_transfer(void)
 {
-    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true);
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false);
     struct ft_row_event *row = transfer_row(1000, 100);
 
     row->method = FT_METHOD_READ_SEND;
@@ -200,8 +200,8 @@ static void sums_the_parts_of_one_transfer(void)
 
 static void leaves_paths_out_on_request_and_keeps_text_valid(void)
 {
-    struct ft_otlp_logs *hidden = ft_otlp_logs_new(16, false);
-    struct ft_otlp_logs *shown = ft_otlp_logs_new(16, true);
+    struct ft_otlp_logs *hidden = ft_otlp_logs_new(16, false, false);
+    struct ft_otlp_logs *shown = ft_otlp_logs_new(16, true, false);
     struct ft_row_event *row = transfer_row(10, 1);
 
     ft_strlcpy(row->text, "/data/caf\xe9.pdf", sizeof(row->text));
@@ -227,7 +227,7 @@ static void leaves_paths_out_on_request_and_keeps_text_valid(void)
 
 static void refuses_more_than_a_batch_holds(void)
 {
-    struct ft_otlp_logs *batch = ft_otlp_logs_new(2, true);
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(2, true, false);
     struct ft_row_event *row = transfer_row(10, 1);
 
     CHECK(ft_otlp_logs_add(batch, row));

@@ -15,6 +15,9 @@
 #define FT_ATTR_PROCESS_PARENT_PID "process.parent_pid"
 #define FT_ATTR_PROCESS_NAME "process.executable.name" /* the kernel's name for the task */
 #define FT_ATTR_PROCESS_PATH "process.executable.path"
+#define FT_ATTR_PROCESS_COMMAND_LINE "process.command_line"
+#define FT_ATTR_PROCESS_WORKING_DIRECTORY "process.working_directory"
+#define FT_ATTR_PROCESS_SCRIPT "filetrace.process.script" /* what an interpreter runs */
 #define FT_ATTR_PROCESS_USER_ID "process.user.id"
 #define FT_ATTR_PROCESS_EXIT_CODE "process.exit.code"
 #define FT_ATTR_PROCESS_EXIT_SIGNAL "filetrace.process.exit_signal"

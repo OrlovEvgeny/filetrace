@@ -12,8 +12,11 @@
  */
 struct ft_otlp_logs;
 
-/* Without file_paths a file is described by device and inode only. */
-struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths);
+/*
+ * Without file_paths a file is described by device and inode only, and a process by no path
+ * either. Without command_line a process's arguments are left out.
+ */
+struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths, bool command_line);
 void ft_otlp_logs_free(struct ft_otlp_logs *b);
 
 /* row carries wall-clock time. False when the batch is full: the record was not taken. */
