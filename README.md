@@ -6,10 +6,19 @@ application has to be changed, and it says how sure each answer is.
 
 ```text
 $ sudo filetrace files
-FILE                        PID   PROCESS  REMOTE              SENT     CONFIDENCE
-/var/www/video.mp4          1842  nginx    198.51.100.4:443    1.20 GB  EXACT
-/data/export/customers.csv  3821  python   192.0.2.10:443      85.2 MB  INFERRED
+FILE                    PROCESS  DESTINATION   BYTES    METHOD      CONFIDENCE
+/var/www/video.mp4      nginx    198.51.100.4  1.20 GB  sendfile    EXACT
+/data/export/users.csv  python   192.0.2.10    85.2 MB  read-write  INFERRED
 ```
+
+The questions it answers run in both directions:
+
+| From | To | Command |
+|---|---|---|
+| a file | who sends it, and to whom | `filetrace inspect file /data/report.pdf` |
+| an address | the files sent to it | `filetrace files --remote 203.0.113.25` |
+| a process | what it is sending now | `filetrace inspect process 1245` |
+| the network | the processes behind the traffic | `filetrace processes` |
 
 ## Platform support
 
@@ -33,16 +42,16 @@ On any machine with Docker, including macOS:
 tools/dev/linux.sh tools/dev/demo.sh
 ```
 
-This builds the project in a Linux container, starts the daemon, sends files
-with `sendfile(2)`, with a read+send loop and over UDP, and prints what
-Filetrace observed. The container sees the kernel it runs on: under Docker
-Desktop that is the Docker VM, not the macOS host.
+This builds the project in a Linux container, starts the agent, sends files
+with `sendfile(2)`, with a read+send loop and over UDP, and walks through the
+commands below. The container sees the kernel it runs on: under Docker Desktop
+that is the Docker VM, not the macOS host.
 
-For the live dashboard, in two terminals:
+For the live view, in two terminals:
 
 ```sh
 tools/dev/linux.sh build/demo/filetrace watch
-tools/dev/linux.sh build/demo/tests/ft_workload sendfile /tmp/big.bin 200000000
+tools/dev/linux.sh build/demo/tests/ft_workload steady /tmp/big.bin 200000000 20
 ```
 
 ## Build
@@ -59,53 +68,265 @@ sudo build/filetrace doctor
 `-DFILETRACE_SANITIZE=ON` builds with AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-## Usage
+## Two programs
+
+`filetrace-agent` loads the probes, keeps what they report in bounded memory
+and answers queries on a local socket. `filetrace` is the command-line
+interface: it asks the agent and prints. Only the agent needs privileges to
+load BPF programs; the socket accepts root and the agent's own user.
 
 ```sh
-sudo filetraced &            # collect in the background
-sudo filetrace watch         # live overview
-sudo filetrace files         # files sent, with confidence
+sudo filetrace-agent &       # or: sudo filetrace agent run
+sudo filetrace watch
 ```
 
-Without a running daemon, `filetrace watch` collects in the foreground for as
-long as it runs.
+Without a running agent, `filetrace watch` and `filetrace events --follow`
+collect in the foreground for as long as they run.
+
+## Commands
+
+```text
+filetrace [--socket <path>] [--config <path>] <command> [options]
+```
+
+`filetrace` alone reports whether the agent is running and lists the commands.
 
 | Command | Shows |
 |---|---|
-| `watch` | Live totals, top senders and file transfers in progress |
+| `watch` | Live view: file transfers in progress, with process, destination, method and rate; keys switch to processes and connections |
 | `files` | Files associated with network transfers |
-| `transfers` | The same, plus sent bytes that no file accounts for |
-| `processes` | Bytes sent and received per process |
-| `connections` | Open and recently closed sockets |
+| `processes` | Outbound rate, files sent and open connections per process |
+| `connections` | Open and recently closed sockets, by their local and remote ends |
 | `flows` | Bytes per process, socket and remote endpoint |
-| `top` | Highest-volume processes, files, destinations or connections |
-| `stats` | The collector's own events, losses, CPU and memory |
-| `doctor` | Whether this machine can be monitored, probe by probe |
-| `capabilities` | Each feature as FULL, PARTIAL, UNAVAILABLE or DISABLED, with the reason |
-| `daemon` | `run`, `status`, `stop` |
+| `inspect` | Everything known about one `file`, `process`, `socket`, `flow` or `ip` |
+| `events` | The agent's records in order: process, socket, network and transfer events |
+| `stats` | The agent's own events, losses, CPU and memory |
+| `doctor` | Whether this machine can be monitored: kernel, every probe, features, pipeline |
+| `config` | The configuration in effect; validates a file |
+| `version` | Version, build and platform |
 
-Query commands share their filters (`--pid`, `--process`, `--path`,
-`--remote`, `--protocol`, `--since`, `--confidence`, `--min-bytes`, ...) and
-print as `table`, `json`, `jsonl`, `csv` or `quiet`. `filetrace help <command>`
-lists the options, examples and exit codes of each.
+Also: `top` (highest-volume processes, files, destinations or connections),
+`transfers` (transfer records including sent bytes no file accounts for),
+`capabilities` (each feature as FULL, PARTIAL, UNAVAILABLE or DISABLED, with
+the reason) and `agent run|status|stop`.
+
+`filetrace help <command>` lists a command's options, examples and exit codes.
+
+### Common filters
+
+`--pid`, `--process`, `--user`, `--cgroup`, `--namespace`, `--file` (also
+`--path`, with `*` wildcards), `--path-regex`, `--remote` and `--local` (an
+address or a CIDR network), `--port`, `--protocol`, `--method`,
+`--confidence`, `--min-bytes`, `--min-size`, `--since`, `--until`, `--active`,
+`--completed`, `--sort`, `--limit`. Each command accepts the ones that apply
+to what it lists. `--resolve-hostnames` shows remote addresses by name where a
+reverse DNS lookup finds one.
+
+### Output
+
+Every listing prints as `table`, `json`, `jsonl`, `csv` or `quiet`
+(`--format`, or `--json` and `--jsonl`). Machine-readable formats carry exact
+byte counts and RFC 3339 timestamps, and use one schema for a transfer whether
+it comes from `files` or from `events`. A record of the demo above, wrapped
+for reading:
+
+```json
+{
+  "event": "file_transfer",
+  "transfer_id": "tr_4",
+  "timestamp": "2026-11-11T12:00:04.561Z",
+  "host": "c52a23e07bc3",
+  "platform": "linux",
+  "process": {"pid": 7672, "ppid": 7529, "name": "ft_workload",
+              "executable": "/src/build/demo/tests/ft_workload"},
+  "file": {"path": "/var/tmp/filetrace-demo/video.mp4", "inode": 366815, "device": 63,
+           "size": 50000000, "owner": "root", "filesystem": "overlay", "deleted": false},
+  "network": {"protocol": "tcp", "socket_id": 421,
+              "local_ip": "127.0.0.1", "local_port": 45190,
+              "remote_ip": "127.0.0.1", "remote_port": 48175},
+  "transfer": {"method": "sendfile", "bytes_sent": 50000000, "bytes_per_second": 0,
+               "operations": 1, "started": "2026-11-11T12:00:04.561Z", "duration_ms": 0,
+               "state": "active", "confidence": "exact",
+               "evidence": ["direct_file_to_socket_transfer", "file_identity",
+                            "socket_identity", "remote_endpoint"],
+               "incomplete": false}
+}
+```
+
+`file.size`, `transfer.bytes_read` and `transfer.bytes_sent` are three
+different numbers: the size of the file when it was first seen, what a thread
+read from it, and what the socket accepted. In `files` a record covers a
+transfer's whole lifetime; in `events` it covers one collection interval.
+
+Sockets, flows and transfers have stable IDs (`SOCKET`, `FLOW` and `ID`
+columns, `socket_id`, `flow_id` and `transfer_id` fields) that `inspect`
+takes.
 
 Exit code 9 means the answer may be incomplete: events were lost inside the
-queried time range.
+queried time range. Lost events are also counted in `watch`, `stats` and
+`doctor`.
+
+### watch
+
+```text
+FILETRACE  web-01 · Linux 6.8  LIVE
+
+4             13            6.67 MB/s
+Transfers     Processes     Outbound
+
+ACTIVE FILE TRANSFERS
+PROCESS      FILE                         DESTINATION    METHOD           RATE  CONFIDENCE
+nginx 1245   /var/www/stream.bin          203.0.113.25   sendfile    6.67 MB/s  EXACT
+nginx 1245   /var/www/video.mp4           198.51.100.10  sendfile        0 B/s  EXACT
+python 892   /data/export/customers.csv   203.0.113.50   read-write      0 B/s  INFERRED
+
+● EXACT: 2   ● INFERRED: 1   LOST: 0
+[F] Files  [P] Processes  [N] Network  [Space] Pause  [?] Help  [Q] Quit
+```
+
+`--no-ui` appends a snapshot per interval instead, which is also what happens
+when the output is not a terminal.
+
+### inspect
+
+```text
+$ filetrace inspect file /var/www/video.mp4
+FILE
+────────────────────────────────────
+Path:             /var/www/video.mp4
+Device:           253:0
+Inode:            366815
+Size:             47.7 MB
+Owner:            www-data
+Deleted:          no
+
+TRANSFER HISTORY
+────────────────────────────────────
+TIME                 PROCESS  PID   REMOTE               BYTES    METHOD    CONFIDENCE
+2026-11-11 12:00:04  nginx    1245  198.51.100.10:48175  47.7 MB  sendfile  EXACT
+
+TOTALS
+────────────────────────────────────
+Total sent:       47.7 MB
+Destinations:     1
+Processes:        1
+Transfers:        1
+Active transfers: 1
+
+PROVENANCE
+────────────────────────────────────
+sendfile:         1 transfer
+Exact:            1
+
+History starts at 2026-11-11 12:00:04, when the agent started.
+Nothing earlier is kept.
+```
+
+`inspect process <pid>` adds what the system knows about a running process
+(cgroup, open files) to what the agent observed (connections, rates, top
+destinations, files sent). `inspect ip <address|cidr>` lists the processes
+that talk to an address and the files sent to it.
+
+### events
+
+```text
+$ filetrace events --type file_transfer --since 5m
+12:00:06.737 FILE_TRANSFER
+  pid=1245
+  process=nginx
+  file=/var/www/stream.bin
+  inode=366820
+  socket=434
+  remote=203.0.113.25:39063
+  bytes=2000000
+  method=sendfile
+  confidence=exact
+```
+
+Event types: `process_exec`, `process_fork`, `process_exit`,
+`socket_connect`, `socket_listen`, `socket_established`, `socket_close`,
+`file_seen`, `network_send`, `network_receive`, `file_transfer`,
+`event_loss`. Byte counts are gathered in the kernel and collected several
+times a second, so a network or transfer event carries the bytes of one such
+interval, not of one system call; file opens and single system calls are not
+recorded. `--follow` prints events as they happen. Past events come from a log
+of bounded size (1 MB by default) that holds the most recent ones.
 
 ## Confidence
 
 | Level | Meaning |
 |---|---|
 | EXACT | The kernel moved the file's data to the socket in one operation (`sendfile`) |
-| INFERRED | A thread read the file and then sent on the socket; the payload cannot be proven to come only from that file |
+| INFERRED | A thread read the file and then sent on the socket (`read-write`); the payload cannot be proven to come only from that file |
 | UNKNOWN | Bytes were sent and no file could be associated with them |
 
 STRONG is defined for provenance followed through intermediate operations; no
 probe produces it. A level is never raised by a filter or an output format,
-and every record lists the evidence behind it (`--format json`).
+and every record lists the evidence behind it.
 
-`SENT` counts bytes the local socket accepted. It is not the number of bytes
-on the wire and not what the remote end acknowledged.
+Byte counts are what the local socket accepted. They are not the number of
+bytes on the wire and not what the remote end acknowledged.
+
+## Configuration
+
+The agent reads `/etc/filetrace/config.toml` if it exists (`--config` or
+`$FILETRACE_CONFIG` name another file); its command-line options override the
+file. `filetrace config show` prints every setting with the value in effect,
+and is a way to write a first file:
+
+```toml
+[agent]
+enabled = true
+mode = "standard"            # "minimal": processes, sockets and byte counts only
+probes = "auto"              # or "trampoline", "kprobe"
+socket = "/run/filetrace/agent.sock"
+ring_buffer_size = "4MB"     # kernel-to-agent event queue
+event_batch_size = 512       # counters read from the kernel per call
+flush_interval = "250ms"
+event_log_size = "1MB"       # 0 keeps no events
+log_level = "info"
+
+[network]
+tcp = true
+udp = true
+ipv4 = true
+ipv6 = true
+
+[file]
+track_read = true            # read-write attribution
+track_sendfile = true        # sendfile attribution
+
+[correlation]
+enabled = true
+window = "2s"                # longest read-to-send gap that still associates
+confidence_threshold = "inferred"   # "exact" reports sendfile only
+inferred_min_bytes = "1KB"
+inferred_min_percent = 5
+
+[limits]                     # entries per table; the least recently used go first
+processes = 4096
+sockets = 16384
+flows = 16384
+files = 16384
+transfers = 16384
+kernel_counters = 16384
+kernel_files = 16384
+
+[output]
+format = "table"             # default format of the listing commands
+timestamps = true
+
+[filters]
+exclude_processes = ["systemd"]
+exclude_paths = ["/proc/*", "/sys/*"]
+```
+
+The file also accepts `[network] tc_egress`, `[file] track_open`,
+`track_mmap` and `track_splice`, `[correlation] track_fd_lifecycle` and
+`track_io_uring`, and a `[storage]` section. This build cannot do what they
+ask: setting one to `true` is reported as a warning by `filetrace config
+validate` and by the agent when it starts, and is otherwise ignored. An
+unknown setting or a value of the wrong kind is an error (exit code 6).
 
 ## How it works
 
@@ -122,14 +343,16 @@ BPF programs attach to tracepoints and kernel functions:
 
 The probes see the kernel's own file and socket objects, so nothing is keyed
 on file descriptor numbers and descriptor reuse cannot misattribute a
-transfer. A file is identified by device and inode; its path is read from the
-kernel when the file is first seen and is only a label. A file that is given
-the inode number of a deleted one is a separate file with its own path.
+transfer. A file is identified by device and inode; its path, size and owner
+are read from the kernel when the file is first seen and are only labels. A
+file that is given the inode number of a deleted one is a separate file with
+its own path.
 
 High-frequency data never becomes one event per call. Byte counts accumulate
-in a kernel hash map keyed by socket, process and file; the daemon swaps that
+in a kernel hash map keyed by socket, process and file; the agent swaps that
 map for an empty one every 250 ms and reads the idle one, so no update is
-lost. Process and socket lifecycle events travel through a ring buffer.
+lost. Process and socket lifecycle events travel through a ring buffer. Rates
+are bytes per second over the last one to two seconds.
 
 A read+send association is recorded when a thread sends within the correlation
 window (2 s) after reading a regular file, with no receive in between, and
@@ -137,8 +360,10 @@ only up to the number of bytes it read. It is reported once it covers at least
 1 KB and 5% of what was read from the file.
 
 All state is in memory and bounded: every table has a fixed capacity and
-forgets its least recently updated entry. History starts when the daemon
-starts.
+forgets its least recently updated entry, and the event log keeps separate
+shares for transfers, network and process events so that a flood of one kind
+does not push out the others. History starts when the agent starts, and every
+report that depends on it says so.
 
 ### Without BPF trampolines
 
@@ -175,6 +400,8 @@ kernel.
   not associated with the send.
 - Files read with `readv`, io_uring or through a memory mapping are not seen
   as read. Bytes sent through io_uring are still counted per socket.
+  `--method splice`, `mmap` and `io_uring` are accepted and refused with exit
+  code 5 rather than answered with an empty list.
 - With the kprobe set, what a thread reads with `readv` between a file read
   and a send is counted as read from that file.
 - A file read entirely before a fresh TLS connection is opened is not
@@ -188,10 +415,9 @@ kernel.
 - An accepted connection has no owning process until that process sends or
   receives on it.
 
-Not included in this build: a configuration file, persistent history,
-Prometheus and OpenTelemetry exporters, the `inspect`, `events`, `record`,
-`replay`, `monitor`, `config` and `integrations` commands, and packet-level
-counters.
+Not included in this build: persistent history, Prometheus and OpenTelemetry
+exporters, packet-level counters, TLS attribution, and the `record`, `replay`,
+`monitor` and `integrations` commands.
 
 ## Tests
 
@@ -199,15 +425,18 @@ counters.
 ctest --test-dir build --output-on-failure
 ```
 
-`unit` covers formatting, the bounded tables, the correlation state, the IPC
-round trip with a scripted backend, and every output format; it runs on Linux
-and macOS. `integration-auto` and `integration-kprobe` need root and a
-supporting kernel, and are skipped otherwise. They start the daemon with the
-probe set the kernel prefers and with the kprobe set, generate real transfers
-(sendfile over IPv4 and IPv6, read+send, UDP, descriptor reuse across 25
-files, rename and unlink during a transfer, a half-closed exchange with
-peeked and awaited replies, sends and sendfiles accepted only in part) and
-assert on exact byte counts and confidence levels.
+`unit` covers formatting, the bounded tables and the event log, the
+correlation state and its filters, the configuration file, the IPC round trip
+with a scripted backend including a live event stream, and every output
+format; it runs on Linux and macOS. `integration-auto` and
+`integration-kprobe` need root and a supporting kernel, and are skipped
+otherwise. They start the agent with the probe set the kernel prefers and with
+the kprobe set, generate real transfers (sendfile over IPv4 and IPv6,
+read+send, UDP, descriptor reuse across 25 files, rename and unlink during a
+transfer, a half-closed exchange with peeked and awaited replies, sends and
+sendfiles accepted only in part, a transfer at a steady rate) and assert on
+exact byte counts, rates, confidence levels and the output of every command,
+with and without a configuration file.
 
 From macOS, `tools/dev/linux.sh <command>` runs a command in the Linux
 container with the source tree mounted at `/src`. To test against another
@@ -223,7 +452,7 @@ trampolines and exercises the kprobe set as shipped.
 
 ## Overhead
 
-`benchmarks/run.sh` times the traced system calls with and without the daemon.
+`benchmarks/run.sh` times the traced system calls with and without the agent.
 One run of each probe set on Linux 7.0.14, arm64, 12 CPUs, inside the Docker
 Desktop VM, in nanoseconds per call:
 
@@ -241,27 +470,28 @@ Desktop VM, in nanoseconds per call:
 | `pread` + `send`, 16 KB | 2552 | 2744 | 2981 |
 | `sendfile`, 64 KB | 2900 | 2367 | 2263 |
 
-| Daemon | minimal | standard |
+| Agent | minimal | standard |
 |---|---:|---:|
 | Resident memory | 5 MB | 11 MB |
-| CPU with no workload | 0.08% | 0.08% |
+| CPU with no workload | 0.10% | 0.10% |
 | Events lost | 0 | 0 |
 
 These are measurements of one machine, with run-to-run noise of several
 percent (the `sendfile` rows differ by less than that); they are not
-guarantees. The kprobe figures come from forcing that set on a kernel that
+guarantees. The CPU figure is the mean of twenty one-second samples that
+ranged from 0.05% to 0.19%, in a VM whose own services keep sending. The kprobe figures come from forcing that set on a kernel that
 does not need it; kprobes on the kernels that do may cost more. In addition
-to the daemon's memory, the kernel holds the BPF maps: roughly 10 MB at the
+to the agent's memory, the kernel holds the BPF maps: roughly 10 MB at the
 default sizes, and about 8 MB more for the kprobe set's socket table.
 
 ## Layout
 
 ```text
 backends/        collection backends; linux/ holds the BPF probes and loader
-core/            data model, bounded tables, correlation state, queries, IPC
-daemon/          filetraced: event loop and local query socket
+core/            data model, bounded tables, event log, correlation state, queries, IPC
+agent/           filetrace-agent: event loop, local query socket, configuration file
 cmd/             filetrace: commands and output views
-exporters/, ui/  JSON and CSV writers, tables, terminal, live dashboard
+exporters/, ui/  JSON and CSV writers, tables, terminal, live view
 tests/           unit tests and kernel integration tests
 benchmarks/      system call overhead benchmark
 tools/dev/       Linux development container, demo, and QEMU harness for other kernels
