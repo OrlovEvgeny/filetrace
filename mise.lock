@@ -201,7 +201,7 @@ checksum = "sha256:5277886d9704a624dc9b79ac985861e1e431bdb39a57c082507ab577a138e
 [[tools.buf]]
 version = "1.75.0"
 backend = "aqua:bufbuild/buf"
-specifiers = ["1.75"]
+specifiers = ["1"]
 
 [tools.buf."platforms.linux-arm64"]
 checksum = "sha256:0fe2cf43cff973e27a09219e611d98101cb22b0fee398f10f2be2256dd7f892e"
@@ -311,7 +311,7 @@ conda_deps = [
 [[tools.cmake]]
 version = "4.4.5"
 backend = "aqua:Kitware/CMake"
-specifiers = ["4.4"]
+specifiers = ["4"]
 
 [tools.cmake."platforms.linux-arm64"]
 checksum = "sha256:301d5063ab259577c1b57ce5490b1aab9ea5c56dc4c822f73499553dab94925f"
@@ -340,7 +340,7 @@ url_api = "https://api.github.com/repos/Kitware/CMake/releases/assets/682699600"
 [[tools.nfpm]]
 version = "2.48.0"
 backend = "aqua:goreleaser/nfpm"
-specifiers = ["2.48"]
+specifiers = ["2"]
 
 [tools.nfpm."platforms.linux-arm64"]
 checksum = "sha256:a9a75213763783b7669719e505474c748c5ad7dc66591a195619deb50f85c2f4"
@@ -369,7 +369,7 @@ provenance = "cosign"
 [[tools.ninja]]
 version = "1.13.2"
 backend = "aqua:ninja-build/ninja"
-specifiers = ["1.13"]
+specifiers = ["1"]
 
 [tools.ninja."platforms.linux-arm64"]
 checksum = "sha256:fd2cacc8050a7f12a16a2e48f9e06fca5c14fc4c2bee2babb67b58be17a607fc"

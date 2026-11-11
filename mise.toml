@@ -5,12 +5,12 @@ lockfile = true
 lockfile_platforms = ["linux-arm64", "linux-x64", "macos-arm64", "macos-x64"]
 
 [tools]
-buf = "1.75"
+buf = "1"
 # Formatting differs between releases, so the exact version is part of the style.
 clang-format = "23.1.4"
-cmake = "4.4"
-nfpm = "2.48"
-ninja = "1.13"
+cmake = "4"
+nfpm = "2"
+ninja = "1"
 shellcheck = "0.11"
 
 [tasks.build]
