@@ -55,6 +55,17 @@ has "stats says --interval implies --watch" "$work/stats" \
 has "filetrace-agent lists exit code 8" "$work/filetrace-agent" \
     "8 the metrics page cannot listen"
 
+# An option the help does not name is refused before the agent is asked.
+for command in files transfers; do
+    checks=$((checks + 1))
+    code=0
+    "$cli" --socket "$work/none.sock" "$command" --no-such-option >/dev/null 2>&1 || code=$?
+    if [ "$code" -ne 2 ]; then
+        printf 'FAIL %s refuses --no-such-option\n  exit code: %s, expected 2\n' "$command" "$code" >&2
+        failures=$((failures + 1))
+    fi
+done
+
 note="Byte counts cover a record's whole observed lifetime"
 before "top lists --limit with the other options" "$work/top" "--limit <n>" "$note"
 before "events lists --limit with the other options" "$work/events" "--limit <n>" "$note"

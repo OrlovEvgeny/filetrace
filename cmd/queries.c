@@ -534,7 +534,6 @@ static int transfer_command(const struct ft_cli *cli, struct ft_args *a, const c
                             enum ft_view_id view, bool unknown_by_default)
 {
     struct ft_query_args qa;
-    const char *v;
 
     ft_query_args_init(&qa, command, FT_Q_TRANSFERS, FT_OPTS_TRANSFERS, FT_SORTS_TRANSFERS);
     if (unknown_by_default)
@@ -550,12 +549,6 @@ static int transfer_command(const struct ft_cli *cli, struct ft_args *a, const c
             qa.query.flags |= FT_QF_DELETED;
         } else if (ft_args_flag(a, "--include-unknown")) {
             qa.query.flags |= FT_QF_INCLUDE_UNKNOWN;
-        } else if ((r = ft_args_value(a, "--include-path", &v)) != 0) {
-            if (r < 0)
-                return FT_EXIT_USAGE;
-            if (strlen(v) >= sizeof(qa.query.path))
-                return ft_usage_error(command, "the path pattern is too long");
-            ft_strlcpy(qa.query.path, v, sizeof(qa.query.path));
         } else {
             return unknown_argument(command, a);
         }
