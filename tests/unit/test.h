@@ -52,5 +52,6 @@ void test_config(void);
 void test_metrics(void);
 void test_grpc(void);
 void test_otlp(void);
+void test_process(void);
 
 #endif

@@ -12,7 +12,7 @@ int main(void)
         {"format", test_format}, {"model", test_model},     {"table", test_table},
         {"state", test_state},   {"agent", test_agent},     {"views", test_views},
         {"config", test_config}, {"metrics", test_metrics}, {"grpc", test_grpc},
-        {"otlp", test_otlp},
+        {"otlp", test_otlp},     {"process", test_process},
     };
 
     for (size_t i = 0; i < sizeof(suites) / sizeof(suites[0]); i++) {
