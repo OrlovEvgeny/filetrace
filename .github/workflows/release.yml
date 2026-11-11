@@ -225,8 +225,9 @@ jobs:
         if: env.SIGNED != 'true' || env.HOSTED != 'true'
         run: echo "::warning::the signing keys or the R2 credentials are not set, so the download site is left as it is"
 
+      # The formulae name files of the site and take their checksums from the public release.
       - name: Check out the Homebrew tap
-        if: env.TAPPED == 'true' && needs.plan.outputs.prerelease != 'true'
+        if: env.TAPPED == 'true' && needs.plan.outputs.prerelease != 'true' && steps.site.outcome == 'success'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/homebrew-filetrace
@@ -235,13 +236,16 @@ jobs:
           # The key reaches the tap alone and is needed for the push below.
           persist-credentials: true # zizmor: ignore[artipacked]
       - name: Update the Homebrew formulae
-        if: env.TAPPED == 'true' && needs.plan.outputs.prerelease != 'true'
+        if: env.TAPPED == 'true' && needs.plan.outputs.prerelease != 'true' && steps.site.outcome == 'success'
+        env:
+          RELEASES: ${{ steps.site.outputs.releases }}
         run: |
           mkdir -p tap/Formula
-          tools/release/formula.sh --line "$VERSION" "$TAG" dist/SHA256SUMS >"tap/Formula/filetrace@$LINE.rb"
+          sums=$RELEASES/$TAG/SHA256SUMS
+          tools/release/formula.sh --line "$VERSION" "$TAG" "$sums" >"tap/Formula/filetrace@$LINE.rb"
           # A patch of an older line leaves filetrace on the newest release.
           if [ "$LATEST" = true ]; then
-              tools/release/formula.sh "$VERSION" "$TAG" dist/SHA256SUMS >tap/Formula/filetrace.rb
+              tools/release/formula.sh "$VERSION" "$TAG" "$sums" >tap/Formula/filetrace.rb
           fi
           cd tap
           git add Formula

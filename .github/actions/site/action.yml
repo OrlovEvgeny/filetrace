@@ -21,6 +21,11 @@ inputs:
     description: Secret of that access key
     required: true
 
+outputs:
+  releases:
+    description: Directory that holds the files of every published release, one directory per tag
+    value: ${{ runner.temp }}/releases
+
 runs:
   using: composite
   steps:
