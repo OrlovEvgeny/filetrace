@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
 #include <unistd.h>
@@ -67,6 +68,22 @@ static uint32_t count_open_fds(void)
     count_entries(dir, &n);
     /* The directory stream itself holds one descriptor. */
     return n ? n - 1 : 0;
+}
+
+bool ft_sysinfo_host_pid_namespace(void)
+{
+#if defined(__linux__)
+    /* PROC_PID_INIT_INO: the inode number of the initial PID namespace on every kernel. */
+    constexpr ino_t INIT_PID_NAMESPACE = 0xEFFFFFFCu;
+    static int host = -1;
+    struct stat st;
+
+    if (host < 0)
+        host = stat("/proc/self/ns/pid", &st) != 0 || st.st_ino == INIT_PID_NAMESPACE;
+    return host;
+#else
+    return true;
+#endif
 }
 
 bool ft_sysinfo_process_open_files(uint32_t pid, uint32_t *count)

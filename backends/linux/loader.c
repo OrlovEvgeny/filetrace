@@ -1,6 +1,7 @@
 #include "backends/linux/linux.h"
 
 #include "filetrace/clock.h"
+#include "filetrace/sysinfo.h"
 
 #include <bpf/bpf.h>
 #include <bpf/btf.h>
@@ -833,6 +834,10 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         free(b);
         return nullptr;
     }
+
+    if (!ft_sysinfo_host_pid_namespace())
+        ft_log(FT_LOG_WARN, "the agent is not in the host's PID namespace, so it reads nothing "
+                            "from /proc: command lines come only from programs started after it");
 
     /* Without network accounting there is nothing to attribute files to. */
     if (!ft_linux_network_attached(&b->probes)) {

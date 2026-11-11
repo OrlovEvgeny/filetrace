@@ -529,8 +529,8 @@ static int inspect_process(struct inspect *in, const char *arg)
         ft_rows_get(&processes, 0, &p, sizeof(p));
         running = !(p.flags & FT_PROC_EXITED);
     }
-    /* A PID that has exited may by now name another process. */
-    if (running) {
+    /* A PID that has exited may by now name another process, as may one from another namespace. */
+    if (running && ft_sysinfo_host_pid_namespace()) {
         have_open_files = ft_sysinfo_process_open_files(pid, &open_files);
         ft_sysinfo_process_cgroup(pid, cgroup, sizeof(cgroup));
     }

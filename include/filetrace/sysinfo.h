@@ -22,6 +22,12 @@ void ft_sysinfo_host(struct ft_host_info *out);
 
 /* Facts about a running process that only the system holds; false when it cannot tell. */
 bool ft_sysinfo_process_cgroup(uint32_t pid, char *buf, size_t size);
+/*
+ * Whether this process shares the host's PID namespace. The kernel reports process IDs as the
+ * host sees them; in a namespace of its own, /proc/<pid> may name another process or none.
+ */
+bool ft_sysinfo_host_pid_namespace(void);
+
 bool ft_sysinfo_process_open_files(uint32_t pid, uint32_t *count);
 
 /* "linux", "macos", "freebsd" or the lowercase system name. */

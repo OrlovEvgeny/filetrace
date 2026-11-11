@@ -1,5 +1,7 @@
 #include "backends/linux/linux.h"
 
+#include "filetrace/sysinfo.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -34,6 +36,9 @@ bool ft_linux_lookup_process(uint32_t pid, struct ft_ev_process *out)
 {
     char path[64];
     char buf[1024];
+
+    if (!ft_sysinfo_host_pid_namespace())
+        return false;
 
     snprintf(path, sizeof(path), "/proc/%" PRIu32 "/stat", pid);
     if (!read_file(path, buf, sizeof(buf)))
@@ -88,6 +93,9 @@ bool ft_linux_read_process_text(uint32_t pid, struct ft_process_text *out)
 {
     char path[64];
     size_t len = 0;
+
+    if (!ft_sysinfo_host_pid_namespace())
+        return false;
 
     snprintf(path, sizeof(path), "/proc/%" PRIu32 "/cmdline", pid);
     int fd = open(path, O_RDONLY | O_CLOEXEC);
