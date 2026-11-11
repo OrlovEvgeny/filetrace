@@ -55,6 +55,11 @@ for channel in $channels; do
             mv "$index/Packages.kept" "$index/Packages"
         fi
         gzip -9nk "$index/Packages"
+        # Fetched by checksum, a replaced index stays for the clients still reading it.
+        mkdir -p "$index/by-hash/SHA256"
+        for file in "$index/Packages" "$index/Packages.gz"; do
+            cp "$file" "$index/by-hash/SHA256/$(sha256sum "$file" | cut -d' ' -f1)"
+        done
     done
     apt-ftparchive \
         -o APT::FTPArchive::Release::Origin=Filetrace \
@@ -63,6 +68,10 @@ for channel in $channels; do
         -o APT::FTPArchive::Release::Codename="$channel" \
         -o APT::FTPArchive::Release::Architectures='amd64 arm64' \
         -o APT::FTPArchive::Release::Components=main \
+        -o APT::FTPArchive::Release::Acquire-By-Hash=yes \
+        -o APT::FTPArchive::Release::MD5=false \
+        -o APT::FTPArchive::Release::SHA1=false \
+        -o APT::FTPArchive::Release::SHA512=false \
         release "dists/$channel" >Release
     mv Release "dists/$channel/Release"
     gpg --batch --yes --local-user "$key" --clearsign \
