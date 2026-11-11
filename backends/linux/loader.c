@@ -17,22 +17,61 @@
 
 #include "backends/linux/bpf/abi.h"
 
-static const unsigned char probe_object[] = {
-#embed FT_BPF_OBJECT
+static const unsigned char trampoline_object[] = {
+#embed FT_BPF_TRAMPOLINE_OBJECT
 };
 
-const struct ft_probe_def ft_linux_probe_defs[FT_LINUX_PROBES] = {
+static const unsigned char kprobe_object[] = {
+#embed FT_BPF_KPROBE_OBJECT
+};
+
+static const struct ft_probe_def trampoline_defs[] = {
     {"ft_process_exec", "sched_process_exec", "tracepoint", 0, FT_PG_PROCESS, FT_MODE_MINIMAL},
     {"ft_process_fork", "sched_process_fork", "tracepoint", 0, FT_PG_PROCESS, FT_MODE_MINIMAL},
     {"ft_process_exit", "sched_process_exit", "tracepoint", 0, FT_PG_PROCESS, FT_MODE_MINIMAL},
     {"ft_sock_state", "inet_sock_set_state", "tracepoint", 0, FT_PG_TCP_STATE, FT_MODE_MINIMAL},
-    {"ft_inet_sendmsg", "inet_sendmsg", "fexit", 3, FT_PG_NET_IPV4, FT_MODE_MINIMAL},
-    {"ft_inet_recvmsg", "inet_recvmsg", "fexit", 4, FT_PG_NET_IPV4, FT_MODE_MINIMAL},
+    {"ft_inet_sendmsg", "inet_sendmsg", "fexit", 3, FT_PG_NET, FT_MODE_MINIMAL},
+    {"ft_inet_recvmsg", "inet_recvmsg", "fexit", 4, FT_PG_NET, FT_MODE_MINIMAL},
     {"ft_inet6_sendmsg", "inet6_sendmsg", "fexit", 3, FT_PG_NET_IPV6, FT_MODE_MINIMAL},
     {"ft_inet6_recvmsg", "inet6_recvmsg", "fexit", 4, FT_PG_NET_IPV6, FT_MODE_MINIMAL},
     {"ft_vfs_read", "vfs_read", "fexit", 4, FT_PG_FILE_READ, FT_MODE_STANDARD},
     {"ft_splice_direct", "do_splice_direct", "fexit", 6, FT_PG_SENDFILE, FT_MODE_STANDARD},
     {"ft_destroy_inode", "__destroy_inode", "fentry", 1, FT_PG_FILE_END, FT_MODE_STANDARD},
+};
+
+static const struct ft_probe_def kprobe_defs[] = {
+    {"ft_process_exec", "sched_process_exec", "tracepoint", 0, FT_PG_PROCESS, FT_MODE_MINIMAL},
+    {"ft_process_fork", "sched_process_fork", "tracepoint", 0, FT_PG_PROCESS, FT_MODE_MINIMAL},
+    {"ft_process_exit", "sched_process_exit", "tracepoint", 0, FT_PG_PROCESS, FT_MODE_MINIMAL},
+    {"ft_sock_state", "inet_sock_set_state", "tracepoint", 0, FT_PG_TCP_STATE, FT_MODE_MINIMAL},
+    {"ft_tcp_sendmsg", "tcp_sendmsg", "kprobe", 3, FT_PG_NET, FT_MODE_MINIMAL},
+    {"ft_tcp_cleanup_rbuf", "tcp_cleanup_rbuf", "kprobe", 2, FT_PG_NET, FT_MODE_MINIMAL},
+    {"ft_sock_destruct", "inet_sock_destruct", "kprobe", 1, FT_PG_NET, FT_MODE_MINIMAL},
+    {"ft_ip_send_skb", "ip_send_skb", "kprobe", 2, FT_PG_NET, FT_MODE_MINIMAL},
+    {"ft_skb_consume_udp", "skb_consume_udp", "kprobe", 3, FT_PG_NET, FT_MODE_MINIMAL},
+    {"ft_ip6_send_skb", "ip6_send_skb", "kprobe", 1, FT_PG_NET_IPV6, FT_MODE_MINIMAL},
+    {"ft_vfs_read", "vfs_read", "kprobe", 4, FT_PG_FILE_READ, FT_MODE_STANDARD},
+    {"ft_splice_direct", "do_splice_direct", "kprobe", 6, FT_PG_SENDFILE, FT_MODE_STANDARD},
+    {"ft_destroy_inode", "__destroy_inode", "kprobe", 1, FT_PG_FILE_END, FT_MODE_STANDARD},
+};
+
+static_assert(FT_ARRAY_LEN(trampoline_defs) <= FT_LINUX_MAX_PROBES);
+static_assert(FT_ARRAY_LEN(kprobe_defs) <= FT_LINUX_MAX_PROBES);
+
+static const struct ft_probe_set trampoline_set = {
+    .kind = FT_PROBES_TRAMPOLINE,
+    .defs = trampoline_defs,
+    .count = FT_ARRAY_LEN(trampoline_defs),
+    .object = trampoline_object,
+    .object_size = sizeof(trampoline_object),
+};
+
+static const struct ft_probe_set kprobe_set = {
+    .kind = FT_PROBES_KPROBE,
+    .defs = kprobe_defs,
+    .count = FT_ARRAY_LEN(kprobe_defs),
+    .object = kprobe_object,
+    .object_size = sizeof(kprobe_object),
 };
 
 static char last_message[512];
@@ -67,6 +106,21 @@ static int kernel_func_nargs(const struct btf *vmlinux, const char *name)
     return proto ? (int)btf_vlen(proto) : -1;
 }
 
+static bool kernel_struct_has(const struct btf *vmlinux, const char *type, const char *member)
+{
+    int id = btf__find_by_name_kind(vmlinux, type, BTF_KIND_STRUCT);
+    const struct btf_type *t = id < 0 ? nullptr : btf__type_by_id(vmlinux, (__u32)id);
+    if (!t)
+        return false;
+
+    const struct btf_member *m = btf_members(t);
+    for (unsigned i = 0; i < btf_vlen(t); i++) {
+        if (strcmp(btf__name_by_offset(vmlinux, m[i].name_off), member) == 0)
+            return true;
+    }
+    return false;
+}
+
 static void *rodata_variable(struct bpf_object *obj, const char *name, size_t size)
 {
     struct bpf_map *map = bpf_object__find_map_by_name(obj, ".rodata");
@@ -96,11 +150,24 @@ static uint32_t round_up_pow2(uint32_t v, uint32_t min)
     return p;
 }
 
-static struct bpf_object *open_object(const struct ft_backend_config *cfg,
-                                      const bool enabled[FT_LINUX_PROBES])
+/* Whether any probe that identifies files is going to be loaded. */
+static bool enabled_file_probes(const struct ft_probe_set *set,
+                                const bool enabled[FT_LINUX_MAX_PROBES])
+{
+    for (size_t i = 0; i < set->count; i++) {
+        if (enabled[i] &&
+            (set->defs[i].group == FT_PG_FILE_READ || set->defs[i].group == FT_PG_SENDFILE))
+            return true;
+    }
+    return false;
+}
+
+static struct bpf_object *open_object(const struct ft_probe_set *set,
+                                      const struct ft_backend_config *cfg,
+                                      const bool enabled[FT_LINUX_MAX_PROBES])
 {
     struct bpf_object_open_opts opts = {.sz = sizeof(opts), .object_name = "filetrace"};
-    struct bpf_object *obj = bpf_object__open_mem(probe_object, sizeof(probe_object), &opts);
+    struct bpf_object *obj = bpf_object__open_mem(set->object, set->object_size, &opts);
     if (!obj)
         return nullptr;
 
@@ -118,15 +185,14 @@ static struct bpf_object *open_object(const struct ft_backend_config *cfg,
     uint32_t queue = round_up_pow2(cfg->queue_bytes, (uint32_t)sysconf(_SC_PAGESIZE));
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
     bpf_cfg->wakeup_bytes = queue / 4;
-    bpf_cfg->file_corr = cfg->mode >= FT_MODE_STANDARD;
+    bpf_cfg->file_corr = cfg->mode >= FT_MODE_STANDARD && enabled_file_probes(set, enabled);
     bpf_map__set_max_entries(events, queue);
     bpf_map__set_max_entries(agg_a, cfg->agg_entries);
     bpf_map__set_max_entries(agg_b, cfg->agg_entries);
     bpf_map__set_max_entries(known, cfg->known_files);
 
-    for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
-        struct bpf_program *prog =
-            bpf_object__find_program_by_name(obj, ft_linux_probe_defs[i].program);
+    for (size_t i = 0; i < set->count; i++) {
+        struct bpf_program *prog = bpf_object__find_program_by_name(obj, set->defs[i].program);
         if (!prog) {
             bpf_object__close(obj);
             errno = EINVAL;
@@ -137,10 +203,10 @@ static struct bpf_object *open_object(const struct ft_backend_config *cfg,
     return obj;
 }
 
-static int load_with(const struct ft_backend_config *cfg, const bool enabled[FT_LINUX_PROBES],
-                     struct bpf_object **out)
+static int load_with(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
+                     const bool enabled[FT_LINUX_MAX_PROBES], struct bpf_object **out)
 {
-    struct bpf_object *obj = open_object(cfg, enabled);
+    struct bpf_object *obj = open_object(set, cfg, enabled);
     if (!obj)
         return errno ? -errno : -EINVAL;
 
@@ -153,18 +219,19 @@ static int load_with(const struct ft_backend_config *cfg, const bool enabled[FT_
     return 0;
 }
 
-int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
+static int load_set(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
+                    struct ft_linux_probes *out)
 {
-    bool enabled[FT_LINUX_PROBES];
+    bool enabled[FT_LINUX_MAX_PROBES] = {false};
     size_t wanted = 0;
 
     memset(out, 0, sizeof(*out));
-    libbpf_set_print(on_libbpf_print);
+    out->set = set;
     last_message[0] = '\0';
 
     struct btf *vmlinux = btf__load_vmlinux_btf();
-    for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
-        const struct ft_probe_def *def = &ft_linux_probe_defs[i];
+    for (size_t i = 0; i < set->count; i++) {
+        const struct ft_probe_def *def = &set->defs[i];
 
         enabled[i] = cfg->mode >= def->min_mode;
         if (!enabled[i]) {
@@ -179,24 +246,31 @@ int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_pr
                 continue;
             }
         }
+        /* Without return probes, the size of a read comes from the task's I/O accounting. */
+        if (vmlinux && set->kind == FT_PROBES_KPROBE && def->group == FT_PG_FILE_READ &&
+            !kernel_struct_has(vmlinux, "task_io_accounting", "rchar")) {
+            enabled[i] = false;
+            out->status[i].state = FT_PROBE_NO_ACCOUNTING;
+            continue;
+        }
         wanted++;
     }
     btf__free(vmlinux);
 
-    int err = wanted ? load_with(cfg, enabled, &out->obj) : -ENOENT;
+    int err = wanted ? load_with(set, cfg, enabled, &out->obj) : -ENOENT;
     if (err && wanted > 1) {
         /* One rejected probe fails the whole object: find which ones load. */
         int first_error = err;
         size_t usable = 0;
 
-        for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
+        for (size_t i = 0; i < set->count; i++) {
             if (!enabled[i])
                 continue;
-            bool only[FT_LINUX_PROBES] = {false};
+            bool only[FT_LINUX_MAX_PROBES] = {false};
             struct bpf_object *trial = nullptr;
 
             only[i] = true;
-            int trial_err = load_with(cfg, only, &trial);
+            int trial_err = load_with(set, cfg, only, &trial);
             if (trial_err) {
                 enabled[i] = false;
                 out->status[i] = (struct ft_probe_status){FT_PROBE_LOAD_FAILED, -trial_err};
@@ -205,21 +279,20 @@ int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_pr
                 usable++;
             }
         }
-        err = usable ? load_with(cfg, enabled, &out->obj) : first_error;
+        err = usable ? load_with(set, cfg, enabled, &out->obj) : first_error;
     }
     if (err) {
-        for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
+        for (size_t i = 0; i < set->count; i++) {
             if (enabled[i])
                 out->status[i] = (struct ft_probe_status){FT_PROBE_LOAD_FAILED, -err};
         }
         return err;
     }
 
-    for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
+    for (size_t i = 0; i < set->count; i++) {
         if (!enabled[i])
             continue;
-        struct bpf_program *prog =
-            bpf_object__find_program_by_name(out->obj, ft_linux_probe_defs[i].program);
+        struct bpf_program *prog = bpf_object__find_program_by_name(out->obj, set->defs[i].program);
         out->links[i] = bpf_program__attach(prog);
         if (!out->links[i])
             out->status[i] = (struct ft_probe_status){FT_PROBE_ATTACH_FAILED, errno};
@@ -229,9 +302,34 @@ int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_pr
     return 0;
 }
 
+int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
+{
+    libbpf_set_print(on_libbpf_print);
+
+    if (cfg->probes == FT_PROBES_KPROBE)
+        return load_set(&kprobe_set, cfg, out);
+
+    int err = load_set(&trampoline_set, cfg, out);
+    if (cfg->probes == FT_PROBES_TRAMPOLINE || ft_linux_network_attached(out))
+        return err;
+
+    /* The kernel loaded the programs but cannot attach them to functions. */
+    struct ft_linux_probes fallback;
+    int fallback_err = load_set(&kprobe_set, cfg, &fallback);
+    if (fallback_err || !ft_linux_network_attached(&fallback)) {
+        if (!fallback_err)
+            ft_linux_probes_unload(&fallback);
+        return err;
+    }
+    if (!err)
+        ft_linux_probes_unload(out);
+    *out = fallback;
+    return 0;
+}
+
 void ft_linux_probes_unload(struct ft_linux_probes *p)
 {
-    for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
+    for (size_t i = 0; i < FT_LINUX_MAX_PROBES; i++) {
         bpf_link__destroy(p->links[i]);
         p->links[i] = nullptr;
     }
@@ -239,14 +337,23 @@ void ft_linux_probes_unload(struct ft_linux_probes *p)
     p->obj = nullptr;
 }
 
-bool ft_linux_group_attached(const struct ft_probe_status status[FT_LINUX_PROBES],
-                             enum ft_probe_group group)
+bool ft_linux_group_attached(const struct ft_linux_probes *p, enum ft_probe_group group)
 {
-    for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
-        if (ft_linux_probe_defs[i].group == group && status[i].state != FT_PROBE_ATTACHED)
+    if (!p->set || !p->obj)
+        return false;
+    for (size_t i = 0; i < p->set->count; i++) {
+        if (p->set->defs[i].group == group && p->status[i].state != FT_PROBE_ATTACHED)
             return false;
     }
     return true;
+}
+
+bool ft_linux_network_attached(const struct ft_linux_probes *p)
+{
+    /* The kprobe set cannot account TCP without seeing connections open and close. */
+    if (p->set && p->set->kind == FT_PROBES_KPROBE && !ft_linux_group_attached(p, FT_PG_TCP_STATE))
+        return false;
+    return ft_linux_group_attached(p, FT_PG_NET);
 }
 
 constexpr size_t DRAIN_BATCH = 512;
@@ -612,7 +719,7 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
 {
-    ft_linux_capabilities(b->probes.status, b->cfg.mode, out);
+    ft_linux_capabilities(&b->probes, b->cfg.mode, out);
 }
 
 static void backend_close(struct ft_backend *b)
@@ -664,8 +771,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     }
 
     /* Without network accounting there is nothing to attribute files to. */
-    if (!ft_linux_group_attached(b->probes.status, FT_PG_NET_IPV4) &&
-        !ft_linux_group_attached(b->probes.status, FT_PG_NET_IPV6)) {
+    if (!ft_linux_network_attached(&b->probes)) {
         ft_error_set(err, FT_EXIT_UNSUPPORTED,
                      "The kernel refused the network probes, so no traffic can be observed.\n"
                      "%s\n\n"
@@ -675,11 +781,11 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         backend_close(b);
         return nullptr;
     }
-    for (size_t i = 0; i < FT_LINUX_PROBES; i++) {
+    for (size_t i = 0; i < b->probes.set->count; i++) {
         const struct ft_probe_status *st = &b->probes.status[i];
         if (st->state != FT_PROBE_ATTACHED && st->state != FT_PROBE_NOT_NEEDED)
             ft_log(FT_LOG_WARN, "probe on %s is unavailable (%s); related features are reduced",
-                   ft_linux_probe_defs[i].target,
+                   b->probes.set->defs[i].target,
                    st->state == FT_PROBE_MISMATCH ? "unexpected kernel function signature"
                                                   : strerror(st->error));
     }
@@ -708,8 +814,15 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     return b;
 }
 
+static void backend_describe(struct ft_backend *b, char *buf, size_t size)
+{
+    snprintf(buf, size, "Linux eBPF (%s)",
+             b->probes.set->kind == FT_PROBES_KPROBE ? "kprobes" : "trampolines");
+}
+
 static const struct ft_backend_ops ops = {
     .name = "Linux eBPF",
+    .describe = backend_describe,
     .diagnose = ft_linux_diagnose,
     .open = backend_open,
     .poll_fd = backend_poll_fd,

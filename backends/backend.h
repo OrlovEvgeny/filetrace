@@ -4,8 +4,19 @@
 #include "filetrace/capabilities.h"
 #include "filetrace/event.h"
 
+/* How kernel functions are instrumented, where a platform offers a choice. */
+enum ft_probes : uint8_t {
+    FT_PROBES_AUTO = 0,
+    FT_PROBES_TRAMPOLINE,
+    FT_PROBES_KPROBE,
+};
+
+const char *ft_probes_name(enum ft_probes p);
+bool ft_probes_parse(const char *text, enum ft_probes *p);
+
 struct ft_backend_config {
     enum ft_mode mode;
+    enum ft_probes probes;
     uint32_t queue_bytes;
     uint32_t agg_entries;    /* distinct counters accumulated between flushes */
     uint32_t known_files;    /* file identities remembered as already described */
@@ -55,7 +66,7 @@ struct ft_backend_ops {
     const char *name;
 
     /* Checks what this machine supports without leaving anything attached. */
-    void (*diagnose)(struct ft_diagnosis *out);
+    void (*diagnose)(const struct ft_backend_config *cfg, struct ft_diagnosis *out);
 
     struct ft_backend *(*open)(const struct ft_backend_config *cfg, const struct ft_sink *sink,
                                struct ft_error *err);
@@ -64,6 +75,9 @@ struct ft_backend_ops {
     int (*poll_fd)(struct ft_backend *b);
 
     void (*flush)(struct ft_backend *b);
+
+    /* Optional: the backend's name including what it settled on at run time. */
+    void (*describe)(struct ft_backend *b, char *buf, size_t size);
 
     void (*stats)(struct ft_backend *b, struct ft_backend_stats *out);
     void (*capabilities)(struct ft_backend *b, struct ft_capabilities *out);

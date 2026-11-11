@@ -63,8 +63,22 @@ static void print_daemon_line(const struct ft_cli *cli)
 
 int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a)
 {
-    if (!ft_args_done(a))
-        return ft_usage_error("doctor", "unknown argument '%s'", ft_args_peek(a));
+    struct ft_backend_config cfg;
+    const char *v;
+    int r;
+
+    ft_backend_config_defaults(&cfg);
+    while (!ft_args_done(a)) {
+        if ((r = ft_args_value(a, "--probes", &v)) == 0)
+            return ft_usage_error("doctor", "unknown argument '%s'", ft_args_peek(a));
+        if (r < 0)
+            return FT_EXIT_USAGE;
+        if (!ft_probes_parse(v, &cfg.probes))
+            return ft_usage_error("doctor",
+                                  "invalid value '%s' for --probes (expected auto, trampoline "
+                                  "or kprobe)",
+                                  v);
+    }
 
     struct ft_diagnosis *d = calloc(1, sizeof(*d));
     struct ft_host_info host;
@@ -72,7 +86,7 @@ int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a)
         return FT_EXIT_ERROR;
 
     ft_sysinfo_host(&host);
-    ft_backend_native()->diagnose(d);
+    ft_backend_native()->diagnose(&cfg, d);
 
     printf("FILETRACE DOCTOR\n\n"
            "Platform: %s\n"
@@ -155,7 +169,7 @@ int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a)
         struct ft_diagnosis *d = calloc(1, sizeof(*d));
         if (!d)
             return FT_EXIT_ERROR;
-        ft_backend_native()->diagnose(d);
+        ft_backend_native()->diagnose(nullptr, d);
         for (size_t f = 0; f < FT_FEAT_COUNT; f++) {
             caps.rows[f].feature = (uint8_t)f;
             caps.rows[f].status = d->caps.items[f].status;

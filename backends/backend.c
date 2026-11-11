@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 void ft_backend_config_defaults(struct ft_backend_config *cfg)
 {
@@ -12,6 +13,29 @@ void ft_backend_config_defaults(struct ft_backend_config *cfg)
         .known_files = 16384,
         .corr_window_ns = 2 * FT_NS_PER_SEC,
     };
+}
+
+const char *ft_probes_name(enum ft_probes p)
+{
+    switch (p) {
+    case FT_PROBES_TRAMPOLINE:
+        return "trampoline";
+    case FT_PROBES_KPROBE:
+        return "kprobe";
+    default:
+        return "auto";
+    }
+}
+
+bool ft_probes_parse(const char *text, enum ft_probes *p)
+{
+    for (int i = FT_PROBES_AUTO; i <= FT_PROBES_KPROBE; i++) {
+        if (strcmp(text, ft_probes_name((enum ft_probes)i)) == 0) {
+            *p = (enum ft_probes)i;
+            return true;
+        }
+    }
+    return false;
 }
 
 void ft_diagnosis_add(struct ft_diagnosis *d, enum ft_check_level level, bool optional,

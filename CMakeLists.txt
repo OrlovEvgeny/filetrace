@@ -70,26 +70,30 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 
     set(FT_BPF_DIR ${CMAKE_CURRENT_SOURCE_DIR}/backends/linux/bpf)
-    set(FT_BPF_OBJECT ${CMAKE_CURRENT_BINARY_DIR}/probes.bpf.o)
-    add_custom_command(
-        OUTPUT ${FT_BPF_OBJECT}
-        COMMAND ${FT_BPF_CLANG}
-            -std=gnu23 -g -O2 -target bpf -mcpu=v3
-            -D__TARGET_ARCH_${FT_BPF_ARCH}
-            -Wall -Wextra -Wno-unused-parameter
-            -I${FT_BPF_DIR}
-            -c ${FT_BPF_DIR}/probes.bpf.c
-            -o ${FT_BPF_OBJECT}
-        COMMAND ${FT_LLVM_STRIP} -g ${FT_BPF_OBJECT}
-        DEPENDS
-            ${FT_BPF_DIR}/probes.bpf.c
-            ${FT_BPF_DIR}/common.bpf.h
-            ${FT_BPF_DIR}/abi.h
-            ${FT_BPF_DIR}/kernel_types.h
-        COMMENT "Compiling BPF probes"
-        VERBATIM
-    )
-    add_custom_target(ft_bpf_object DEPENDS ${FT_BPF_OBJECT})
+    set(FT_BPF_OBJECTS)
+    foreach(name probes fallback)
+        set(object ${CMAKE_CURRENT_BINARY_DIR}/${name}.bpf.o)
+        add_custom_command(
+            OUTPUT ${object}
+            COMMAND ${FT_BPF_CLANG}
+                -std=gnu23 -g -O2 -target bpf -mcpu=v3
+                -D__TARGET_ARCH_${FT_BPF_ARCH}
+                -Wall -Wextra -Wno-unused-parameter
+                -I${FT_BPF_DIR}
+                -c ${FT_BPF_DIR}/${name}.bpf.c
+                -o ${object}
+            COMMAND ${FT_LLVM_STRIP} -g ${object}
+            DEPENDS
+                ${FT_BPF_DIR}/${name}.bpf.c
+                ${FT_BPF_DIR}/common.bpf.h
+                ${FT_BPF_DIR}/abi.h
+                ${FT_BPF_DIR}/kernel_types.h
+            COMMENT "Compiling BPF probes: ${name}"
+            VERBATIM
+        )
+        list(APPEND FT_BPF_OBJECTS ${object})
+    endforeach()
+    add_custom_target(ft_bpf_object DEPENDS ${FT_BPF_OBJECTS})
 
     set(FT_BACKEND_SOURCES
         backends/linux/loader.c
@@ -97,8 +101,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         backends/linux/procfs.c
     )
     set_source_files_properties(backends/linux/loader.c PROPERTIES
-        OBJECT_DEPENDS ${FT_BPF_OBJECT}
-        COMPILE_DEFINITIONS "FT_BPF_OBJECT=\"${FT_BPF_OBJECT}\""
+        OBJECT_DEPENDS "${FT_BPF_OBJECTS}"
+        COMPILE_DEFINITIONS
+            "FT_BPF_TRAMPOLINE_OBJECT=\"${CMAKE_CURRENT_BINARY_DIR}/probes.bpf.o\";FT_BPF_KPROBE_OBJECT=\"${CMAKE_CURRENT_BINARY_DIR}/fallback.bpf.o\""
     )
 else()
     set(FT_BACKEND_SOURCES backends/unsupported.c)

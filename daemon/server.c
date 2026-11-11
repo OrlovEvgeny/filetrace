@@ -235,7 +235,10 @@ static void reply_stats(struct daemon *d, struct client *c, uint64_t now_ns)
     row.queue_bytes = bs.queue_bytes;
     row.queue_peak_bytes = bs.queue_peak_bytes;
     row.pid = (uint32_t)getpid();
-    ft_strlcpy(row.backend, d->cfg->backend->name, sizeof(row.backend));
+    if (d->cfg->backend->describe)
+        d->cfg->backend->describe(d->backend, row.backend, sizeof(row.backend));
+    else
+        ft_strlcpy(row.backend, d->cfg->backend->name, sizeof(row.backend));
     ft_strlcpy(row.mode, ft_mode_name(d->cfg->backend_cfg.mode), sizeof(row.mode));
     ft_strlcpy(row.version, FT_VERSION, sizeof(row.version));
 

@@ -1,11 +1,12 @@
 #!/bin/sh
-# usage: run.sh <directory with filetrace and filetraced> <workload binary>
+# usage: run.sh <directory with filetrace and filetraced> <workload binary> [auto|trampoline|kprobe]
 # Exits 77 when this machine cannot run the collector.
 
 set -u
 
 bin=$1
 workload=$2
+probes=${3:-auto}
 work=$(mktemp -d /tmp/filetrace-it-XXXXXX)
 data=$work/data
 sock=$work/daemon.sock
@@ -64,7 +65,8 @@ field() {
 }
 
 start_daemon() {
-    "$bin/filetraced" --socket "$sock" --flush-interval 100ms --log-level warn "$@" &
+    "$bin/filetraced" --socket "$sock" --flush-interval 100ms --log-level warn \
+        --probes "$probes" "$@" &
     daemon_pid=$!
     i=0
     while [ ! -S "$sock" ] && [ $i -lt 100 ]; do
@@ -88,7 +90,7 @@ settle() {
     sleep 0.5
 }
 
-"$bin/filetrace" doctor >"$work/doctor.txt" 2>&1
+"$bin/filetrace" doctor --probes "$probes" >"$work/doctor.txt" 2>&1
 doctor=$?
 if [ $doctor -eq 3 ] || [ $doctor -eq 5 ]; then
     cat "$work/doctor.txt"
@@ -235,7 +237,11 @@ expect_match "grouped flows" "$(ft flows --group-by protocol --format csv | head
 
 stats=$(ft stats --format json)
 expect_match "stats status" "$stats" '"status":"healthy"'
-expect_match "stats backend" "$stats" '"backend":"Linux eBPF","mode":"standard"'
+expect_match "stats backend" "$stats" \
+    '"backend":"Linux eBPF \((trampolines|kprobes)\)","mode":"standard"'
+if [ "$probes" != auto ]; then
+    expect_match "stats probes" "$stats" "\"backend\":\"Linux eBPF \\($probes"
+fi
 expect_match "stats no loss" "$stats" '"dropped":0,'
 expect_match "capabilities" "$(ft capabilities | grep '^Sendfile attribution')" 'FULL'
 

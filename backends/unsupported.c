@@ -13,8 +13,9 @@
 #define FT_MISSING_BACKEND "this build has no collection backend for this operating system"
 #endif
 
-static void diagnose(struct ft_diagnosis *out)
+static void diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *out)
 {
+    (void)cfg;
     snprintf(out->backend, sizeof(out->backend), "none");
     ft_diagnosis_add(out, FT_CHECK_FAIL, false, "Collection backend", "%s", FT_MISSING_BACKEND);
     ft_capability_set_all(&out->caps, FT_CAP_UNAVAILABLE, FT_MISSING_BACKEND);

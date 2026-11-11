@@ -24,6 +24,7 @@ static void usage(FILE *out, const char *program)
             "Options:\n"
             "  --socket <path>           Listening socket (default: %s)\n"
             "  --mode <mode>             minimal or standard (default: standard)\n"
+            "  --probes <kind>           auto, trampoline or kprobe (default: auto)\n"
             "  --flush-interval <time>   How often counters are collected (default: 250ms)\n"
             "  --queue-size <size>       Kernel event queue size (default: 4MB, or 1MB\n"
             "                            in minimal mode)\n"
@@ -82,6 +83,8 @@ int ft_daemon_main(int argc, char **argv, const char *program)
             cfg.socket_path = value;
         } else if (option_value(argc, argv, &i, "--mode", &value)) {
             ok = value && ft_mode_parse(value, &cfg.backend_cfg.mode);
+        } else if (option_value(argc, argv, &i, "--probes", &value)) {
+            ok = value && ft_probes_parse(value, &cfg.backend_cfg.probes);
         } else if (option_value(argc, argv, &i, "--flush-interval", &value)) {
             ok = value && ft_parse_duration(value, &number) && number >= 10 * FT_NS_PER_MS &&
                  number <= 60 * FT_NS_PER_SEC;

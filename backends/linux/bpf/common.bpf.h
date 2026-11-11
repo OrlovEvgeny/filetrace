@@ -102,7 +102,10 @@ struct thread_state {
     __u64 pending;
     __u64 unreported;
     __u64 last_ns;
+    __u64 read_ns;    /* when the file was last read */
+    __u64 rchar_mark; /* the task's read counter up to which reads are accounted */
     __u8 fresh;
+    __u8 reading; /* the read counter has grown only by reads of this file */
 };
 
 struct {

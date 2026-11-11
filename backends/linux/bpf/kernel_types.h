@@ -52,6 +52,20 @@ enum {
     BPF_RB_AVAIL_DATA = 0,
 };
 
+/* Only the name is used: the value comes from the running kernel's BTF. */
+enum sock_flags {
+    SOCK_DONE = 1,
+};
+
+#if defined(__TARGET_ARCH_arm64)
+struct user_pt_regs {
+    __u64 regs[31];
+    __u64 sp;
+    __u64 pc;
+    __u64 pstate;
+};
+#endif
+
 enum bpf_map_type {
     BPF_MAP_TYPE_HASH = 1,
     BPF_MAP_TYPE_PERCPU_ARRAY = 6,
@@ -60,6 +74,9 @@ enum bpf_map_type {
     BPF_MAP_TYPE_RINGBUF = 27,
     BPF_MAP_TYPE_TASK_STORAGE = 29,
 };
+
+struct net;
+struct pt_regs;
 
 #pragma clang attribute push(__attribute__((preserve_access_index)), apply_to = record)
 
@@ -92,6 +109,24 @@ struct signal_struct {
     atomic_t live;
 };
 
+struct task_io_accounting {
+    u64 rchar;
+};
+
+#if defined(__TARGET_ARCH_x86)
+struct pt_regs {
+    unsigned long r9;
+    unsigned long r8;
+    unsigned long ax;
+    unsigned long cx;
+    unsigned long dx;
+    unsigned long si;
+    unsigned long di;
+    unsigned long ip;
+    unsigned long sp;
+};
+#endif
+
 struct task_struct {
     pid_t pid;
     pid_t tgid;
@@ -101,6 +136,7 @@ struct task_struct {
     u64 start_boottime;
     int exit_code;
     char comm[16];
+    struct task_io_accounting ioac;
 };
 
 struct linux_binprm {
@@ -121,6 +157,7 @@ struct inode {
     unsigned long i_ino;
     unsigned int i_nlink;
     u32 i_generation;
+    loff_t i_size;
     struct super_block *i_sb;
 };
 
@@ -165,6 +202,8 @@ struct sock_common {
     __be16 skc_dport;
     __u16 skc_num;
     unsigned short skc_family;
+    volatile unsigned char skc_state;
+    unsigned long skc_flags;
     struct in6_addr skc_v6_daddr;
     struct in6_addr skc_v6_rcv_saddr;
     atomic64_t skc_cookie;
@@ -173,6 +212,20 @@ struct sock_common {
 struct sock {
     struct sock_common __sk_common;
     u16 sk_protocol;
+};
+
+struct tcp_sock {
+    u32 copied_seq;
+    u32 rcv_nxt;
+    u32 write_seq;
+};
+
+struct sk_buff {
+    struct sock *sk;
+    unsigned int len;
+    __u16 transport_header;
+    __u16 network_header;
+    unsigned char *head;
 };
 
 struct socket {
