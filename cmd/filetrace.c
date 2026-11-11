@@ -202,7 +202,9 @@ static void help_flows(FILE *o)
     fputs("\nExamples:\n"
           "  filetrace flows --group-by remote\n"
           "  filetrace flows --pid 1842 --min-bytes 10MB\n"
-          "  filetrace flows --direction inbound --since 1h\n",
+          "  filetrace flows --direction inbound --since 1h\n"
+          "\n"
+          "--format quiet prints one flow ID per row.\n",
           o);
     fputs(machine_output, o);
     fputs(exit_codes, o);

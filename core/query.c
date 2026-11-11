@@ -279,6 +279,8 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
         }
         if ((q->flags & FT_QF_ACTIVE) && !socket_is_open(st, s, now_ns))
             continue;
+        if (q->sock_id && q->sock_id != s->id)
+            continue;
         if (q->pid && q->pid != s->pid)
             continue;
         if (!match_name(q->process, s->comm))
@@ -355,6 +357,10 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
         return;
 
     for (struct ft_flow *f = ft_table_first(st->flows); f; f = ft_table_next(st->flows, f)) {
+        if (q->flow_id && q->flow_id != f->id)
+            continue;
+        if (q->sock_id && q->sock_id != f->sock_id)
+            continue;
         if (q->pid && q->pid != f->pid)
             continue;
         if (!match_name(q->process, f->comm))
@@ -404,6 +410,7 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
     for (size_t i = 0; i < n; i++) {
         const struct ft_flow *f = c.items[i].entry;
         struct ft_row_flow row = {
+            .id = f->id,
             .sock_id = f->sock_id,
             .first_wall_ns = ft_clock_mono_to_wall(f->first_ns),
             .last_wall_ns = ft_clock_mono_to_wall(f->last_ns),
@@ -599,6 +606,8 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         if (s && with_unknown)
             s->q_attributed += t->bytes;
 
+        if (q->sock_id && q->sock_id != t->sock_id)
+            continue;
         if (q->pid && q->pid != t->pid)
             continue;
         if (!match_name(q->process, t->comm))
@@ -649,6 +658,8 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
             continue;
         uint64_t bytes = s->tx_bytes - s->q_attributed;
 
+        if (q->sock_id && q->sock_id != s->id)
+            continue;
         if (q->pid && q->pid != s->pid)
             continue;
         if (!match_name(q->process, s->comm))

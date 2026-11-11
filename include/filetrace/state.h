@@ -97,6 +97,7 @@ struct ft_flow_key {
 };
 
 struct ft_flow {
+    uint64_t id;
     uint64_t sock_id;
     uint32_t pid;
     uint16_t proto;
@@ -168,6 +169,7 @@ struct ft_state {
 
     uint64_t start_ns;
     uint64_t next_transfer_id;
+    uint64_t next_flow_id;
     uint64_t events;
     uint64_t tx_bytes;
     uint64_t rx_bytes;

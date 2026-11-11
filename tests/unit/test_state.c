@@ -520,6 +520,26 @@ static void sockets_and_flows(void)
     run_query(&f, &q);
     CHECK_U64(f.rows.count, 2);
 
+    /* Every flow keeps the id it was given, and a query can name a flow or a socket. */
+    uint64_t flow_id = f.rows.flows[0].id;
+    struct ft_endpoint flow_remote = f.rows.flows[0].remote;
+    CHECK(flow_id != 0 && flow_id != f.rows.flows[1].id);
+    ft_query_init(&q, FT_Q_FLOWS);
+    q.flow_id = flow_id;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK(ft_addr_equal(&f.rows.flows[0].remote, &flow_remote));
+    ft_query_init(&q, FT_Q_FLOWS);
+    q.sock_id = SOCK_A;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.flows[0].tx_bytes, 700);
+    ft_query_init(&q, FT_Q_CONNECTIONS);
+    q.sock_id = SOCK_B;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_U64(f.rows.connections[0].proto, FT_PROTO_UDP);
+
     /* Without traffic a datagram socket turns idle. */
     f.now += 120 * FT_NS_PER_SEC;
     ft_query_init(&q, FT_Q_CONNECTIONS);

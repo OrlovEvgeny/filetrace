@@ -140,10 +140,9 @@ static void set_user(struct value *v, uint32_t uid)
     set_str(v, cached_name);
 }
 
-static void set_socket_id(struct value *v, uint64_t id)
+static void set_id(struct value *v, uint64_t id)
 {
-    snprintf(v->buf, sizeof(v->buf), "sk_%" PRIx64, id);
-    set_str(v, v->buf);
+    set_uint(v, id);
     v->absent = id == 0;
 }
 
@@ -378,7 +377,7 @@ static void c_rx_rate(const void *row, struct value *v)
 static void c_sock(const void *row, struct value *v)
 {
     ROW(ft_row_connection);
-    set_socket_id(v, r->sock_id);
+    set_id(v, r->sock_id);
 }
 
 static void c_first(const void *row, struct value *v)
@@ -505,7 +504,13 @@ static void f_rport(const void *row, struct value *v)
 static void f_sock(const void *row, struct value *v)
 {
     ROW(ft_row_flow);
-    set_socket_id(v, r->sock_id);
+    set_id(v, r->sock_id);
+}
+
+static void f_id(const void *row, struct value *v)
+{
+    ROW(ft_row_flow);
+    set_id(v, r->id);
 }
 
 static void f_first(const void *row, struct value *v)
@@ -521,6 +526,7 @@ static void f_last(const void *row, struct value *v)
 }
 
 static const struct field flow_fields[] = {
+    {"flow_id", 0, f_id},
     {"socket_id", 0, f_sock},
     {"protocol", F_UPPER, f_proto},
     {"pid", 0, f_pid},
@@ -714,7 +720,7 @@ static void t_remote(const void *row, struct value *v)
 static void t_sock(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
-    set_socket_id(v, r->sock_id);
+    set_id(v, r->sock_id);
 }
 
 static void t_method(const void *row, struct value *v)
@@ -858,7 +864,7 @@ static const struct view views[] = {
                              FT_ARRAY_LEN(connection_columns), "socket_id",
                              sizeof(struct ft_row_connection)},
     [FT_VIEW_FLOWS] = {flow_fields, FT_ARRAY_LEN(flow_fields), flow_columns,
-                       FT_ARRAY_LEN(flow_columns), "socket_id", sizeof(struct ft_row_flow)},
+                       FT_ARRAY_LEN(flow_columns), "flow_id", sizeof(struct ft_row_flow)},
     [FT_VIEW_FILES] = {transfer_fields, FT_ARRAY_LEN(transfer_fields), file_columns,
                        FT_ARRAY_LEN(file_columns), "file.path", sizeof(struct ft_row_transfer)},
     [FT_VIEW_TRANSFERS] = {transfer_fields, FT_ARRAY_LEN(transfer_fields), transfer_columns,

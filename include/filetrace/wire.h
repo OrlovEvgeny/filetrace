@@ -86,6 +86,8 @@ struct ft_query {
     uint64_t min_bytes;
     uint64_t min_size;         /* transfers: smallest file size */
     uint64_t cgroup_id;        /* 0: any */
+    uint64_t sock_id;          /* 0: any */
+    uint64_t flow_id;          /* 0: any */
     struct ft_endpoint remote; /* family 0: any */
     struct ft_endpoint local;
     char process[64];
@@ -139,6 +141,7 @@ struct ft_row_connection {
 };
 
 struct ft_row_flow {
+    uint64_t id;
     uint64_t sock_id;
     uint64_t first_wall_ns;
     uint64_t last_wall_ns;

@@ -270,6 +270,7 @@ static void ingest_flow(struct ft_state *st, const struct ft_event *ev)
 
     struct ft_flow *f = ft_table_insert(st->flows, &key, &created);
     if (created) {
+        f->id = ++st->next_flow_id;
         f->sock_id = e->sock_id;
         f->pid = e->pid;
         f->proto = e->proto;
