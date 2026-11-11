@@ -150,7 +150,14 @@ struct transfer_table {
     struct ft_row_transfer *row;
     size_t loaded;
     size_t path_width;
+    bool resolve;
 };
+
+/* A name appears on the refresh after its lookup finishes; until then the address shows. */
+static const char *host_name(bool resolve, const struct ft_endpoint *ep)
+{
+    return resolve ? ft_resolver_name(ep) : nullptr;
+}
 
 static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
 {
@@ -185,9 +192,14 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
         }
         break;
     }
-    case 2:
-        ft_addr_format(&row->remote, buf, size);
+    case 2: {
+        const char *host = host_name(t->resolve, &row->remote);
+        if (host)
+            snprintf(buf, size, "%s", host);
+        else
+            ft_addr_format(&row->remote, buf, size);
         break;
+    }
     case 3:
         snprintf(buf, size, "%s",
                  row->method == FT_METHOD_NONE ? "-" : ft_method_name((enum ft_method)row->method));
@@ -209,7 +221,7 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
     return buf;
 }
 
-static void transfers_table(FILE *o, const struct ft_rows *rows, int cols)
+static void transfers_table(FILE *o, const struct ft_rows *rows, int cols, bool resolve)
 {
     static const struct ft_column_spec columns[] = {
         {"PROCESS", false}, {"FILE", false}, {"DESTINATION", false},
@@ -221,6 +233,7 @@ static void transfers_table(FILE *o, const struct ft_rows *rows, int cols)
         .row = row,
         .loaded = SIZE_MAX,
         .path_width = cols > 100 ? (size_t)cols - 72 : 28,
+        .resolve = resolve,
     };
 
     if (row && rows->count)
@@ -454,7 +467,7 @@ static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_
 
     if (every_view || view == VIEW_FILES) {
         fprintf(o, "\n%cACTIVE FILE TRANSFERS\n", HEADING);
-        transfers_table(o, &snap->transfers, cols);
+        transfers_table(o, &snap->transfers, cols, opt->resolve);
     }
     if (every_view || view == VIEW_PROCESSES) {
         fprintf(o, "\n%cPROCESSES\n", HEADING);

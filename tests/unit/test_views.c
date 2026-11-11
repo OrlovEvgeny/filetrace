@@ -158,7 +158,7 @@ static void transfers(void)
         strstr(text,
                ",nginx,/usr/sbin/nginx,\"/data/export/report, \"\"final\"\".csv\","
                "928371,2049,148293012,root,ext4,false,tcp,127,10.0.0.10,443,203.0.113.42,"
-               "52144,"
+               "52144,,"
                "sendfile,148293012,,1258291,1248,2026-11-10T21:42:03.010Z,8200,completed,exact,") !=
         nullptr);
     free(text);

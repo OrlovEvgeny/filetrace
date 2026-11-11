@@ -23,6 +23,7 @@ struct inspect {
     struct ft_output out;
     uint64_t since_wall_ns;
     uint32_t limit;
+    bool resolve;
     struct ft_msg_end end; /* of the query that lost the most events */
     bool queried;
 };
@@ -42,6 +43,12 @@ static int fetch(struct inspect *in, struct ft_query *q, uint16_t type, struct f
     if (!in->queried || end.lost_events > in->end.lost_events)
         in->end = end;
     in->queried = true;
+    if (type == FT_MSG_ROW_TRANSFER)
+        ft_view_prefetch_hosts(FT_VIEW_FILES, rows);
+    else if (type == FT_MSG_ROW_FLOW)
+        ft_view_prefetch_hosts(FT_VIEW_FLOWS, rows);
+    else if (type == FT_MSG_ROW_CONNECTION)
+        ft_view_prefetch_hosts(FT_VIEW_CONNECTIONS, rows);
     return FT_EXIT_OK;
 }
 
@@ -365,6 +372,7 @@ struct destination {
 struct destinations {
     struct destination *items;
     size_t count;
+    bool resolve;
 };
 
 static int by_rate_then_bytes(const void *a, const void *b)
@@ -416,9 +424,14 @@ static const char *destination_cell(void *ctx, size_t r, size_t c, char *buf, si
     const struct destination *it = &d->items[r];
 
     switch (c) {
-    case 0:
-        ft_addr_format(&it->addr, buf, size);
+    case 0: {
+        const char *host = d->resolve ? ft_resolver_name(&it->addr) : nullptr;
+        if (host)
+            snprintf(buf, size, "%s", host);
+        else
+            ft_addr_format(&it->addr, buf, size);
         break;
+    }
     case 1:
         ft_format_rate(it->rate, buf, size);
         break;
@@ -496,6 +509,7 @@ static int inspect_process(struct inspect *in, const char *arg)
         q.sort = FT_SORT_TIME;
         code = fetch(in, &q, FT_MSG_ROW_TRANSFER, &transfers);
     }
+    dest.resolve = in->resolve;
     if (code == FT_EXIT_OK && !group_destinations(&flows, &dest))
         code = FT_EXIT_ERROR;
     if (code != FT_EXIT_OK)
@@ -1021,6 +1035,8 @@ int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a)
             if (r < 0)
                 return FT_EXIT_USAGE;
             output_path = v;
+        } else if (ft_args_flag(a, "--resolve-hostnames")) {
+            in.resolve = true;
         } else if (!kind) {
             kind = ft_args_take(a);
         } else if (!subject) {
@@ -1055,6 +1071,7 @@ int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a)
     }
 
     in.session = &session;
+    ft_view_resolve_hosts(in.resolve);
     code = run(&in, subject);
     if (code == FT_EXIT_OK && in.queried) {
         struct ft_error none = {0};

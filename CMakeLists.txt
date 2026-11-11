@@ -160,6 +160,7 @@ add_library(ft_cli STATIC
     cmd/events.c
     cmd/inspect.c
     cmd/queries.c
+    cmd/resolve.c
     cmd/service.c
     cmd/views.c
     exporters/csv.c
@@ -168,7 +169,8 @@ add_library(ft_cli STATIC
     ui/terminal.c
     ui/watch.c
 )
-target_link_libraries(ft_cli PUBLIC ft_agent)
+find_package(Threads REQUIRED)
+target_link_libraries(ft_cli PUBLIC ft_agent Threads::Threads)
 
 add_executable(filetrace cmd/filetrace.c)
 target_link_libraries(filetrace PRIVATE ft_cli)

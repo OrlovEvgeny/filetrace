@@ -352,6 +352,16 @@ out=$(timeout -s INT 1.2 "$bin/filetrace" --socket "$sock" watch --no-ui --inter
 expect_match "watch: a filter that matches nothing" "$out" 'No file transfers in progress'
 wait "$steady_job"
 
+# Host names replace addresses only where a reverse lookup finds one.
+expect_match "resolve: destination by name" \
+    "$(ft files --path "$data/report.csv" --resolve-hostnames | sed -n 2p)" \
+    'report\.csv +ft_workload +localhost +4\.77 MB'
+expect_match "resolve: json keeps the address" \
+    "$(ft files --path "$data/report.csv" --resolve-hostnames --jsonl)" \
+    '"remote_ip":"127\.0\.0\.1","remote_port":[0-9]+,"remote_host":"localhost"'
+expect_match "resolve: off by default" "$(ft files --path "$data/report.csv" | sed -n 2p)" \
+    'ft_workload +127\.0\.0\.1 +4\.77 MB'
+
 # Following delivers what happens next and ends cleanly on a signal.
 "$bin/filetrace" --socket "$sock" events --follow --type file_transfer,network_send --jsonl \
     >"$work/follow.jsonl" &

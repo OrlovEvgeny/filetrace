@@ -256,6 +256,8 @@ static void help_inspect(FILE *o)
           "  --since <when>          Only what was active at or after this time (10m,\n"
           "                          1h, 7d or an RFC 3339 timestamp)\n"
           "  --limit <n>             Rows per list (default: 20)\n"
+          "  --resolve-hostnames     Show remote addresses by host name where a reverse\n"
+          "                          DNS lookup finds one\n"
           "  --format table|json     Output format (default: table)\n"
           "  --json                  Short for --format json\n"
           "  --output <file>         Write to a file instead of standard output\n"

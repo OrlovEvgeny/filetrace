@@ -16,6 +16,7 @@ for applet in $(busybox --list); do
     [ "$applet" = busybox ] || ln -sf busybox "$root/bin/$applet"
 done
 echo "root:x:0:0:root:/:/bin/sh" >"$root/etc/passwd"
+printf '127.0.0.1 localhost\n::1 localhost\n' >"$root/etc/hosts"
 
 for binary in filetrace filetrace-agent tests/ft_workload tests/ft_unit_tests ft_bench_syscalls; do
     cp "$build/$binary" "$root/ft/bin/"

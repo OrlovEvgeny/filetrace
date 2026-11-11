@@ -436,6 +436,10 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         }
     }
 
+    if ((qa->allowed & FT_QO_RESOLVE) && ft_args_flag(a, "--resolve-hostnames")) {
+        qa->resolve = true;
+        return 1;
+    }
     if (qa->allowed & FT_QO_ACTIVITY) {
         if (ft_args_flag(a, "--active")) {
             q->flags |= FT_QF_ACTIVE;
@@ -508,6 +512,11 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t fo
         }
         fputc('\n', out);
     }
+    if (allowed & FT_QO_RESOLVE)
+        fputs("  --resolve-hostnames     Show remote addresses by host name where a reverse\n"
+              "                          DNS lookup finds one; the lookups tell the DNS\n"
+              "                          resolver which addresses are being looked at\n",
+              out);
     if (allowed & FT_QO_LIMIT)
         fputs("  --limit <n>             Show at most n rows\n", out);
     if (allowed & FT_QO_OUTPUT) {

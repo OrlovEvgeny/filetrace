@@ -64,6 +64,8 @@ static int run_list(const struct ft_cli *cli, struct ft_query_args *qa, enum ft_
     ft_rows_init(&rows, row_type);
     code = ft_client_query(session.client, &qa->query, ft_rows_collect, &rows, &end, &err);
     if (code == FT_EXIT_OK) {
+        ft_view_resolve_hosts(qa->resolve);
+        ft_view_prefetch_hosts(view, &rows);
         ft_view_render(view, &rows, &qa->out, rank);
         print_footer(&qa->out, &rows, &end, what,
                      row_type == FT_MSG_ROW_TRANSFER && any_incomplete(&rows));
@@ -362,6 +364,11 @@ static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
     ft_rows_init(&rows, files ? FT_MSG_ROW_TRANSFER : FT_MSG_ROW_FLOW);
     code = ft_client_query(session.client, &qa->query, ft_rows_collect, &rows, &end, &err);
 
+    if (code == FT_EXIT_OK && grouping == GROUP_REMOTE) {
+        ft_view_resolve_hosts(qa->resolve);
+        ft_view_prefetch_hosts(FT_VIEW_FLOWS, &rows);
+    }
+
     struct ft_row_transfer *transfer = files ? malloc(sizeof(*transfer)) : nullptr;
     for (size_t i = 0; code == FT_EXIT_OK && i < rows.count; i++) {
         if (files) {
@@ -384,9 +391,14 @@ static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
         case GROUP_PROCESS:
             snprintf(label, sizeof(label), "%s", flow.comm[0] ? flow.comm : "-");
             break;
-        case GROUP_REMOTE:
-            ft_addr_format(&flow.remote, label, sizeof(label));
+        case GROUP_REMOTE: {
+            const char *host = qa->resolve ? ft_resolver_name(&flow.remote) : nullptr;
+            if (host)
+                snprintf(label, sizeof(label), "%s", host);
+            else
+                ft_addr_format(&flow.remote, label, sizeof(label));
             break;
+        }
         case GROUP_PORT:
             snprintf(label, sizeof(label), "%u", flow.remote.port);
             break;
@@ -964,6 +976,7 @@ int ft_cmd_watch(const struct ft_cli *cli, struct ft_args *a)
         struct ft_session session;
 
         opt->filter = qa->query;
+        opt->resolve = qa->resolve;
         code = ft_session_open(cli, true, &session);
         if (code == FT_EXIT_OK) {
             code = ft_watch_run(&session, opt);

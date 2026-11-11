@@ -110,6 +110,43 @@ static void set_endpoint(struct value *v, const struct ft_endpoint *ep)
     set_str(v, v->buf);
 }
 
+static bool resolve_hosts;
+
+void ft_view_resolve_hosts(bool on)
+{
+    resolve_hosts = on;
+}
+
+static const char *host_of(const struct ft_endpoint *ep)
+{
+    return resolve_hosts ? ft_resolver_name(ep) : nullptr;
+}
+
+static void set_host(struct value *v, const struct ft_endpoint *ep)
+{
+    const char *host = host_of(ep);
+    set_str(v, host);
+    v->absent = host == nullptr;
+}
+
+/* The remote end, by name when one is known. */
+static void set_remote(struct value *v, const struct ft_endpoint *ep, bool with_port)
+{
+    const char *host = host_of(ep);
+
+    if (!host && with_port) {
+        set_endpoint(v, ep);
+        return;
+    }
+    if (!host)
+        ft_addr_format(ep, v->buf, sizeof(v->buf));
+    else if (with_port && ep->port)
+        snprintf(v->buf, sizeof(v->buf), "%s:%u", host, ep->port);
+    else
+        ft_strlcpy(v->buf, host, sizeof(v->buf));
+    set_str(v, v->buf);
+}
+
 static void set_proto(struct value *v, uint16_t proto)
 {
     char tmp[8];
@@ -326,7 +363,13 @@ static void c_local(const void *row, struct value *v)
 static void c_remote(const void *row, struct value *v)
 {
     ROW(ft_row_connection);
-    set_endpoint(v, &r->remote);
+    set_remote(v, &r->remote, true);
+}
+
+static void c_rhost(const void *row, struct value *v)
+{
+    ROW(ft_row_connection);
+    set_host(v, &r->remote);
 }
 
 static void c_laddr(const void *row, struct value *v)
@@ -412,6 +455,7 @@ static const struct field connection_fields[] = {
     {"local_port", 0, c_lport},
     {"remote_ip", 0, c_raddr},
     {"remote_port", 0, c_rport},
+    {"remote_host", 0, c_rhost},
     {"state", F_UPPER, c_state},
     {"bytes_sent", 0, c_tx},
     {"bytes_received", 0, c_rx},
@@ -486,7 +530,13 @@ static void f_local(const void *row, struct value *v)
 static void f_remote(const void *row, struct value *v)
 {
     ROW(ft_row_flow);
-    set_endpoint(v, &r->remote);
+    set_remote(v, &r->remote, true);
+}
+
+static void f_rhost(const void *row, struct value *v)
+{
+    ROW(ft_row_flow);
+    set_host(v, &r->remote);
 }
 
 static void f_laddr(const void *row, struct value *v)
@@ -549,6 +599,7 @@ static const struct field flow_fields[] = {
     {"local_port", 0, f_lport},
     {"remote_ip", 0, f_raddr},
     {"remote_port", 0, f_rport},
+    {"remote_host", 0, f_rhost},
     {"bytes_sent", 0, f_tx},
     {"bytes_received", 0, f_rx},
     {"bytes_sent_per_second", 0, f_tx_rate},
@@ -732,14 +783,19 @@ static void t_rport(const void *row, struct value *v)
 static void t_remote(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
-    set_endpoint(v, &r->remote);
+    set_remote(v, &r->remote, true);
+}
+
+static void t_rhost(const void *row, struct value *v)
+{
+    ROW(ft_row_transfer);
+    set_host(v, &r->remote);
 }
 
 static void t_destination(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
-    ft_addr_format(&r->remote, v->buf, sizeof(v->buf));
-    set_str(v, v->buf);
+    set_remote(v, &r->remote, false);
 }
 
 static void t_sock(const void *row, struct value *v)
@@ -856,6 +912,7 @@ static const struct field transfer_fields[] = {
     {"network.local_port", 0, t_lport},
     {"network.remote_ip", 0, t_raddr},
     {"network.remote_port", 0, t_rport},
+    {"network.remote_host", 0, t_rhost},
     {"transfer.method", 0, t_method},
     {"transfer.bytes_sent", 0, t_bytes},
     {"transfer.bytes_read", 0, t_read_bytes},
@@ -1175,6 +1232,25 @@ void ft_view_json_array(enum ft_view_id id, const struct ft_rows *rows, FILE *ou
 
     if (scratch_open(&s, view))
         json_array(view, rows, out, &s);
+    scratch_close(&s);
+}
+
+void ft_view_prefetch_hosts(enum ft_view_id id, const struct ft_rows *rows)
+{
+    constexpr uint64_t PATIENCE_NS = 3 * FT_NS_PER_SEC;
+    const struct view *view = &views[id];
+    const struct field *remote = find_field(view, "@remote");
+    struct scratch s;
+
+    if (!resolve_hosts || !remote)
+        return;
+    if (scratch_open(&s, view)) {
+        for (size_t r = 0; r < rows->count; r++) {
+            ft_rows_get(rows, r, s.row, view->row_size);
+            get_value(remote, s.row, s.value);
+        }
+        ft_resolver_wait(PATIENCE_NS);
+    }
     scratch_close(&s);
 }
 

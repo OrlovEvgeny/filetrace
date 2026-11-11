@@ -99,6 +99,7 @@ enum ft_query_opt : uint32_t {
     FT_QO_LIMIT = 1u << 17,
     FT_QO_OUTPUT = 1u << 18,     /* --format, --output */
     FT_QO_FILE_MATCH = 1u << 19, /* --path-regex, --min-size */
+    FT_QO_RESOLVE = 1u << 20,    /* --resolve-hostnames */
 };
 
 #define FT_SORT_BIT(sort) (1u << (sort))
@@ -110,9 +111,10 @@ constexpr uint32_t FT_SORTS_PROCESSES =
     FT_SORT_BIT(FT_SORT_CONNECTIONS) | FT_SORT_BIT(FT_SORT_TIME) | FT_SORT_BIT(FT_SORT_PID) |
     FT_SORT_BIT(FT_SORT_PROCESS);
 
-constexpr uint32_t FT_OPTS_NETWORK =
-    FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE | FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT |
-    FT_QO_PROTOCOL | FT_QO_FAMILY | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
+constexpr uint32_t FT_OPTS_NETWORK = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
+                                     FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL |
+                                     FT_QO_FAMILY | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT |
+                                     FT_QO_OUTPUT | FT_QO_RESOLVE;
 constexpr uint32_t FT_OPTS_CONNECTIONS = FT_OPTS_NETWORK | FT_QO_STATE;
 constexpr uint32_t FT_SORTS_CONNECTIONS =
     FT_SORT_BIT(FT_SORT_TIME) | FT_SORT_BIT(FT_SORT_BYTES) | FT_SORT_BIT(FT_SORT_OUTBOUND) |
@@ -127,11 +129,12 @@ constexpr uint32_t FT_SORTS_FLOWS = FT_SORT_BIT(FT_SORT_OUTBOUND) | FT_SORT_BIT(
 constexpr uint32_t FT_OPTS_TRANSFERS =
     FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE | FT_QO_FILE | FT_QO_FILE_MATCH |
     FT_QO_REMOTE | FT_QO_LOCAL | FT_QO_PORT | FT_QO_PROTOCOL | FT_QO_CONFIDENCE | FT_QO_METHOD |
-    FT_QO_MIN_BYTES | FT_QO_ACTIVITY | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT;
+    FT_QO_MIN_BYTES | FT_QO_ACTIVITY | FT_QO_TIME | FT_QO_SORT | FT_QO_LIMIT | FT_QO_OUTPUT |
+    FT_QO_RESOLVE;
 
 constexpr uint32_t FT_OPTS_WATCH = FT_QO_PID | FT_QO_PROCESS | FT_QO_USER | FT_QO_SCOPE |
                                    FT_QO_FILE | FT_QO_REMOTE | FT_QO_PROTOCOL | FT_QO_CONFIDENCE |
-                                   FT_QO_MIN_BYTES | FT_QO_SORT | FT_QO_LIMIT;
+                                   FT_QO_MIN_BYTES | FT_QO_SORT | FT_QO_LIMIT | FT_QO_RESOLVE;
 constexpr uint32_t FT_SORTS_WATCH = FT_SORT_BIT(FT_SORT_RATE) | FT_SORT_BIT(FT_SORT_BYTES) |
                                     FT_SORT_BIT(FT_SORT_PROCESS) | FT_SORT_BIT(FT_SORT_FILE);
 
@@ -153,6 +156,7 @@ struct ft_query_args {
     uint32_t allowed;
     uint32_t sorts;   /* bit per enum ft_sort value the command accepts */
     uint32_t formats; /* bit per enum ft_format value the command can print */
+    bool resolve;     /* show host names for remote addresses */
 };
 
 void ft_query_args_init(struct ft_query_args *qa, const char *command, enum ft_query_kind kind,
@@ -225,6 +229,19 @@ struct ft_view_column {
 /* A table of the first limit rows (all of them when 0) with the given columns. */
 void ft_view_table(enum ft_view_id view, const struct ft_rows *rows, size_t limit,
                    const struct ft_view_column *columns, size_t ncolumns, FILE *out);
+
+/* Remote addresses are shown by host name where a reverse lookup has found one. */
+void ft_view_resolve_hosts(bool on);
+
+/* Starts the lookups for the remote addresses of the rows and gives them a moment. */
+void ft_view_prefetch_hosts(enum ft_view_id view, const struct ft_rows *rows);
+
+/* The host name of an address, or nullptr while none is known; the first call for an
+   address starts its lookup in the background. */
+const char *ft_resolver_name(const struct ft_endpoint *addr);
+
+/* Returns once every lookup started so far has finished, or after the timeout. */
+void ft_resolver_wait(uint64_t timeout_ns);
 
 /* The rows, or one of them, as the JSON objects that ft_view_render prints. */
 void ft_view_json_array(enum ft_view_id view, const struct ft_rows *rows, FILE *out);
