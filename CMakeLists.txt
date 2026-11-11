@@ -18,6 +18,36 @@ endif()
 
 option(FILETRACE_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(FILETRACE_WERROR "Treat compiler warnings as errors" OFF)
+option(FILETRACE_STATIC
+    "Link third-party libraries statically; on Linux the executables are fully static" OFF)
+
+if(FILETRACE_STATIC AND FILETRACE_SANITIZE)
+    message(FATAL_ERROR "FILETRACE_STATIC and FILETRACE_SANITIZE cannot be combined")
+endif()
+
+find_package(PkgConfig REQUIRED)
+
+# Defines <target> for the pkg-config module found as <prefix>. A static build
+# links the archives by path, because a bare -l<name> prefers a shared library.
+function(ft_import_library target prefix)
+    add_library(${target} INTERFACE)
+    if(NOT FILETRACE_STATIC)
+        target_link_libraries(${target} INTERFACE PkgConfig::${prefix})
+        return()
+    endif()
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_STATIC_LIBRARY_SUFFIX})
+    target_include_directories(${target} SYSTEM INTERFACE ${${prefix}_STATIC_INCLUDE_DIRS})
+    target_link_options(${target} INTERFACE ${${prefix}_STATIC_LDFLAGS_OTHER})
+    foreach(library IN LISTS ${prefix}_STATIC_LIBRARIES)
+        find_library(FT_ARCHIVE_${library} NAMES ${library}
+            HINTS ${${prefix}_STATIC_LIBRARY_DIRS})
+        if(FT_ARCHIVE_${library})
+            target_link_libraries(${target} INTERFACE ${FT_ARCHIVE_${library}})
+        else()
+            target_link_libraries(${target} INTERFACE ${library})
+        endif()
+    endforeach()
+endfunction()
 
 add_library(ft_build INTERFACE)
 target_compile_options(ft_build INTERFACE
@@ -58,6 +88,10 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_definitions(ft_build INTERFACE _GNU_SOURCE)
     target_link_options(ft_build INTERFACE -Wl,-z,relro,-z,now)
+    if(FILETRACE_STATIC)
+        set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+        target_link_options(ft_build INTERFACE -static-pie)
+    endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     target_compile_definitions(ft_build INTERFACE _DARWIN_C_SOURCE)
 else()
@@ -69,9 +103,9 @@ endif()
 # ---------------------------------------------------------------------------
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBBPF REQUIRED IMPORTED_TARGET libbpf>=1.3)
     pkg_get_variable(FT_LIBBPF_INCLUDEDIR libbpf includedir)
+    ft_import_library(ft_libbpf LIBBPF)
 
     find_program(FT_BPF_CLANG NAMES clang REQUIRED)
     find_program(FT_LLVM_STRIP NAMES llvm-strip REQUIRED)
@@ -129,15 +163,16 @@ endif()
 # Libraries
 # ---------------------------------------------------------------------------
 
-find_package(PkgConfig REQUIRED)
 pkg_check_modules(PROTOBUF_C REQUIRED IMPORTED_TARGET libprotobuf-c>=1.3)
 pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2>=1.60)
+ft_import_library(ft_protobuf_c PROTOBUF_C)
+ft_import_library(ft_nghttp2 NGHTTP2)
 
 # Written by `buf generate` from proto/ and the OpenTelemetry module; see buf.gen.yaml.
 file(GLOB_RECURSE FT_PROTO_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/gen/*.pb-c.c)
 add_library(ft_proto STATIC ${FT_PROTO_SOURCES})
 target_include_directories(ft_proto SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/gen)
-target_link_libraries(ft_proto PUBLIC PkgConfig::PROTOBUF_C)
+target_link_libraries(ft_proto PUBLIC ft_protobuf_c)
 
 add_library(ft_core STATIC
     core/arena.c
@@ -164,7 +199,7 @@ target_link_libraries(ft_backend PUBLIC ft_core)
 target_include_directories(ft_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_dependencies(ft_backend ft_bpf_object)
-    target_link_libraries(ft_backend PRIVATE PkgConfig::LIBBPF)
+    target_link_libraries(ft_backend PRIVATE ft_libbpf)
     target_include_directories(ft_backend SYSTEM PRIVATE ${LIBBPF_INCLUDE_DIRS})
 endif()
 
@@ -173,7 +208,7 @@ add_library(ft_rpc STATIC
     rpc/grpc_server.c
     rpc/h2.c
 )
-target_link_libraries(ft_rpc PUBLIC ft_core PRIVATE PkgConfig::NGHTTP2)
+target_link_libraries(ft_rpc PUBLIC ft_core PRIVATE ft_nghttp2)
 target_include_directories(ft_rpc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(ft_agent STATIC
