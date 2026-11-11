@@ -14,6 +14,13 @@ enum ft_format : uint8_t {
     FT_FMT_QUIET,
 };
 
+constexpr size_t FT_FMT_COUNT = FT_FMT_QUIET + 1;
+
+#define FT_FMT_BIT(format) (1u << (format))
+
+constexpr uint32_t FT_FORMATS_ALL = FT_FMT_BIT(FT_FMT_COUNT) - 1;
+constexpr uint32_t FT_FORMATS_REPORT = FT_FMT_BIT(FT_FMT_TABLE) | FT_FMT_BIT(FT_FMT_JSON);
+
 struct ft_cli {
     const char *socket_path;
 };
@@ -35,6 +42,11 @@ int ft_args_value(struct ft_args *a, const char *name, const char **value);
 
 [[gnu::format(printf, 2, 3)]]
 int ft_usage_error(const char *command, const char *fmt, ...);
+
+/* Takes --format <name>, --json or --jsonl, limited to the formats in accepted.
+   Returns 1 with *format set, 0 for another argument, -1 after reporting a bad value. */
+int ft_args_format(struct ft_args *a, const char *command, uint32_t accepted,
+                   enum ft_format *format);
 
 struct ft_output {
     enum ft_format format;

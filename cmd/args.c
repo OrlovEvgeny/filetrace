@@ -100,16 +100,56 @@ void ft_output_close(struct ft_output *out)
     out->stream = stdout;
 }
 
-static bool format_parse(const char *text, enum ft_format *format)
+static const char *const format_names[FT_FMT_COUNT] = {"table", "json", "jsonl", "csv", "quiet"};
+
+int ft_args_format(struct ft_args *a, const char *command, uint32_t accepted,
+                   enum ft_format *format)
 {
-    static const char *const names[] = {"table", "json", "jsonl", "csv", "quiet"};
-    for (size_t i = 0; i < FT_ARRAY_LEN(names); i++) {
-        if (strcmp(text, names[i]) == 0) {
-            *format = (enum ft_format)i;
-            return true;
+    size_t found = FT_FMT_COUNT;
+    const char *given = ft_args_peek(a);
+    const char *v = nullptr;
+    int r;
+
+    if (ft_args_flag(a, "--json")) {
+        found = FT_FMT_JSON;
+    } else if (ft_args_flag(a, "--jsonl")) {
+        found = FT_FMT_JSONL;
+    } else if ((r = ft_args_value(a, "--format", &v)) != 0) {
+        if (r < 0)
+            return -1;
+        for (size_t i = 0; i < FT_FMT_COUNT; i++) {
+            if (strcmp(v, format_names[i]) == 0)
+                found = i;
         }
+    } else {
+        return 0;
     }
-    return false;
+
+    if (found != FT_FMT_COUNT && (accepted & FT_FMT_BIT(found))) {
+        *format = (enum ft_format)found;
+        return 1;
+    }
+
+    char expected[64] = "";
+    size_t len = 0;
+    for (size_t i = 0; i < FT_FMT_COUNT; i++) {
+        if (!(accepted & FT_FMT_BIT(i)))
+            continue;
+        bool last = (accepted >> (i + 1)) == 0;
+        int n = snprintf(expected + len, sizeof(expected) - len, "%s%s",
+                         len == 0 ? ""
+                         : last   ? " or "
+                                  : ", ",
+                         format_names[i]);
+        if (n > 0)
+            len += (size_t)n;
+    }
+    if (v)
+        ft_usage_error(command, "invalid value '%s' for --format (expected %s)", v, expected);
+    else
+        ft_usage_error(command, "'%s' is not available here (expected --format %s)", given,
+                       expected);
+    return -1;
 }
 
 static const struct {
@@ -365,14 +405,6 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
                    ? 1
                    : bad_value(qa, "--limit", v, "a positive number");
     }
-    if (OPTION(FT_QO_OUTPUT, "--format")) {
-        if (r < 0)
-            return -1;
-        if (!format_parse(v, &qa->out.format))
-            return bad_value(qa, "--format", v, "table, json, jsonl, csv or quiet");
-        qa->out.format_given = true;
-        return 1;
-    }
     if (OPTION(FT_QO_OUTPUT, "--output")) {
         if (r < 0)
             return -1;
@@ -380,6 +412,14 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
         return 1;
     }
 #undef OPTION
+
+    if (qa->allowed & FT_QO_OUTPUT) {
+        r = ft_args_format(a, qa->command, FT_FORMATS_ALL, &qa->out.format);
+        if (r != 0) {
+            qa->out.format_given = r > 0;
+            return r;
+        }
+    }
 
     if (qa->allowed & FT_QO_ACTIVITY) {
         if (ft_args_flag(a, "--active")) {
@@ -454,6 +494,7 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
         fputs("  --limit <n>             Show at most n rows\n", out);
     if (allowed & FT_QO_OUTPUT)
         fputs("  --format <format>       table (default), json, jsonl, csv or quiet\n"
+              "  --json, --jsonl         Short for --format json and --format jsonl\n"
               "  --output <file>         Write to a file instead of standard output\n",
               out);
     if (allowed & FT_QO_TIME)

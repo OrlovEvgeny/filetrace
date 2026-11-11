@@ -833,14 +833,9 @@ int ft_cmd_stats(const struct ft_cli *cli, struct ft_args *a)
             if (!ft_parse_duration(v, &interval_ns) || interval_ns < 100 * FT_NS_PER_MS)
                 return ft_usage_error("stats", "invalid value '%s' for --interval", v);
             watch = true;
-        } else if ((r = ft_args_value(a, "--format", &v)) != 0) {
+        } else if ((r = ft_args_format(a, "stats", FT_FORMATS_REPORT, &format)) != 0) {
             if (r < 0)
                 return FT_EXIT_USAGE;
-            if (strcmp(v, "json") == 0)
-                format = FT_FMT_JSON;
-            else if (strcmp(v, "table") != 0)
-                return ft_usage_error(
-                    "stats", "invalid value '%s' for --format (expected table or json)", v);
         } else {
             return unknown_argument("stats", a);
         }

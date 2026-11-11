@@ -105,7 +105,7 @@ static void help_files(FILE *o)
           "  filetrace files --path /data/report.csv\n"
           "  filetrace files --path '/data/*' --since 1h\n"
           "  filetrace files --confidence exact --min-bytes 100MB\n"
-          "  filetrace files --format jsonl\n"
+          "  filetrace files --jsonl\n"
           "\n"
           "--format quiet prints one file path per row.\n",
           o);
@@ -220,6 +220,7 @@ static void help_stats(FILE *o)
           "  --watch                 Repeat until interrupted\n"
           "  --interval <time>       Repeat at this interval (default: 1s)\n"
           "  --format table|json     Output format (default: table)\n"
+          "  --json                  Short for --format json\n"
           "\n"
           "Examples:\n"
           "  filetrace stats\n"
@@ -256,7 +257,7 @@ static void help_doctor(FILE *o)
 static void help_capabilities(FILE *o)
 {
     fputs("Usage:\n"
-          "  filetrace capabilities [--format table|json]\n"
+          "  filetrace capabilities [--format table|json] [--json]\n"
           "\n"
           "Features available on this machine, each FULL, PARTIAL, UNAVAILABLE or\n"
           "DISABLED, with the reason. Asks the running daemon; without one, checks\n"

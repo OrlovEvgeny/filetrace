@@ -132,21 +132,13 @@ static void capability_collect(void *ctx, uint16_t type, const void *payload, si
 int ft_cmd_capabilities(const struct ft_cli *cli, struct ft_args *a)
 {
     enum ft_format format = FT_FMT_TABLE;
-    const char *v;
-    int r;
 
     while (!ft_args_done(a)) {
-        if ((r = ft_args_value(a, "--format", &v)) != 0) {
-            if (r < 0)
-                return FT_EXIT_USAGE;
-            if (strcmp(v, "json") == 0)
-                format = FT_FMT_JSON;
-            else if (strcmp(v, "table") != 0)
-                return ft_usage_error(
-                    "capabilities", "invalid value '%s' for --format (expected table or json)", v);
-        } else {
+        int r = ft_args_format(a, "capabilities", FT_FORMATS_REPORT, &format);
+        if (r < 0)
+            return FT_EXIT_USAGE;
+        if (r == 0)
             return ft_usage_error("capabilities", "unknown argument '%s'", ft_args_peek(a));
-        }
     }
 
     /* A running daemon knows what is attached; without one the backend checks the machine. */
