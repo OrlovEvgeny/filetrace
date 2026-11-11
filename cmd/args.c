@@ -530,10 +530,16 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t fo
               "  --output <file>         Write to a file instead of standard output\n",
               out);
     }
-    if (allowed & FT_QO_TIME)
-        fputs("\nByte counts cover a record's whole observed lifetime; --since and --until\n"
-              "select which records are listed.\n",
-              out);
+    /* A caller that prints its own --limit line places the note after it. */
+    if ((allowed & FT_QO_TIME) && (allowed & FT_QO_LIMIT))
+        ft_query_args_help_note(out);
+}
+
+void ft_query_args_help_note(FILE *out)
+{
+    fputs("\nByte counts cover a record's whole observed lifetime; --since and --until\n"
+          "select which records are listed.\n",
+          out);
 }
 
 void ft_rows_init(struct ft_rows *rows, uint16_t type)

@@ -167,6 +167,7 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a);
 void ft_query_args_finish(struct ft_query_args *qa, const struct ft_cli *cli);
 
 void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t formats);
+void ft_query_args_help_note(FILE *out);
 
 struct ft_session {
     struct ft_client *client;

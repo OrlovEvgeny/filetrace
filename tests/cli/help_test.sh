@@ -22,7 +22,20 @@ has()
     fi
 }
 
-for command in files top watch agent doctor stats; do
+# before <name> <file> <first> <second>: the first text appears on an earlier line.
+before()
+{
+    checks=$((checks + 1))
+    first=$(grep -nF -- "$3" "$2" | head -n 1 | cut -d: -f1)
+    second=$(grep -nF -- "$4" "$2" | head -n 1 | cut -d: -f1)
+    if [ -z "$first" ] || [ -z "$second" ] || [ "$first" -ge "$second" ]; then
+        printf 'FAIL %s\n  "%s" (line %s) is not before "%s" (line %s)\n' \
+            "$1" "$3" "${first:-none}" "$4" "${second:-none}" >&2
+        failures=$((failures + 1))
+    fi
+}
+
+for command in files top watch agent doctor stats events; do
     "$cli" help "$command" >"$work/$command"
 done
 "$agent" --help >"$work/filetrace-agent"
@@ -41,6 +54,10 @@ has "stats says --interval implies --watch" "$work/stats" \
     "Repeat at this interval (default: 1s); implies"
 has "filetrace-agent lists exit code 8" "$work/filetrace-agent" \
     "8 the metrics page cannot listen"
+
+note="Byte counts cover a record's whole observed lifetime"
+before "top lists --limit with the other options" "$work/top" "--limit <n>" "$note"
+before "events lists --limit with the other options" "$work/events" "--limit <n>" "$note"
 
 printf '%d checks, %d failed\n' "$checks" "$failures"
 [ "$failures" -eq 0 ]

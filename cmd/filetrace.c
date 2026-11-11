@@ -85,8 +85,9 @@ static void help_top(FILE *o)
           o);
     ft_query_args_help(o, FT_QO_PID | FT_QO_PROCESS | FT_QO_PROTOCOL | FT_QO_TIME | FT_QO_OUTPUT, 0,
                        FT_FORMATS_ALL);
-    fputs("  --limit <n>             Number of rows (default: 10)\n"
-          "\n"
+    fputs("  --limit <n>             Number of rows (default: 10)\n", o);
+    ft_query_args_help_note(o);
+    fputs("\n"
           "--protocol applies to files, destinations and connections, not to\n"
           "processes. --format quiet prints one process ID, file path, remote\n"
           "address or flow ID per row.\n"
@@ -311,8 +312,9 @@ static void help_events(FILE *o)
           "  --raw                   One line per event with every field unformatted\n",
           o);
     ft_query_args_help(o, FT_OPTS_EVENTS & ~(uint32_t)FT_QO_LIMIT, 0, FT_FORMATS_EVENTS);
-    fputs("  --limit <n>             Only the most recent n events\n"
-          "\n"
+    fputs("  --limit <n>             Only the most recent n events\n", o);
+    ft_query_args_help_note(o);
+    fputs("\n"
           "Past events come from a log of bounded size kept in memory: it holds only\n"
           "the most recent ones and starts empty when the agent does. Without a\n"
           "running agent, --follow collects in the foreground.\n"
