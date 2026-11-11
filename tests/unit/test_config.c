@@ -215,6 +215,18 @@ static void rejects(const char *text, const char *expected)
     ft_config_free(cfg);
 }
 
+static void accepts(const char *text)
+{
+    struct ft_config *cfg = ft_config_new();
+    struct ft_error err = {0};
+
+    if (load(cfg, text, &err) != FT_EXIT_OK) {
+        printf("refused \"%s\": %s\n", text, err.msg);
+        CHECK(false);
+    }
+    ft_config_free(cfg);
+}
+
 static void reports_what_is_wrong(void)
 {
     rejects("[agent]\nenabled = true\ntrak_open = true\n",
@@ -235,6 +247,22 @@ static void reports_what_is_wrong(void)
     rejects("[prometheus]\nport = 9464\n", "unknown setting 'port' in [prometheus]");
     rejects("[agent]\nsocket = \"/run/x\n", ":2: the string is not closed");
     rejects("[agent]\nenabled = true false\n", ":2: unexpected text after the value");
+    rejects("[prometheus]\nenabled = true\nlisten = \"9464\"\n",
+            "[prometheus] listen = \"9464\" is not an address and port");
+    rejects("[prometheus]\nenabled = true\nlisten = \"unix:/run/metrics.sock\"\n",
+            "[prometheus] listen = \"unix:/run/metrics.sock\" is not an address and port");
+    rejects("[otlp]\nendpoint = \"collector:4317\"\nenabled = true\n",
+            "[otlp] endpoint = \"collector:4317\" is not a numeric address and port");
+    rejects("[grpc]\nenabled = true\nlisten = \"/run/filetrace/api.sock\"\n",
+            "[grpc] listen = \"/run/filetrace/api.sock\" is neither \"unix:\"");
+
+    accepts("[prometheus]\nenabled = true\nlisten = \"[::1]:9464\"\n");
+    accepts("[otlp]\nenabled = true\nendpoint = \"unix:/run/collector.sock\"\n");
+    accepts("[grpc]\nenabled = true\nlisten = \"unix:/run/filetrace/api.sock\"\n");
+    /* A section that is off, or an exporter with nothing to send, is not started. */
+    accepts("[grpc]\nlisten = \"api.sock\"\n");
+    accepts("[otlp]\nenabled = true\nlogs = false\nmetrics = false\n"
+            "endpoint = \"collector:4317\"\n");
 
     struct ft_config *cfg = ft_config_new();
     struct ft_error err = {0};

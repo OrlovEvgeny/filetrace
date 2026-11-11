@@ -1,6 +1,7 @@
 #include "agent/config.h"
 
 #include "filetrace/format.h"
+#include "filetrace/net.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -773,6 +774,32 @@ static bool parse(struct parser *ps, struct ft_config *cfg)
     return ok;
 }
 
+/* The exporters check their addresses again when they start; this catches them in validate. */
+static int check_addresses(const struct ft_config *cfg, const char *path, struct ft_error *err)
+{
+    const struct ft_agent_config *agent = &cfg->agent;
+    struct ft_net_addr addr;
+
+    if (agent->prometheus.enabled &&
+        (!ft_net_addr_parse(agent->prometheus.listen, &addr) || ft_net_addr_is_unix(&addr)))
+        return ft_error_set(err, FT_EXIT_CONFIG,
+                            "%s: [prometheus] listen = \"%s\" is not an address and port, such "
+                            "as \"127.0.0.1:9464\".",
+                            path, agent->prometheus.listen);
+    if (agent->otlp.enabled && (agent->otlp.logs || agent->otlp.metrics) &&
+        !ft_net_addr_parse(agent->otlp.endpoint, &addr))
+        return ft_error_set(err, FT_EXIT_CONFIG,
+                            "%s: [otlp] endpoint = \"%s\" is not a numeric address and port, "
+                            "such as \"127.0.0.1:4317\", nor \"unix:\" and a socket path.",
+                            path, agent->otlp.endpoint);
+    if (agent->api.enabled && !ft_net_addr_parse(agent->api.listen, &addr))
+        return ft_error_set(err, FT_EXIT_CONFIG,
+                            "%s: [grpc] listen = \"%s\" is neither \"unix:\" and a socket path "
+                            "nor a numeric address and port, such as \"127.0.0.1:9500\".",
+                            path, agent->api.listen);
+    return FT_EXIT_OK;
+}
+
 int ft_config_load(struct ft_config *cfg, const char *path, struct ft_error *err)
 {
     constexpr long MAX_FILE_BYTES = 256 * 1024;
@@ -805,6 +832,9 @@ int ft_config_load(struct ft_config *cfg, const char *path, struct ft_error *err
     free(text);
     if (!ok)
         return FT_EXIT_CONFIG;
+    int code = check_addresses(cfg, path, err);
+    if (code != FT_EXIT_OK)
+        return code;
     ft_strlcpy(cfg->source, path, sizeof(cfg->source));
     return FT_EXIT_OK;
 }
