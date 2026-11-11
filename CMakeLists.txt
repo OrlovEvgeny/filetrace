@@ -56,7 +56,7 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(LIBBPF REQUIRED IMPORTED_TARGET libbpf>=1.0)
+    pkg_check_modules(LIBBPF REQUIRED IMPORTED_TARGET libbpf>=1.3)
 
     find_program(FT_BPF_CLANG NAMES clang REQUIRED)
     find_program(FT_LLVM_STRIP NAMES llvm-strip REQUIRED)
