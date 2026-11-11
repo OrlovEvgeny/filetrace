@@ -89,13 +89,19 @@ static void finish(struct call *call, enum ft_grpc_status status, const char *me
 
 static void disconnect(struct ft_grpc_client *c, const char *reason)
 {
-    uint64_t now_ns = ft_clock_mono_ns();
+    bool wanted = c->state == CONNECTING;
+
+    for (size_t i = 0; i < MAX_CALLS; i++)
+        wanted = wanted || c->calls[i].used;
 
     ft_h2_close(&c->h2);
     c->state = IDLE;
-    c->retry_ns = now_ns + c->pause_ns;
-    c->pause_ns = c->pause_ns * 2 > MAX_PAUSE_NS ? MAX_PAUSE_NS : c->pause_ns * 2;
     ft_strlcpy(c->failure, reason, sizeof(c->failure));
+    /* A server that closes an idle connection has not failed anyone. */
+    if (wanted) {
+        c->retry_ns = ft_clock_mono_ns() + c->pause_ns;
+        c->pause_ns = c->pause_ns * 2 > MAX_PAUSE_NS ? MAX_PAUSE_NS : c->pause_ns * 2;
+    }
 
     for (size_t i = 0; i < MAX_CALLS; i++) {
         if (c->calls[i].used)

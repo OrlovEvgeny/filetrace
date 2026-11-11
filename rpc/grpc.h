@@ -67,7 +67,7 @@ struct ft_grpc_call;
 struct ft_grpc_service {
     void *ctx;
 
-    /* A whole request arrived. Answer with ft_grpc_send and ft_grpc_finish, now or later. */
+    /* A whole request arrived. Answer with ft_grpc_send and ft_grpc_finish, at once or later. */
     void (*on_call)(void *ctx, struct ft_grpc_call *call, const char *path, const uint8_t *request,
                     size_t size);
 
@@ -83,7 +83,7 @@ void ft_grpc_server_free(struct ft_grpc_server *s);
 void ft_grpc_server_poll(struct ft_grpc_server *s, struct ft_poller *p);
 void ft_grpc_server_dispatch(struct ft_grpc_server *s, const struct ft_poller *p);
 
-/* Sends the response headers now rather than with the first message. */
+/* Sends the response headers at once rather than with the first message. */
 void ft_grpc_start(struct ft_grpc_call *call);
 
 /* Queues one response message. False when the caller has too much unread: nothing was queued. */
