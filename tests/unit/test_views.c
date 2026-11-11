@@ -245,9 +245,107 @@ static void connections(void)
     ft_rows_free(&rows);
 }
 
+/* Follows the row's path with what the process runs. */
+static void set_process_strings(struct ft_row_transfer *row, const char *command_line,
+                                const char *cwd, const char *script)
+{
+    struct ft_process_strings text = {command_line, cwd, script};
+    size_t lead = strlen(row->path) + 1;
+    ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    row->flags |= FT_XFER_PROCESS_TEXT;
+}
+
+static void interpreters_name_their_scripts(void)
+{
+    struct ft_row_transfer *row = calloc(1, sizeof(*row));
+    struct ft_rows rows;
+
+    ft_rows_init(&rows, FT_MSG_ROW_TRANSFER);
+    row->id = 7;
+    row->pid = 3100;
+    row->bytes = 2048;
+    row->method = FT_METHOD_READ_SEND;
+    row->confidence = FT_CONF_INFERRED;
+    row->flags = FT_XFER_FILE_KNOWN | FT_XFER_PATH_KNOWN;
+    row->remote = endpoint(192, 0, 2, 10, 443);
+    ft_strlcpy(row->comm, "python3", sizeof(row->comm));
+    ft_strlcpy(row->exe, "/usr/bin/python3.11", sizeof(row->exe));
+    ft_strlcpy(row->path, "/data/users.csv", sizeof(row->path));
+    set_process_strings(row, "python3 export.py --all", "/srv/app", "/srv/app/export.py");
+    CHECK(ft_rows_append(&rows, row, ft_row_transfer_size(row)));
+
+    memset(row, 0, sizeof(*row));
+    row->id = 8;
+    row->pid = 1842;
+    row->bytes = 4096;
+    row->method = FT_METHOD_SENDFILE;
+    row->confidence = FT_CONF_EXACT;
+    row->flags = FT_XFER_FILE_KNOWN | FT_XFER_PATH_KNOWN;
+    row->remote = endpoint(192, 0, 2, 11, 443);
+    ft_strlcpy(row->comm, "nginx", sizeof(row->comm));
+    ft_strlcpy(row->path, "/var/www/index.html", sizeof(row->path));
+    set_process_strings(row, "nginx: worker process", "/", "");
+    CHECK(ft_rows_append(&rows, row, ft_row_transfer_size(row)));
+
+    /* The script column appears once a row has a script. */
+    char *text = squeeze(render(FT_VIEW_FILES, &rows, FT_FMT_TABLE, false));
+    CHECK_STR(text, "FILE PROCESS DESTINATION BYTES METHOD CONFIDENCE SCRIPT\n"
+                    "/data/users.csv python3 192.0.2.10 2.00 KB read-write INFERRED "
+                    "/srv/app/export.py\n"
+                    "/var/www/index.html nginx 192.0.2.11 4.00 KB sendfile EXACT -\n");
+    free(text);
+
+    text = render(FT_VIEW_TRANSFERS, &rows, FT_FMT_JSONL, false);
+    CHECK(strstr(text, "\"process\":{\"pid\":3100,\"name\":\"python3\","
+                       "\"executable\":\"/usr/bin/python3.11\","
+                       "\"command_line\":\"python3 export.py --all\","
+                       "\"working_directory\":\"/srv/app\",\"script\":\"/srv/app/export.py\"},") !=
+          nullptr);
+    CHECK(strstr(text, "\"process\":{\"pid\":1842,\"name\":\"nginx\","
+                       "\"command_line\":\"nginx: worker process\","
+                       "\"working_directory\":\"/\"},") != nullptr);
+    free(text);
+
+    text = render(FT_VIEW_FILES, &rows, FT_FMT_CSV, false);
+    CHECK(strstr(text, ",python3,/usr/bin/python3.11,python3 export.py --all,/srv/app,"
+                       "/srv/app/export.py,/data/users.csv,") != nullptr);
+    free(text);
+
+    struct ft_row_process *process = calloc(1, sizeof(*process));
+    struct ft_process_strings strings = {"php-fpm: pool site1", "/", "pool:site1"};
+    process->pid = 701;
+    process->tx_bytes = 1024;
+    ft_strlcpy(process->comm, "php-fpm8.2", sizeof(process->comm));
+    size_t size = offsetof(struct ft_row_process, text) +
+                  ft_process_strings_pack(process->text, sizeof(process->text), &strings);
+    CHECK_U64(size, ft_row_process_size(process));
+    ft_rows_free(&rows);
+    ft_rows_init(&rows, FT_MSG_ROW_PROCESS);
+    CHECK(ft_rows_append(&rows, process, size));
+
+    text = squeeze(render(FT_VIEW_PROCESSES, &rows, FT_FMT_TABLE, false));
+    CHECK_STR(text, "PID PROCESS OUTBOUND FILES CONNECTIONS SENT RECEIVED SCRIPT\n"
+                    "701 php-fpm8.2 0 B/s 0 0 1.00 KB 0 B pool:site1\n");
+    free(text);
+    text = render(FT_VIEW_PROCESSES, &rows, FT_FMT_JSONL, false);
+    CHECK(strstr(text, "\"name\":\"php-fpm8.2\",") != nullptr);
+    CHECK(strstr(text, "\"command_line\":\"php-fpm: pool site1\",\"working_directory\":\"/\","
+                       "\"script\":\"pool:site1\",") != nullptr);
+    free(text);
+    text = render(FT_VIEW_PROCESSES, &rows, FT_FMT_CSV, false);
+    CHECK(strstr(text, "executable,command_line,working_directory,script,") != nullptr);
+    CHECK(strstr(text, ",php-fpm: pool site1,/,pool:site1,") != nullptr);
+    free(text);
+
+    ft_rows_free(&rows);
+    free(process);
+    free(row);
+}
+
 void test_views(void)
 {
     transfers();
     processes();
     connections();
+    interpreters_name_their_scripts();
 }
