@@ -394,6 +394,7 @@ int ft_cmd_version(const struct ft_cli *cli, struct ft_args *a)
     printf("Compiler:       GCC %d.%d.%d\n", __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
 #endif
     printf("Build:          %s\n", FT_BUILD_TYPE);
+    printf("Commit:         %s\n", FT_COMMIT);
     printf("Agent:          %s\n", c ? "Running"
                                    : err.code == FT_EXIT_PERMISSION
                                        ? "Running (socket not accessible)"
