@@ -221,6 +221,7 @@ jobs:
           r2-bucket-name: ${{ secrets.R2_BUCKET_NAME }}
           r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          tag: ${{ needs.plan.outputs.tag }}
       - name: Warn about a download site left as it is
         if: env.SIGNED != 'true' || env.HOSTED != 'true'
         run: echo "::warning::the signing keys or the R2 credentials are not set, so the download site is left as it is"
