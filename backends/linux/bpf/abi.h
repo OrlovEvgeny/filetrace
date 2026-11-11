@@ -6,6 +6,7 @@
 #define FT_BPF_NAME_MAX 256
 #define FT_BPF_PATH_BUF 4096
 #define FT_BPF_PATH_DEPTH 64
+#define FT_BPF_ARGS_MAX 4096
 #define FT_BPF_BACKGROUND_MAX 16384
 
 enum ft_bpf_event_kind {
@@ -37,9 +38,18 @@ struct ft_bpf_ev_proc {
     char comm[FT_BPF_COMM_LEN];
 };
 
+/*
+ * Followed by cwd_len bytes of the working directory's components, leaf first as in
+ * ft_bpf_ev_file, then args_len bytes of arguments, each ending in a NUL.
+ */
 struct ft_bpf_ev_exec {
     struct ft_bpf_ev_proc proc;
     char exe[FT_BPF_EXE_LEN];
+    __u32 cwd_len;
+    __u16 cwd_depth;
+    __u16 cwd_flags; /* FT_BPF_FILE_TRUNCATED, FT_BPF_FILE_DETACHED */
+    __u32 args_len;
+    __u32 pad;
 };
 
 struct ft_bpf_ev_sock {

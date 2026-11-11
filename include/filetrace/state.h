@@ -252,8 +252,8 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev);
 /* Forgets processes that exited without ever touching the network. */
 void ft_state_sweep(struct ft_state *st, uint64_t now_ns);
 
-/* Reads a process's command line and working directory as it starts a program. */
-void ft_process_text_exec(struct ft_state *st, struct ft_process *p);
+/* Takes a process's command line and working directory from its exec, or reads them. */
+void ft_process_text_exec(struct ft_state *st, struct ft_process *p, const struct ft_ev_process *e);
 
 /* Reads them again for a process with traffic: first after an exec or fork, then now and then. */
 void ft_process_text_refresh(struct ft_state *st, struct ft_process *p, uint64_t now_ns);

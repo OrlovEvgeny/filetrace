@@ -438,7 +438,36 @@ static enum ft_sock_state tcp_state(unsigned state)
     }
 }
 
-static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe)
+/* Components arrive leaf first, each NUL-terminated; joins them in reverse. */
+static void join_path(const char *comps, size_t len, uint16_t flags, char *path, size_t size)
+{
+    const char *starts[FT_BPF_PATH_DEPTH];
+    size_t count = 0;
+    for (size_t off = 0; off < len && count < FT_BPF_PATH_DEPTH;) {
+        size_t n = strnlen(comps + off, len - off);
+        if (off + n >= len)
+            break;
+        starts[count++] = comps + off;
+        off += n + 1;
+    }
+
+    size_t out = 0;
+    path[0] = '\0';
+    if (flags & FT_BPF_FILE_TRUNCATED)
+        out += (size_t)snprintf(path, size, "...");
+    for (size_t i = count; i-- > 0;) {
+        bool separator = !(flags & FT_BPF_FILE_DETACHED) || i + 1 < count;
+        int n = snprintf(path + out, size - out, "%s%s", separator ? "/" : "", starts[i]);
+        if (n < 0 || (size_t)n >= size - out)
+            break;
+        out += (size_t)n;
+    }
+    if (count == 0)
+        ft_strlcpy(path, "/", size);
+}
+
+static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe,
+                       const char *args, size_t args_len, const char *cwd)
 {
     struct ft_event ev = {
         .ts_ns = e->hdr.ts_ns,
@@ -454,6 +483,9 @@ static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, con
                 .mntns = e->mntns,
                 .netns = e->netns,
                 .exit_status = e->exit_code,
+                .args = args,
+                .args_len = args_len,
+                .cwd = cwd,
             },
     };
 
@@ -509,32 +541,7 @@ static void on_file(struct ft_backend *b, const struct ft_bpf_ev_file *e, size_t
     size_t len = e->path_len;
     if (sizeof(*e) + len > size)
         return;
-
-    /* Components arrive leaf first, each NUL-terminated; join them in reverse. */
-    const char *starts[FT_BPF_PATH_DEPTH];
-    size_t count = 0;
-    for (size_t off = 0; off < len && count < FT_BPF_PATH_DEPTH;) {
-        size_t n = strnlen(comps + off, len - off);
-        if (off + n >= len)
-            break;
-        starts[count++] = comps + off;
-        off += n + 1;
-    }
-
-    size_t out = 0;
-    b->path[0] = '\0';
-    if (e->flags & FT_BPF_FILE_TRUNCATED)
-        out += (size_t)snprintf(b->path, sizeof(b->path), "...");
-    for (size_t i = count; i-- > 0;) {
-        bool separator = !(e->flags & FT_BPF_FILE_DETACHED) || i + 1 < count;
-        int n =
-            snprintf(b->path + out, sizeof(b->path) - out, "%s%s", separator ? "/" : "", starts[i]);
-        if (n < 0 || (size_t)n >= sizeof(b->path) - out)
-            break;
-        out += (size_t)n;
-    }
-    if (count == 0)
-        ft_strlcpy(b->path, "/", sizeof(b->path));
+    join_path(comps, len, e->flags, b->path, sizeof(b->path));
 
     struct ft_event ev = {
         .type = FT_EVENT_FILE_SEEN,
@@ -574,13 +581,28 @@ static int on_ring_event(void *ctx, void *data, size_t size)
             char exe[FT_BPF_EXE_LEN];
             memcpy(exe, e->exe, sizeof(exe));
             exe[sizeof(exe) - 1] = '\0';
-            on_process(b, &e->proc, exe);
+
+            const char *tail = (const char *)(e + 1);
+            const char *cwd = nullptr;
+            const char *args = nullptr;
+            size_t args_len = 0;
+            if (sizeof(*e) + e->cwd_len + e->args_len <= size) {
+                if (e->cwd_len) {
+                    join_path(tail, e->cwd_len, e->cwd_flags, b->path, sizeof(b->path));
+                    cwd = b->path;
+                }
+                if (e->args_len) {
+                    args = tail + e->cwd_len;
+                    args_len = e->args_len;
+                }
+            }
+            on_process(b, &e->proc, exe, args, args_len, cwd);
         }
         break;
     case FT_BPF_EV_FORK:
     case FT_BPF_EV_EXIT:
         if (size >= sizeof(struct ft_bpf_ev_proc))
-            on_process(b, data, nullptr);
+            on_process(b, data, nullptr, nullptr, 0, nullptr);
         break;
     case FT_BPF_EV_SOCK_STATE:
         if (size >= sizeof(struct ft_bpf_ev_sock))

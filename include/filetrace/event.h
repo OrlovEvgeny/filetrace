@@ -28,6 +28,11 @@ struct ft_ev_process {
     int32_t exit_status; /* wait(2) status encoding */
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
+    /* Exec only, borrowed for the call: the arguments, each ending in a NUL, and the working
+     * directory, as the kernel set them up. nullptr when the backend did not capture them. */
+    const char *args;
+    size_t args_len;
+    const char *cwd;
 };
 
 struct ft_ev_socket {

@@ -191,7 +191,7 @@ static bool ingest_exec(struct ft_state *st, const struct ft_ev_process *e)
     p->exited = false;
     if (e->exe[0])
         ft_strlcpy(p->exe, e->exe, sizeof(p->exe));
-    ft_process_text_exec(st, p);
+    ft_process_text_exec(st, p, e);
     return !p->excluded;
 }
 

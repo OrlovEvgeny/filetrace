@@ -377,18 +377,11 @@ static uint64_t hash_bytes(const char *p, size_t n)
 }
 
 /* A script is derived again only when the arguments change, so it keeps the earliest cwd. */
-static void read_text(struct ft_state *st, struct ft_process *p)
+static void apply_text(struct ft_state *st, struct ft_process *p, struct ft_process_text *t)
 {
-    struct ft_process_text *t = st->process_text;
     char line[FT_CMDLINE_MAX];
     char script[FT_PATH_MAX];
 
-    if (!st->cfg.read_process_text || !t || !p->pid)
-        return;
-    t->args_len = 0;
-    t->cwd[0] = '\0';
-    if (!st->cfg.read_process_text(p->pid, t) || t->args_len == 0)
-        return;
     if (t->args_len >= sizeof(t->args))
         t->args_len = sizeof(t->args) - 1;
     t->args[t->args_len] = '\0';
@@ -405,10 +398,32 @@ static void read_text(struct ft_state *st, struct ft_process *p)
     set_text(&p->script, known ? script : nullptr);
 }
 
-void ft_process_text_exec(struct ft_state *st, struct ft_process *p)
+static void read_text(struct ft_state *st, struct ft_process *p)
 {
+    struct ft_process_text *t = st->process_text;
+
+    if (!st->cfg.read_process_text || !t || !p->pid)
+        return;
+    t->args_len = 0;
+    t->cwd[0] = '\0';
+    if (!st->cfg.read_process_text(p->pid, t) || t->args_len == 0)
+        return;
+    apply_text(st, p, t);
+}
+
+void ft_process_text_exec(struct ft_state *st, struct ft_process *p, const struct ft_ev_process *e)
+{
+    struct ft_process_text *t = st->process_text;
+
     ft_process_text_clear(p);
-    read_text(st, p);
+    if (!e->args || !e->args_len || !t) {
+        read_text(st, p);
+        return;
+    }
+    t->args_len = e->args_len < sizeof(t->args) ? e->args_len : sizeof(t->args) - 1;
+    memcpy(t->args, e->args, t->args_len);
+    ft_strlcpy(t->cwd, e->cwd ? e->cwd : "", sizeof(t->cwd));
+    apply_text(st, p, t);
 }
 
 void ft_process_text_refresh(struct ft_state *st, struct ft_process *p, uint64_t now_ns)

@@ -159,6 +159,21 @@ struct {
     __type(value, struct path_scratch);
 } scratch SEC(".maps");
 
+/* An exec record and its working directory and arguments, before they are queued. */
+struct exec_scratch {
+    __u32 busy;
+    __u32 pad;
+    struct ft_bpf_ev_exec ev;
+    char tail[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + FT_BPF_ARGS_MAX];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct exec_scratch);
+} exec_scratch SEC(".maps");
+
 static __always_inline void count(__u32 idx)
 {
     __u64 *c = bpf_map_lookup_elem(&counters, &idx);
@@ -191,22 +206,6 @@ static __always_inline void fill_proc(struct ft_bpf_ev_proc *e, struct task_stru
     e->netns = BPF_CORE_READ(task, nsproxy, net_ns, ns.inum);
     e->exit_code = 0;
     BPF_CORE_READ_STR_INTO(&e->comm, task, comm);
-}
-
-SEC("tp_btf/sched_process_exec")
-int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct linux_binprm *bprm)
-{
-    struct ft_bpf_ev_exec *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e) {
-        count(FT_BPF_CNT_RING_FULL);
-        return 0;
-    }
-    fill_proc(&e->proc, task, FT_BPF_EV_EXEC);
-    const char *filename = BPF_CORE_READ(bprm, filename);
-    if (bpf_probe_read_kernel_str(e->exe, sizeof(e->exe), filename) < 0)
-        e->exe[0] = 0;
-    bpf_ringbuf_submit(e, wake_flags());
-    return 0;
 }
 
 SEC("tp_btf/sched_process_fork")
@@ -392,7 +391,7 @@ static __always_inline bool fs_excluded(unsigned long magic)
 }
 
 struct path_walk {
-    struct path_scratch *scratch;
+    char *comps; /* FT_BPF_PATH_BUF + FT_BPF_NAME_MAX bytes */
     struct dentry *dentry;
     struct mount *mnt;
     __u32 off;
@@ -403,7 +402,7 @@ struct path_walk {
 static long path_step(__u64 index, void *arg)
 {
     struct path_walk *w = arg;
-    struct path_scratch *s = w->scratch;
+    char *comps = w->comps;
     struct dentry *dentry = w->dentry;
     struct mount *mnt = w->mnt;
 
@@ -424,8 +423,7 @@ static long path_step(__u64 index, void *arg)
         return 1;
 
     const unsigned char *name = BPF_CORE_READ(dentry, d_name.name);
-    long n =
-        bpf_probe_read_kernel_str(&s->comps[off & (FT_BPF_PATH_BUF - 1)], FT_BPF_NAME_MAX, name);
+    long n = bpf_probe_read_kernel_str(&comps[off & (FT_BPF_PATH_BUF - 1)], FT_BPF_NAME_MAX, name);
     if (n <= 0)
         return 1;
     w->off = off + (__u32)n;
@@ -459,7 +457,7 @@ static __always_inline int emit_file(struct file *file, struct inode *inode,
     struct vfsmount *vfsmnt = BPF_CORE_READ(file, f_path.mnt);
     struct mount *mnt = (void *)vfsmnt - bpf_core_field_offset(struct mount, mnt);
     struct path_walk w = {
-        .scratch = s,
+        .comps = s->comps,
         .dentry = dentry,
         .mnt = mnt,
         .flags = FT_BPF_FILE_TRUNCATED,
@@ -496,6 +494,81 @@ static __always_inline int emit_file(struct file *file, struct inode *inode,
     }
     s->busy = 0;
     return err ? -1 : 0;
+}
+
+/*
+ * Reports a program starting, with its working directory and arguments as the kernel set them
+ * up: a process that exits right away is gone before /proc can be read.
+ */
+static __always_inline void fill_exec(struct ft_bpf_ev_exec *e, struct task_struct *task,
+                                      struct linux_binprm *bprm)
+{
+    fill_proc(&e->proc, task, FT_BPF_EV_EXEC);
+    const char *filename = BPF_CORE_READ(bprm, filename);
+    if (bpf_probe_read_kernel_str(e->exe, sizeof(e->exe), filename) < 0)
+        e->exe[0] = 0;
+    e->cwd_len = 0;
+    e->cwd_depth = 0;
+    e->cwd_flags = 0;
+    e->args_len = 0;
+    e->pad = 0;
+}
+
+SEC("tp_btf/sched_process_exec")
+int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct linux_binprm *bprm)
+{
+    __u32 zero = 0;
+    struct exec_scratch *s = bpf_map_lookup_elem(&exec_scratch, &zero);
+    if (!s)
+        return 0;
+    /* Another exec on this CPU was preempted while using the buffer: report it without text. */
+    if (__sync_lock_test_and_set(&s->busy, 1)) {
+        count(FT_BPF_CNT_PATH_BUSY);
+        struct ft_bpf_ev_exec *plain = bpf_ringbuf_reserve(&events, sizeof(*plain), 0);
+        if (!plain) {
+            count(FT_BPF_CNT_RING_FULL);
+            return 0;
+        }
+        fill_exec(plain, task, bprm);
+        bpf_ringbuf_submit(plain, wake_flags());
+        return 0;
+    }
+
+    struct ft_bpf_ev_exec *e = &s->ev;
+    fill_exec(e, task, bprm);
+
+    struct dentry *dentry = BPF_CORE_READ(task, fs, pwd.dentry);
+    struct vfsmount *vfsmnt = BPF_CORE_READ(task, fs, pwd.mnt);
+    struct path_walk w = {
+        .comps = s->tail,
+        .dentry = dentry,
+        .mnt = (void *)vfsmnt - bpf_core_field_offset(struct mount, mnt),
+        .flags = FT_BPF_FILE_TRUNCATED,
+    };
+    if (dentry && vfsmnt)
+        bpf_loop(FT_BPF_PATH_DEPTH, path_step, &w, 0);
+    __u32 cwd = w.off;
+    if (cwd >= FT_BPF_PATH_BUF + FT_BPF_NAME_MAX)
+        cwd = 0;
+    e->cwd_len = cwd;
+    e->cwd_depth = cwd ? w.depth : 0;
+    e->cwd_flags = cwd ? w.flags : 0;
+
+    __u64 start = BPF_CORE_READ(task, mm, arg_start);
+    __u64 end = BPF_CORE_READ(task, mm, arg_end);
+    __u32 args = end > start ? (__u32)(end - start) : 0;
+    if (args > FT_BPF_ARGS_MAX)
+        args = FT_BPF_ARGS_MAX;
+    if (args && bpf_probe_read_user(&s->tail[cwd], args, (void *)start) != 0)
+        args = 0;
+    e->args_len = args;
+
+    __u64 size = sizeof(*e) + cwd + args;
+    if (size <= sizeof(*e) + sizeof(s->tail) &&
+        bpf_ringbuf_output(&events, e, size, wake_flags()) != 0)
+        count(FT_BPF_CNT_RING_FULL);
+    s->busy = 0;
+    return 0;
 }
 
 /* Returns the instance of the file, reporting its path the first time; 0 if that failed. */

@@ -140,12 +140,19 @@ struct pt_regs {
 };
 #endif
 
+struct mm_struct {
+    unsigned long arg_start;
+    unsigned long arg_end;
+};
+
 struct task_struct {
     pid_t pid;
     pid_t tgid;
     struct task_struct *real_parent;
     struct signal_struct *signal;
     struct nsproxy *nsproxy;
+    struct mm_struct *mm;
+    struct fs_struct *fs;
     u64 start_boottime;
     int exit_code;
     char comm[16];
@@ -195,6 +202,10 @@ struct mount {
 struct path {
     struct vfsmount *mnt;
     struct dentry *dentry;
+};
+
+struct fs_struct {
+    struct path pwd;
 };
 
 struct file {
