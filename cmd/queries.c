@@ -442,7 +442,7 @@ int ft_cmd_processes(const struct ft_cli *cli, struct ft_args *a)
         else if (ft_args_flag(a, "--include-children"))
             qa.query.flags |= FT_QF_INCLUDE_CHILDREN;
         else
-            return unknown_argument("processes", a);
+            return ft_query_args_refuse(&qa, a);
     }
     ft_query_args_finish(&qa, cli);
     return run_list(cli, &qa, FT_VIEW_PROCESSES, FT_MSG_ROW_PROCESS, false,
@@ -464,7 +464,7 @@ int ft_cmd_connections(const struct ft_cli *cli, struct ft_args *a)
         if (ft_args_flag(a, "--active"))
             qa.query.flags |= FT_QF_ACTIVE;
         else
-            return unknown_argument("connections", a);
+            return ft_query_args_refuse(&qa, a);
     }
     ft_query_args_finish(&qa, cli);
     return run_list(cli, &qa, FT_VIEW_CONNECTIONS, FT_MSG_ROW_CONNECTION, false, "connections");
@@ -516,7 +516,7 @@ int ft_cmd_flows(const struct ft_cli *cli, struct ft_args *a)
                                       "outbound or both)",
                                       v);
         } else {
-            return unknown_argument("flows", a);
+            return ft_query_args_refuse(&qa, a);
         }
     }
     ft_query_args_finish(&qa, cli);
@@ -550,7 +550,7 @@ static int transfer_command(const struct ft_cli *cli, struct ft_args *a, const c
         } else if (ft_args_flag(a, "--include-unknown")) {
             qa.query.flags |= FT_QF_INCLUDE_UNKNOWN;
         } else {
-            return unknown_argument(command, a);
+            return ft_query_args_refuse(&qa, a);
         }
     }
     ft_query_args_finish(&qa, cli);
@@ -622,13 +622,20 @@ int ft_cmd_top(const struct ft_cli *cli, struct ft_args *a)
         qa.query.sort = FT_SORT_OUTBOUND;
         break;
     }
+    static const char *const subjects[] = {
+        [TOP_PROCESSES] = "top processes",
+        [TOP_FILES] = "top files",
+        [TOP_DESTINATIONS] = "top destinations",
+        [TOP_CONNECTIONS] = "top connections",
+    };
+    qa.subject = subjects[what];
 
     while (!ft_args_done(a)) {
         int r = ft_query_args_parse(&qa, a);
         if (r < 0)
             return FT_EXIT_USAGE;
         if (r == 0)
-            return unknown_argument("top", a);
+            return ft_query_args_refuse(&qa, a);
     }
     ft_query_args_finish(&qa, cli);
     uint32_t limit = qa.query.limit ? qa.query.limit : 10;
@@ -961,7 +968,7 @@ int ft_cmd_watch(const struct ft_cli *cli, struct ft_args *a)
         } else if (ft_args_flag(a, "--no-ui")) {
             opt->plain = true;
         } else {
-            code = unknown_argument("watch", a);
+            code = ft_query_args_refuse(qa, a);
         }
     }
 

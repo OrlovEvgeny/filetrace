@@ -331,7 +331,7 @@ int ft_cmd_events(const struct ft_cli *cli, struct ft_args *a)
             if (code != FT_EXIT_OK)
                 return code;
         } else {
-            return ft_usage_error("events", "unknown argument '%s' for 'events'", ft_args_peek(a));
+            return ft_query_args_refuse(&qa, a);
         }
     }
     if (printer.raw && qa.out.format_given)

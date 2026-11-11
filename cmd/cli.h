@@ -151,6 +151,8 @@ struct ft_query_args {
     struct ft_output out;
     const char *output_path;
     const char *command;
+    const char *subject; /* what messages call it, such as "top processes" */
+    const char *masked;  /* the option the last argument named that this command lacks */
     uint32_t allowed;
     uint32_t sorts;   /* bit per enum ft_sort value the command accepts */
     uint32_t formats; /* bit per enum ft_format value the command can print */
@@ -165,6 +167,9 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a);
 
 /* Once the arguments are parsed: the configured format, unless one was given. */
 void ft_query_args_finish(struct ft_query_args *qa, const struct ft_cli *cli);
+
+/* The usage error for an argument no option took, naming a query option this command lacks. */
+int ft_query_args_refuse(const struct ft_query_args *qa, const struct ft_args *a);
 
 void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t formats);
 void ft_query_args_help_note(FILE *out);

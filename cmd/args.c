@@ -175,6 +175,7 @@ void ft_query_args_init(struct ft_query_args *qa, const char *command, enum ft_q
     ft_query_init(&qa->query, kind);
     ft_output_init(&qa->out);
     qa->command = command;
+    qa->subject = command;
     qa->allowed = allowed;
     qa->sorts = sorts;
     qa->formats = FT_FORMATS_ALL;
@@ -236,13 +237,33 @@ static bool parse_when(const char *text, uint64_t *wall_ns)
     return ft_parse_time_rfc3339(text, wall_ns);
 }
 
+/* Whether the current argument is the option, bare or with "=value". */
+static bool names(const struct ft_args *a, const char *name)
+{
+    const char *arg = ft_args_peek(a);
+    size_t len = strlen(name);
+    return arg && strncmp(arg, name, len) == 0 && (arg[len] == '\0' || arg[len] == '=');
+}
+
+/* Whether the command takes the option's group; if not, an argument naming it is remembered. */
+static bool takes(struct ft_query_args *qa, const struct ft_args *a, uint32_t group,
+                  const char *name)
+{
+    if (qa->allowed & group)
+        return true;
+    if (names(a, name))
+        qa->masked = name;
+    return false;
+}
+
 int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
 {
     struct ft_query *q = &qa->query;
     const char *v = nullptr;
     int r;
 
-#define OPTION(group, name) ((qa->allowed & (group)) && (r = ft_args_value(a, name, &v)) != 0)
+    qa->masked = nullptr;
+#define OPTION(group, name) (takes(qa, a, group, name) && (r = ft_args_value(a, name, &v)) != 0)
 
     if (OPTION(FT_QO_PID, "--pid")) {
         if (r < 0)
@@ -434,23 +455,35 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
             qa->out.format_given = r > 0;
             return r;
         }
+    } else {
+        /* The names ft_args_format reads. */
+        takes(qa, a, FT_QO_OUTPUT, "--format");
+        takes(qa, a, FT_QO_OUTPUT, "--json");
+        takes(qa, a, FT_QO_OUTPUT, "--jsonl");
     }
 
-    if ((qa->allowed & FT_QO_RESOLVE) && ft_args_flag(a, "--resolve-hostnames")) {
+    if (takes(qa, a, FT_QO_RESOLVE, "--resolve-hostnames") &&
+        ft_args_flag(a, "--resolve-hostnames")) {
         qa->resolve = true;
         return 1;
     }
-    if (qa->allowed & FT_QO_ACTIVITY) {
-        if (ft_args_flag(a, "--active")) {
-            q->flags |= FT_QF_ACTIVE;
-            return 1;
-        }
-        if (ft_args_flag(a, "--completed")) {
-            q->flags |= FT_QF_COMPLETED;
-            return 1;
-        }
+    if (takes(qa, a, FT_QO_ACTIVITY, "--active") && ft_args_flag(a, "--active")) {
+        q->flags |= FT_QF_ACTIVE;
+        return 1;
+    }
+    if (takes(qa, a, FT_QO_ACTIVITY, "--completed") && ft_args_flag(a, "--completed")) {
+        q->flags |= FT_QF_COMPLETED;
+        return 1;
     }
     return 0;
+}
+
+int ft_query_args_refuse(const struct ft_query_args *qa, const struct ft_args *a)
+{
+    if (qa->masked)
+        return ft_usage_error(qa->command, "%s does not apply to '%s'", qa->masked, qa->subject);
+    return ft_usage_error(qa->command, "unknown argument '%s' for '%s'", ft_args_peek(a),
+                          qa->subject);
 }
 
 void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t formats)
