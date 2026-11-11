@@ -89,44 +89,16 @@ gh api --silent -X PUT "repos/$repo/environments/release" --input - <<JSON
 JSON
 say 'the release environment waits for your approval'
 
-ruleset 'Default branch' <<'JSON'
+# The maintainer pushes to these branches directly, so what is protected is
+# their history. A release checks its commit itself before publishing.
+ruleset 'Branches' <<'JSON'
 {
-  "name": "Default branch",
+  "name": "Branches",
   "target": "branch",
   "enforcement": "active",
-  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
-  "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
-    { "type": "required_linear_history" },
-    {
-      "type": "pull_request",
-      "parameters": {
-        "dismiss_stale_reviews_on_push": false,
-        "require_code_owner_review": false,
-        "require_last_push_approval": false,
-        "required_approving_review_count": 0,
-        "required_review_thread_resolution": false
-      }
-    },
-    {
-      "type": "required_status_checks",
-      "parameters": {
-        "required_status_checks": [{ "context": "CI" }],
-        "strict_required_status_checks_policy": false
-      }
-    }
-  ]
-}
-JSON
-
-# A release opens these branches itself, so only their history is protected.
-ruleset 'Release lines' <<'JSON'
-{
-  "name": "Release lines",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": { "ref_name": { "include": ["refs/heads/[0-9][0-9].*"], "exclude": [] } },
+  "conditions": {
+    "ref_name": { "include": ["~DEFAULT_BRANCH", "refs/heads/[0-9][0-9].*"], "exclude": [] }
+  },
   "rules": [
     { "type": "deletion" },
     { "type": "non_fast_forward" },

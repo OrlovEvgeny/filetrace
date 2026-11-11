@@ -51,8 +51,8 @@ A candidate stops after step 4.
 
 ## Patching a line
 
-Bring the fixes to the branch of the line through pull requests, as on
-`master`, then release with `patch --ref <line>`. While the line has received
+Bring the fixes to the branch of the line, then release with
+`patch --ref <line>`. While the line has received
 nothing of its own, moving its branch forward to `master` and releasing a
 patch is how a second release in a month is made.
 
@@ -73,8 +73,8 @@ again:
 - GitHub Pages deployed by Actions, immutable releases, private vulnerability
   reports;
 - the `release` environment, with the repository owner as its reviewer;
-- rules: `master` and the line branches change through pull requests that
-  pass `CI` and keep a linear history; release tags can be neither moved nor
+- rules: `master` and the line branches keep a linear history and can be
+  neither rewritten nor deleted; release tags can be neither moved nor
   deleted;
 - rebase as the only way to merge, and permission for workflows to open pull
   requests.

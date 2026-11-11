@@ -32,9 +32,9 @@ the package tests, described under Tests in the README.
 
 ## Commits and branches
 
-Work happens on a branch named `<type>/<short-description>` and reaches
-`master` through a pull request, which is rebased onto it: every commit of
-the branch lands as it is. A commit holds one change, and its subject reads
+Work happens on a branch named `<type>/<short-description>`. A contribution
+reaches `master` through a pull request, which is rebased onto it: every
+commit of the branch lands as it is. A commit holds one change, and its subject reads
 
 ```
 <type>: <subject>
@@ -50,8 +50,9 @@ with `!`. `mise run changelog` shows what the next release would say.
 
 ## Continuous integration
 
-Every pull request builds and tests on Linux for x86-64 and arm64 and on
-macOS, runs the unit tests under the sanitizers, builds the static release
-binaries and the packages from them, and installs those packages in
-containers. The single required check, `CI`, passes when all of that did.
+Every pull request and every push to `master` builds and tests on Linux for
+x86-64 and arm64 and on macOS, runs the unit tests under the sanitizers,
+builds the static release binaries and the packages from them, and installs
+those packages in containers. The check named `CI` passes when all of that
+did.
 The integration tests also run nightly on the oldest supported kernels.
