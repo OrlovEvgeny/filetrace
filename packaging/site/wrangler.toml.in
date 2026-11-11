@@ -1,0 +1,11 @@
+# The Worker in front of https://filetrace.eorlov.org, deployed by
+# tools/release/worker.sh, which fills in the placeholders.
+name = "filetrace-site"
+main = "@worker@"
+compatibility_date = "2025-09-01"
+workers_dev = false
+routes = [{ pattern = "filetrace.eorlov.org/*", zone_name = "eorlov.org" }]
+
+[[r2_buckets]]
+binding = "SITE"
+bucket_name = "@bucket@"

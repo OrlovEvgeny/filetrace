@@ -72,8 +72,10 @@ A published release cannot be changed. A bad one is followed by a patch.
 
 ## The download site
 
-`https://filetrace.eorlov.org` is a Cloudflare R2 bucket connected to that
-domain.
+`https://filetrace.eorlov.org` serves both the downloads and the
+documentation. A Cloudflare Worker, `packaging/site/worker.js`, answers every
+request to the domain: the paths below come from the R2 bucket, and everything
+else from the documentation site on Mintlify (`filetrace.mintlify.site`).
 
 | Path | Holds |
 |---|---|
@@ -107,9 +109,13 @@ again:
 
 The bucket is set up once in the Cloudflare dashboard: create it, connect
 `filetrace.eorlov.org` to it as a custom domain, and create an R2 API token
-with Object Read & Write permission on that bucket alone. R2 serves no index
-document, so `https://filetrace.eorlov.org/` shows a page only with a rule
-that rewrites `/` to `/index.html`.
+with Object Read & Write permission on that bucket alone. The custom domain
+only gives the name a DNS record; the Worker's route on
+`filetrace.eorlov.org/*` takes every request first and reads the bucket
+through its binding. `R2_BUCKET_NAME=<bucket> mise run site:worker`
+deploys the Worker with the settings in `packaging/site/wrangler.toml.in`,
+after `npx wrangler login` with an account that may edit Workers and the
+`eorlov.org` zone.
 
 These secrets, of the repository or of its `release` environment, hold the
 keys and the way into the bucket:

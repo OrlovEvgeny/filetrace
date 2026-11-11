@@ -129,6 +129,10 @@ run = "tools/release/notes.sh"
 description = "Build the download site from the releases under dist/releases into dist/site"
 run = "tools/release/site.sh dist/releases dist/site"
 
+[tasks."site:worker"]
+description = "Deploy the Worker that serves filetrace.eorlov.org"
+run = "tools/release/worker.sh"
+
 [tasks.release]
 description = "Start the release workflow: new or patch, with --ref, --lts, --prestable, --dry-run"
 run = "tools/release/dispatch.sh"
