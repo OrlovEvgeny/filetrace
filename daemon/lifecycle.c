@@ -25,7 +25,8 @@ static void usage(FILE *out, const char *program)
             "  --socket <path>           Listening socket (default: %s)\n"
             "  --mode <mode>             minimal or standard (default: standard)\n"
             "  --flush-interval <time>   How often counters are collected (default: 250ms)\n"
-            "  --queue-size <size>       Kernel event queue size (default: 4MB)\n"
+            "  --queue-size <size>       Kernel event queue size (default: 4MB, or 1MB\n"
+            "                            in minimal mode)\n"
             "  --correlation-window <time>\n"
             "                            Longest read-to-send gap that still\n"
             "                            associates a file with a send (default: 2s)\n"
@@ -63,6 +64,7 @@ int ft_daemon_main(int argc, char **argv, const char *program)
 {
     struct ft_daemon_config cfg;
     enum ft_log_level log_level = FT_LOG_INFO;
+    bool queue_size_given = false;
 
     ft_daemon_config_defaults(&cfg);
 
@@ -90,6 +92,7 @@ int ft_daemon_main(int argc, char **argv, const char *program)
                  number <= 1024u * 1024u * 1024u;
             if (ok)
                 cfg.backend_cfg.queue_bytes = (uint32_t)number;
+            queue_size_given = true;
         } else if (option_value(argc, argv, &i, "--correlation-window", &value)) {
             ok = value && ft_parse_duration(value, &number) && number > 0;
             if (ok)
@@ -107,6 +110,10 @@ int ft_daemon_main(int argc, char **argv, const char *program)
             return FT_EXIT_USAGE;
         }
     }
+
+    /* Minimal mode queues only process and socket events, far fewer than standard mode. */
+    if (!queue_size_given && cfg.backend_cfg.mode == FT_MODE_MINIMAL)
+        cfg.backend_cfg.queue_bytes = 1024u * 1024u;
 
     ft_log_set_level(log_level);
 
