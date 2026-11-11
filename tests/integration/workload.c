@@ -255,6 +255,43 @@ static void scenario_read_then_recv(const char *path, size_t size)
     stop_sink(&sink);
 }
 
+/*
+ * readhandshake <path> <bytes> <bundle> <bundle bytes>: an upload over a fresh connection, as
+ * an HTTPS client makes it. The file is read whole, then a CA bundle; then the peers trade a
+ * hello each way, and only then is the file sent.
+ */
+static void scenario_read_handshake(const char *path, size_t size, const char *bundle,
+                                    size_t bundle_size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, true);
+    make_file(path, size);
+    make_file(bundle, bundle_size);
+
+    char *contents = malloc(size);
+    char *trust = malloc(bundle_size);
+    char greeting[6];
+    if (!contents || !trust)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    int ca = open_file(bundle);
+    if (read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+        die("read");
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
+        die("recv");
+    send_all(sock, contents, size);
+    close(sock);
+    close(ca);
+    close(file);
+    free(contents);
+    free(trust);
+    report("readhandshake", path, size, sink.port);
+    stop_sink(&sink);
+}
+
 /* readlittle <path> <bytes>: sends only a sliver of what it read */
 static void scenario_read_little(const char *path, size_t size)
 {
@@ -574,6 +611,8 @@ int main(int argc, char **argv)
         scenario_readsend(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readthenrecv") == 0 && argc == 4)
         scenario_read_then_recv(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readhandshake") == 0 && argc == 6)
+        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "readlittle") == 0 && argc == 4)
         scenario_read_little(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "fdreuse") == 0 && argc == 5)

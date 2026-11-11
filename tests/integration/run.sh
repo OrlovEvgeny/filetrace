@@ -156,6 +156,14 @@ expect "read+send is not exact" \
 settle
 expect "read, receive, then send" "$(ft files --path "$data/config.bin" --format csv | rows)" 0
 
+# An upload over a fresh connection, as an HTTPS client makes it: the file is read whole,
+# then a CA bundle, then the peers trade a hello each way before the file is sent. The
+# receive ends what the bundle read could claim, so the upload is not pinned on it.
+"$workload" readhandshake "$data/upload-tls.bin" 300000 "$data/ca-bundle.crt" 200000 >/dev/null
+settle
+expect "read before a handshake: CA bundle not reported" \
+    "$(ft files --path "$data/ca-bundle.crt" --format csv | rows)" 0
+
 # Neither is sending a sliver of what was read.
 "$workload" readlittle "$data/bundle.bin" 400000 >/dev/null
 settle

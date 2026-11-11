@@ -327,6 +327,11 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
     t->rx_tgid = tgid;
 
     if (cfg.file_corr) {
+        __u32 tid = (__u32)bpf_get_current_pid_tgid();
+        /* What the thread claimed with an earlier send ends here too, or its next send hands it
+         * back to the thread and the read outlives the receive. */
+        if (t->claim_kind == FT_BPF_AGG_READ_SEND && t->claim_tid == tid)
+            claim_release(t, NULL, tid);
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
