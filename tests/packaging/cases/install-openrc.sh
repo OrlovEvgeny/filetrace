@@ -1,17 +1,18 @@
 #!/bin/sh
-# Runs in an Alpine container with OpenRC marked as started; install.sh
-# unpacks the release archive because the test publishes no package repository.
+# Runs in an Alpine container with OpenRC marked as started; install.sh is told
+# to unpack the release archive instead of using the package repository.
 set -eu
 . /src/tests/packaging/assert.sh
 
 service=filetrace-agent
 installer=/pkg/new/install.sh
+method='--method tarball'
 export FILETRACE_REPO_URL=file:///pkg/site
 export FILETRACE_RELEASE_URL=file:///pkg/releases
 mkdir -p /run/openrc
 touch /run/openrc/softlevel
 
-sh $installer
+sh $installer $method
 for path in /usr/local/bin/filetrace /usr/local/bin/filetrace-agent \
     /etc/filetrace/config.toml /etc/init.d/$service /etc/conf.d/$service; do
     expect_file "$path"

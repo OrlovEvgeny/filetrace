@@ -1,15 +1,16 @@
 #!/bin/sh
 # usage: run.sh [<case>...]
 # Installs the packages found in dist/ in containers and checks the result.
-# Cases: deb rpm apk sysv unprivileged install-systemd install-openrc (default:
-# all of them). The Docker host has to allow privileged containers and run a
-# kernel with BTF.
+# Cases: deb rpm apk sysv unprivileged install-systemd install-openrc repo-apt
+# repo-rpm repo-apk (default: all of them). The Docker host has to allow
+# privileged containers and run a kernel with BTF.
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 
-[ $# -gt 0 ] || set -- deb rpm apk sysv unprivileged install-systemd install-openrc
+[ $# -gt 0 ] || set -- deb rpm apk sysv unprivileged install-systemd install-openrc \
+    repo-apt repo-rpm repo-apk
 
 case $(docker info --format '{{.Architecture}}') in
 aarch64 | arm64)
@@ -47,13 +48,14 @@ work=dist/test
 rm -rf "$work"
 mkdir -p "$work/new" "$work/old" "$work/tarball"
 cp dist/filetrace_*_"$deb_arch".deb dist/filetrace-*."$rpm_arch".rpm \
-    dist/filetrace_*_"$rpm_arch".apk "$work/new/"
+    dist/filetrace_*_"$rpm_arch".apk dist/install.sh "$work/new/"
 tar -xzf "dist/filetrace-$version-linux-$deb_arch.tar.gz" -C "$work/tarball" --strip-components=1
 FILETRACE_VERSION=0.0.0.1 tools/dist/package.sh "$work/older" >/dev/null
 cp "$work"/older/filetrace_*_"$deb_arch".deb "$work"/older/filetrace-*."$rpm_arch".rpm \
     "$work"/older/filetrace_*_"$rpm_arch".apk "$work/old/"
 
-# What install.sh downloads, laid out as the published site and the releases are.
+# Both versions published the way a release is: signed with throwaway keys,
+# laid out as release assets, and indexed into a download site.
 checksums()
 {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -62,13 +64,17 @@ checksums()
         shasum -a 256 "$@"
     fi
 }
-cp dist/install.sh "$work/new/"
-release=$work/releases/v$version-stable
-mkdir -p "$work/site/channels" "$work/site/versions" "$release"
-printf '%s\n' "$version" >"$work/site/channels/stable"
-printf 'v%s-stable\n' "$version" >"$work/site/versions/$version"
-cp "dist/filetrace-$version-linux-$deb_arch.tar.gz" "$release/"
-(cd "$release" && checksums ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
+tools/release/keys.sh "$work/keys" >/dev/null
+export FILETRACE_GPG_KEY_FILE="$work/keys/gpg.key"
+export FILETRACE_APK_KEY_FILE="$work/keys/filetrace.rsa"
+for published in "$version" 0.0.0.1; do
+    FILETRACE_VERSION=$published tools/dist/package.sh "$work/signed-$published" >/dev/null
+    release=$work/releases/v$published-stable
+    mkdir -p "$release"
+    find "$work/signed-$published" -maxdepth 1 -type f -exec cp {} "$release/" \;
+    (cd "$release" && checksums ./*.tar.gz ./*.deb ./*.rpm ./*.apk | sed 's|  \./|  |' >SHA256SUMS)
+done
+tools/release/site.sh "$work/releases" "$work/site"
 
 containers=
 cleanup()
@@ -150,6 +156,17 @@ for name in "$@"; do
         image alpine-openrc &&
             start install-openrc --privileged --init filetrace-test-alpine-openrc &&
             run_case install-openrc || code=$?
+        ;;
+    repo-apt)
+        boot repo-apt debian-systemd && run_case repo-apt || code=$?
+        ;;
+    repo-rpm)
+        boot repo-rpm rocky-systemd && run_case repo-rpm || code=$?
+        ;;
+    repo-apk)
+        image alpine-openrc &&
+            start repo-apk --privileged --init filetrace-test-alpine-openrc &&
+            run_case repo-apk || code=$?
         ;;
     unprivileged)
         image debian &&
