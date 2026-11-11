@@ -1,14 +1,15 @@
 #!/bin/sh
 # usage: run.sh [<case>...]
 # Installs the packages found in dist/ in containers and checks the result.
-# Cases: deb rpm apk sysv unprivileged (default: all of them). The Docker host
-# has to allow privileged containers and run a kernel with BTF.
+# Cases: deb rpm apk sysv unprivileged install-systemd install-openrc (default:
+# all of them). The Docker host has to allow privileged containers and run a
+# kernel with BTF.
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 
-[ $# -gt 0 ] || set -- deb rpm apk sysv unprivileged
+[ $# -gt 0 ] || set -- deb rpm apk sysv unprivileged install-systemd install-openrc
 
 case $(docker info --format '{{.Architecture}}') in
 aarch64 | arm64)
@@ -51,6 +52,23 @@ tar -xzf "dist/filetrace-$version-linux-$deb_arch.tar.gz" -C "$work/tarball" --s
 FILETRACE_VERSION=0.0.0.1 tools/dist/package.sh "$work/older" >/dev/null
 cp "$work"/older/filetrace_*_"$deb_arch".deb "$work"/older/filetrace-*."$rpm_arch".rpm \
     "$work"/older/filetrace_*_"$rpm_arch".apk "$work/old/"
+
+# What install.sh downloads, laid out as the published site and the releases are.
+checksums()
+{
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    else
+        shasum -a 256 "$@"
+    fi
+}
+cp dist/install.sh "$work/new/"
+release=$work/releases/v$version-stable
+mkdir -p "$work/site/channels" "$work/site/versions" "$release"
+printf '%s\n' "$version" >"$work/site/channels/stable"
+printf 'v%s-stable\n' "$version" >"$work/site/versions/$version"
+cp "dist/filetrace-$version-linux-$deb_arch.tar.gz" "$release/"
+(cd "$release" && checksums ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
 
 containers=
 cleanup()
@@ -116,6 +134,15 @@ for name in "$@"; do
         ;;
     sysv)
         start sysv --privileged --init debian:13 sleep infinity && run_case sysv || code=$?
+        ;;
+    install-systemd)
+        boot install-systemd debian-systemd && run_case install-systemd || code=$?
+        ;;
+    install-openrc)
+        docker build -q -t filetrace-test-alpine-openrc \
+            -f tests/packaging/images/alpine-openrc.Dockerfile tests/packaging/images >/dev/null
+        start install-openrc --privileged --init filetrace-test-alpine-openrc &&
+            run_case install-openrc || code=$?
         ;;
     unprivileged)
         start unprivileged --user 65534:65534 --cap-drop ALL \
