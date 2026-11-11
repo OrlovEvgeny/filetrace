@@ -672,6 +672,14 @@ static void rates_cover_recent_seconds(void)
     q.sort = FT_SORT_BYTES;
     run_query(&f, &q);
     CHECK_STR(f.rows.transfers[0].path, "/data/finished.bin");
+    q.sort = FT_SORT_FILE;
+    run_query(&f, &q);
+    CHECK_STR(f.rows.transfers[0].path, "/data/finished.bin");
+    CHECK_STR(f.rows.transfers[1].path, "/data/steady.bin");
+    /* The steady transfer ran from 1000.5 s to 1003 s, the other within one instant. */
+    q.sort = FT_SORT_DURATION;
+    run_query(&f, &q);
+    CHECK_STR(f.rows.transfers[0].path, "/data/steady.bin");
 
     f.now = 1006 * FT_NS_PER_SEC;
     ft_query_init(&q, FT_Q_PROCESSES);

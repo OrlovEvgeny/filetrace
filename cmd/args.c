@@ -120,9 +120,12 @@ static const struct {
     {"inbound", FT_SORT_INBOUND},
     {"connections", FT_SORT_CONNECTIONS},
     {"bytes", FT_SORT_BYTES},
-    {"recent", FT_SORT_RECENT},
+    {"time", FT_SORT_TIME},
     {"pid", FT_SORT_PID},
     {"rate", FT_SORT_RATE},
+    {"duration", FT_SORT_DURATION},
+    {"process", FT_SORT_PROCESS},
+    {"file", FT_SORT_FILE},
 };
 
 void ft_query_args_init(struct ft_query_args *qa, const char *command, enum ft_query_kind kind,
@@ -430,13 +433,20 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts)
             fputs(lines[i].text, out);
     }
     if (allowed & FT_QO_SORT) {
+        size_t column = 0;
         fputs("  --sort <key>            ", out);
-        bool first = true;
         for (size_t i = 0; i < FT_ARRAY_LEN(sort_names); i++) {
-            if (sorts & (1u << sort_names[i].sort)) {
-                fprintf(out, "%s%s", first ? "" : ", ", sort_names[i].name);
-                first = false;
+            if (!(sorts & (1u << sort_names[i].sort)))
+                continue;
+            size_t width = strlen(sort_names[i].name) + 2;
+            if (column && column + width > 50) {
+                fputs(",\n                          ", out);
+                column = 0;
+            } else if (column) {
+                fputs(", ", out);
             }
+            fputs(sort_names[i].name, out);
+            column += width;
         }
         fputc('\n', out);
     }

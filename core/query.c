@@ -7,12 +7,16 @@
 #include <string.h>
 
 struct candidate {
+    const char *text; /* when set, ordered by it first, ascending */
     uint64_t key;
     uint64_t tie;
     uint64_t bytes;
     const void *entry;
     bool unattributed;
 };
+
+/* Sorts after every name and path. */
+static const char NO_TEXT[] = "\xff";
 
 struct candidates {
     struct candidate *items;
@@ -85,6 +89,11 @@ static int compare_candidates(const void *a, const void *b)
 {
     const struct candidate *x = a;
     const struct candidate *y = b;
+    if (x->text && y->text) {
+        int order = strcmp(x->text, y->text);
+        if (order != 0)
+            return order;
+    }
     if (x->key != y->key)
         return x->key < y->key ? 1 : -1;
     if (x->tie != y->tie)
@@ -198,7 +207,7 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
         case FT_SORT_PID:
             key = UINT32_MAX - p->pid;
             break;
-        case FT_SORT_RECENT:
+        case FT_SORT_TIME:
             key = p->last_ns;
             break;
         case FT_SORT_RATE:
@@ -210,7 +219,12 @@ static void query_processes(struct ft_state *st, const struct ft_query *q, uint6
         }
         if (q->min_bytes && (q->sort == FT_SORT_INBOUND ? p->q_rx : p->q_tx) < q->min_bytes)
             continue;
-        candidates_add(&c, (struct candidate){.key = key, .tie = UINT32_MAX - p->pid, .entry = p});
+        candidates_add(&c, (struct candidate){
+                               .text = q->sort == FT_SORT_PROCESS ? p->comm : nullptr,
+                               .key = key,
+                               .tie = UINT32_MAX - p->pid,
+                               .entry = p,
+                           });
     }
 
     size_t n = candidates_finish(&c, q);
@@ -277,8 +291,13 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
         uint64_t key;
         switch (q->sort) {
         case FT_SORT_OUTBOUND:
-        case FT_SORT_BYTES:
             key = s->tx_bytes;
+            break;
+        case FT_SORT_BYTES:
+            key = s->tx_bytes + s->rx_bytes;
+            break;
+        case FT_SORT_DURATION:
+            key = s->last_ns - s->first_ns;
             break;
         case FT_SORT_INBOUND:
             key = s->rx_bytes;
@@ -293,7 +312,12 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
             key = s->last_ns;
             break;
         }
-        candidates_add(&c, (struct candidate){.key = key, .tie = s->id, .entry = s});
+        candidates_add(&c, (struct candidate){
+                               .text = q->sort == FT_SORT_PROCESS ? s->comm : nullptr,
+                               .key = key,
+                               .tie = s->id,
+                               .entry = s,
+                           });
     }
 
     size_t n = candidates_finish(&c, q);
@@ -349,7 +373,7 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
         case FT_SORT_INBOUND:
             key = f->rx_bytes;
             break;
-        case FT_SORT_RECENT:
+        case FT_SORT_TIME:
             key = f->last_ns;
             break;
         case FT_SORT_PID:
@@ -358,6 +382,9 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
         case FT_SORT_BYTES:
             key = f->tx_bytes + f->rx_bytes;
             break;
+        case FT_SORT_DURATION:
+            key = f->last_ns - f->first_ns;
+            break;
         case FT_SORT_RATE:
             key = ft_rate_per_second(&f->tx_rate, now_ns) + ft_rate_per_second(&f->rx_rate, now_ns);
             break;
@@ -365,7 +392,12 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
             key = f->tx_bytes;
             break;
         }
-        candidates_add(&c, (struct candidate){.key = key, .tie = f->last_ns, .entry = f});
+        candidates_add(&c, (struct candidate){
+                               .text = q->sort == FT_SORT_PROCESS ? f->comm : nullptr,
+                               .key = key,
+                               .tie = f->last_ns,
+                               .entry = f,
+                           });
     }
 
     size_t n = candidates_finish(&c, q);
@@ -408,18 +440,35 @@ static bool match_activity(const struct ft_query *q, bool active)
 }
 
 static uint64_t transfer_sort_key(const struct ft_query *q, uint64_t bytes, uint64_t rate,
-                                  uint64_t last_ns, uint32_t pid)
+                                  uint64_t first_ns, uint64_t last_ns, uint32_t pid)
 {
     switch (q->sort) {
     case FT_SORT_BYTES:
     case FT_SORT_OUTBOUND:
+    case FT_SORT_PROCESS:
+    case FT_SORT_FILE:
         return bytes;
     case FT_SORT_RATE:
         return rate;
+    case FT_SORT_DURATION:
+        return last_ns - first_ns;
     case FT_SORT_PID:
         return UINT32_MAX - pid;
     default:
         return last_ns;
+    }
+}
+
+static const char *transfer_sort_text(const struct ft_query *q, const char *comm,
+                                      const struct ft_file *file)
+{
+    switch (q->sort) {
+    case FT_SORT_PROCESS:
+        return comm;
+    case FT_SORT_FILE:
+        return file && file->path ? file->path : NO_TEXT;
+    default:
+        return nullptr;
     }
 }
 
@@ -583,8 +632,9 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
 
         candidates_add(
             &c, (struct candidate){
+                    .text = transfer_sort_text(q, t->comm, f),
                     .key = transfer_sort_key(q, t->bytes, ft_rate_per_second(&t->rate, now_ns),
-                                             t->last_ns, t->pid),
+                                             t->first_ns, t->last_ns, t->pid),
                     .tie = t->id,
                     .entry = t,
                 });
@@ -614,8 +664,9 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
 
         candidates_add(
             &c, (struct candidate){
+                    .text = transfer_sort_text(q, s->comm, nullptr),
                     .key = transfer_sort_key(q, bytes, ft_rate_per_second(&s->tx_rate, now_ns),
-                                             s->last_ns, s->pid),
+                                             s->first_ns, s->last_ns, s->pid),
                     .tie = s->id,
                     .bytes = bytes,
                     .entry = s,

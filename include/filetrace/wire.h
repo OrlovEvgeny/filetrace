@@ -56,9 +56,12 @@ enum ft_sort : uint16_t {
     FT_SORT_INBOUND,
     FT_SORT_CONNECTIONS,
     FT_SORT_BYTES,
-    FT_SORT_RECENT,
+    FT_SORT_TIME,
     FT_SORT_PID,
     FT_SORT_RATE,
+    FT_SORT_DURATION,
+    FT_SORT_PROCESS, /* by name, ascending */
+    FT_SORT_FILE,    /* by path, ascending */
 };
 
 struct ft_query {
