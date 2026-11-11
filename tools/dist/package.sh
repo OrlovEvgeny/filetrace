@@ -85,10 +85,18 @@ script()
     }
 }
 
+# Modes are set here and not copied: an artifact store between the build and
+# this script does not keep them.
+binaries()
+{
+    mkdir -p "$1"
+    install -m 0755 "$stage/bin/filetrace" "$stage/bin/filetrace-agent" "$1/"
+}
+
 docs()
 {
     mkdir -p "$1"
-    cp README.md LICENSE "$1/"
+    install -m 0644 README.md LICENSE "$1/"
     notices "$stage/third-party.txt" "$1/THIRD_PARTY_LICENSES"
 }
 
@@ -99,9 +107,9 @@ package_linux()
     work=$dist/work/linux-$arch
 
     tree=$work/$name
-    mkdir -p "$tree/bin" "$tree/etc/filetrace" "$tree/share/filetrace"
-    cp "$stage/bin/filetrace" "$stage/bin/filetrace-agent" "$tree/bin/"
-    cp "$packaging/config/config.toml" "$tree/etc/filetrace/"
+    mkdir -p "$tree/etc/filetrace" "$tree/share/filetrace"
+    binaries "$tree/bin"
+    install -m 0644 "$packaging/config/config.toml" "$tree/etc/filetrace/"
     for part in systemd openrc sysv logrotate; do
         cp -R "$packaging/$part" "$tree/share/filetrace/"
     done
@@ -109,14 +117,14 @@ package_linux()
     archive "$work" "$name" "$dist/$name.tar.gz"
 
     mkdir -p "$work/$name-debug"
-    cp "$stage/debug/"*.debug "$work/$name-debug/"
+    install -m 0644 "$stage/debug/"*.debug "$work/$name-debug/"
     archive "$work" "$name-debug" "$dist/$name-debug.tar.gz"
 
     packaged=$work/root
-    mkdir -p "$packaged/usr/bin" "$packaged/etc/filetrace" "$packaged/systemd" \
+    mkdir -p "$packaged/etc/filetrace" "$packaged/systemd" \
         "$packaged/sysv" "$packaged/openrc" "$packaged/logrotate" "$work/scripts"
-    cp "$stage/bin/filetrace" "$stage/bin/filetrace-agent" "$packaged/usr/bin/"
-    cp "$packaging/config/config.toml" "$packaged/etc/filetrace/"
+    binaries "$packaged/usr/bin"
+    install -m 0644 "$packaging/config/config.toml" "$packaged/etc/filetrace/"
     docs "$packaged/usr/share/doc/filetrace"
     sed 's|@bindir@|/usr/bin|g' "$packaging/systemd/filetrace-agent.service.in" \
         >"$packaged/systemd/filetrace-agent.service"
@@ -148,8 +156,7 @@ package_darwin()
 {
     name=filetrace-$version-darwin-$1
     work=$dist/work/darwin-$1
-    mkdir -p "$work/$name/bin"
-    cp "$stage/bin/filetrace" "$stage/bin/filetrace-agent" "$work/$name/bin/"
+    binaries "$work/$name/bin"
     docs "$work/$name/share/doc/filetrace"
     archive "$work" "$name" "$dist/$name.tar.gz"
 }
