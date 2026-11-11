@@ -411,6 +411,123 @@ expect "invalid value exit code" "$(ft files --min-bytes lots >/dev/null 2>&1; e
 expect "no agent exit code" \
     "$("$bin/filetrace" --socket "$work/absent.sock" files >/dev/null 2>&1; echo $?)" 4
 
+# An interpreter's transfers name the script it runs, found from its arguments and the
+# directory it was started in. The scripts stay a second after sending: the agent reads
+# /proc once it handles their traffic, and a process that is gone by then leaves nothing.
+mkdir -p "$work/scripts"
+cat >"$work/scripts/send.pl" <<'PERL'
+use strict;
+use warnings;
+use IO::Socket::INET;
+
+# usage: [TITLE=<title>] perl send.pl <file> [arguments]
+# Sends the file to a sink of its own; with TITLE, from a forked worker that renames itself.
+$| = 1;
+my $path = $ARGV[0];
+my $server = IO::Socket::INET->new(Listen => 1, LocalAddr => '127.0.0.1', LocalPort => 0)
+    or die "listen: $!";
+my $sink = fork() // die "fork: $!";
+if ($sink == 0) {
+    my $peer = $server->accept or exit 1;
+    1 while sysread($peer, my $buf, 65536);
+    exit 0;
+}
+my $worker = 0;
+if (defined $ENV{TITLE}) {
+    $worker = fork() // die "fork: $!";
+    $0 = $ENV{TITLE} if $worker == 0;
+}
+if ($worker == 0) {
+    my $client = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $server->sockport)
+        or die "connect: $!";
+    open(my $in, '<', $path) or die "$path: $!";
+    while (sysread($in, my $buf, 65536)) {
+        syswrite($client, $buf) or die "send: $!";
+    }
+    close $client;
+    print "pid=$$\n";
+    sleep 1;
+    exit 0 if defined $ENV{TITLE};
+}
+waitpid($worker, 0) if $worker;
+waitpid($sink, 0);
+PERL
+if command -v perl >/dev/null 2>&1; then
+    head -c 300000 /dev/urandom >"$data/perl-upload.bin"
+    report=$(cd "$work/scripts" && perl -I lib -w send.pl "$data/perl-upload.bin" --token=s3cr3t)
+    settle
+    perl_pid=$(field "$report" pid)
+    jsonl=$(ft files --path "$data/perl-upload.bin" --jsonl)
+    expect_match "interpreter: command line" "$jsonl" \
+        "\"command_line\":\"perl -I lib -w send\\.pl $data/perl-upload\\.bin --token=s3cr3t\""
+    expect_match "interpreter: working directory" "$jsonl" "\"working_directory\":\"$work/scripts\""
+    expect_match "interpreter: script" "$jsonl" "\"script\":\"$work/scripts/send\\.pl\""
+    expect "interpreter: files by script" \
+        "$(ft files --script "$work/scripts/*" --format quiet | grep -c 'perl-upload\.bin')" 1
+    expect "interpreter: other programs left out" \
+        "$(ft files --script "$work/scripts/*" --format quiet | grep -c 'report\.csv')" 0
+    expect "interpreter: transfers by script" \
+        "$(ft transfers --script '*/send.pl' --path "$data/perl-upload.bin" --format csv | rows)" 1
+    expect "interpreter: another script" \
+        "$(ft files --script 'pool:*' --path "$data/perl-upload.bin" --format csv | rows)" 0
+    expect "interpreter: process script" \
+        "$(ft processes --pid "$perl_pid" --format csv | column script)" "$work/scripts/send.pl"
+    expect_match "interpreter: inspect process" "$(ft inspect process "$perl_pid" | tr '\n' ' ')" \
+        "Command line: +perl -I lib -w send\\.pl .*Directory: +$work/scripts .*Script: +$work/scripts/send\\.pl"
+    expect_match "interpreter: events" \
+        "$(ft events --type file_transfer --script "$work/scripts/send.pl" --jsonl)" \
+        "\"script\":\"$work/scripts/send\\.pl\"\\},\"file\":\\{\"path\":\"$data/perl-upload\\.bin\""
+    expect_match "interpreter: script column" "$(ft files --path "$data/perl-upload.bin" | head -1)" \
+        'CONFIDENCE +SCRIPT$'
+
+    # A PHP-FPM worker names its pool in its title after it is forked.
+    head -c 300000 /dev/urandom >"$data/pool-upload.bin"
+    (cd "$work/scripts" && TITLE='php-fpm: pool site1' perl send.pl "$data/pool-upload.bin") >/dev/null
+    settle
+    csv=$(ft files --path "$data/pool-upload.bin" --format csv)
+    expect "pool: script" "$(printf '%s\n' "$csv" | column process.script)" pool:site1
+    expect "pool: command line" "$(printf '%s\n' "$csv" | column process.command_line)" \
+        "php-fpm: pool site1"
+    expect "pool: files by pool" \
+        "$(ft files --script 'pool:site*' --format quiet | grep -c 'pool-upload\.bin')" 1
+
+else
+    echo "SKIP: perl is not installed; its interpreter checks did not run"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+    cat >"$work/scripts/send.py" <<'PYTHON'
+import os
+import socket
+import sys
+import time
+
+server = socket.create_server(("127.0.0.1", 0))
+if os.fork() == 0:
+    peer, _ = server.accept()
+    while peer.recv(65536):
+        pass
+    os._exit(0)
+client = socket.create_connection(server.getsockname())
+with open(sys.argv[1], "rb", buffering=0) as f:
+    while chunk := f.read(65536):
+        client.sendall(chunk)
+client.close()
+time.sleep(1)
+os.wait()
+PYTHON
+    head -c 300000 /dev/urandom >"$data/python-upload.bin"
+    (cd "$work/scripts" && python3 -W ignore send.py "$data/python-upload.bin")
+    settle
+    csv=$(ft files --path "$data/python-upload.bin" --format csv)
+    expect "python: script" "$(printf '%s\n' "$csv" | column process.script)" \
+        "$work/scripts/send.py"
+    expect_match "python: command line" "$(printf '%s\n' "$csv" | column process.command_line)" \
+        '^python3(\.[0-9]+)? -W ignore send\.py '
+else
+    echo "SKIP: python3 is not installed; its interpreter checks did not run"
+fi
+
 stop_agent
 expect "agent exit code" "$?" 0
 expect "socket removed" "$([ -e "$sock" ] && echo present || echo removed)" removed
@@ -512,6 +629,25 @@ expect "background: namespaced bundle not reported" \
     "$(ft files --path "$data/ns-*" --format csv | rows)" 0
 stop_agent
 expect "background agent exit code" "$?" 0
+
+# Without arguments a command line keeps only the program; the script is still named.
+if command -v perl >/dev/null 2>&1; then
+    printf '[process]\narguments = false\n' >"$work/no-arguments.toml"
+    start_agent --config "$work/no-arguments.toml" ||
+        { echo "FAIL: the agent did not start without arguments"; exit 1; }
+    (cd "$work/scripts" && perl send.pl "$data/perl-upload.bin" --token=s3cr3t) >/dev/null
+    settle
+    csv=$(ft files --path "$data/perl-upload.bin" --format csv)
+    expect "no arguments: command line" "$(printf '%s\n' "$csv" | column process.command_line)" perl
+    expect "no arguments: script" "$(printf '%s\n' "$csv" | column process.script)" \
+        "$work/scripts/send.pl"
+    expect "no arguments: the token stays out" \
+        "$({ ft files --jsonl; ft processes --jsonl; ft events --jsonl; } | grep -c s3cr3t)" 0
+    stop_agent
+    expect "no arguments agent exit code" "$?" 0
+else
+    echo "SKIP: perl is not installed; the arguments checks did not run"
+fi
 
 # A configuration file decides what is collected and how the commands print.
 cat >"$work/config.toml" <<CONFIG
