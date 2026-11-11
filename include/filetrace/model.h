@@ -6,6 +6,7 @@
 #define FT_COMM_MAX 16
 #define FT_EXE_MAX 256
 #define FT_PATH_MAX 4096
+#define FT_CMDLINE_MAX 4096
 #define FT_FS_TYPE_MAX 16
 
 #define FT_PROTO_TCP 6

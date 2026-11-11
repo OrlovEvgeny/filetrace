@@ -187,6 +187,7 @@ add_library(ft_core STATIC
     core/model.c
     core/net.c
     core/poller.c
+    core/process.c
     core/query.c
     core/state.c
     core/sysinfo.c
