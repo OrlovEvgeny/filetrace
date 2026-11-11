@@ -106,6 +106,21 @@ static void stats_collect(void *ctx, uint16_t type, const void *payload, size_t 
         memcpy(row, payload, size < sizeof(*row) ? size : sizeof(*row));
 }
 
+enum ft_agent_state ft_agent_ask(const struct ft_cli *cli, struct ft_row_stats *stats)
+{
+    struct ft_error err = {0};
+    struct ft_client *c = ft_client_connect(cli->socket_path, &err);
+    struct ft_query q;
+
+    memset(stats, 0, sizeof(*stats));
+    if (!c)
+        return err.code == FT_EXIT_PERMISSION ? FT_AGENT_UNREACHABLE : FT_AGENT_STOPPED;
+    ft_query_init(&q, FT_Q_STATS);
+    int code = ft_client_query(c, &q, stats_collect, stats, nullptr, &err);
+    ft_client_close(c);
+    return code == FT_EXIT_OK ? FT_AGENT_RUNNING : FT_AGENT_UNREACHABLE;
+}
+
 static int daemon_status(const struct ft_cli *cli)
 {
     struct ft_error err = {0};

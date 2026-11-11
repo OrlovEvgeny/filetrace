@@ -175,6 +175,15 @@ struct ft_session {
 int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_session *s);
 void ft_session_close(struct ft_session *s);
 
+enum ft_agent_state : uint8_t {
+    FT_AGENT_RUNNING,
+    FT_AGENT_STOPPED,
+    FT_AGENT_UNREACHABLE, /* serving a socket this user may not open */
+};
+
+/* Asks the running agent for its statistics, without reporting a failure to do so. */
+enum ft_agent_state ft_agent_ask(const struct ft_cli *cli, struct ft_row_stats *stats);
+
 struct ft_rows {
     unsigned char *data;
     size_t *offsets;
@@ -242,6 +251,9 @@ int ft_cmd_config(const struct ft_cli *cli, struct ft_args *a);
 /* Returns false when the command is unknown. */
 bool ft_help_command(FILE *out, const char *command);
 void ft_help_overview(FILE *out);
+
+/* What 'filetrace' alone prints: whether the agent is running, and the commands. */
+void ft_status_overview(const struct ft_cli *cli, FILE *out);
 
 /* Reports a failed query or lost events and returns the command's exit code. */
 int ft_finish_query(int code, const struct ft_error *err, const struct ft_msg_end *end,

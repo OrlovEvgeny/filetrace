@@ -1,5 +1,8 @@
 #include "cmd/cli.h"
 
+#include "filetrace/format.h"
+#include "ui/ui.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -473,36 +476,47 @@ static void help_help(FILE *o)
 
 static int cmd_help(const struct ft_cli *cli, struct ft_args *a);
 
+/* The commands of the everyday workflow come first; the rest follow them. */
 static const struct command commands[] = {
-    {"watch", "Live system overview", ft_cmd_watch, help_watch},
-    {"top", "Show top senders", ft_cmd_top, help_top},
-    {"files", "Inspect file transfers", ft_cmd_files, help_files},
-    {"transfers", "Inspect transfer records", ft_cmd_transfers, help_transfers},
-    {"processes", "Inspect process activity", ft_cmd_processes, help_processes},
-    {"connections", "Inspect network connections", ft_cmd_connections, help_connections},
-    {"flows", "Inspect network flows", ft_cmd_flows, help_flows},
+    {"watch", "Live monitoring", ft_cmd_watch, help_watch},
+    {"files", "File transfers", ft_cmd_files, help_files},
+    {"processes", "Process activity", ft_cmd_processes, help_processes},
+    {"connections", "Network connections", ft_cmd_connections, help_connections},
+    {"flows", "Network flow details", ft_cmd_flows, help_flows},
     {"inspect", "Inspect a file, process, socket, flow or address", ft_cmd_inspect, help_inspect},
-    {"events", "Show the collector's raw events", ft_cmd_events, help_events},
-    {"stats", "Display collection statistics", ft_cmd_stats, help_stats},
-    {"daemon", "Run or control the background daemon", ft_cmd_daemon, help_daemon},
+    {"events", "Raw events", ft_cmd_events, help_events},
+    {"stats", "Agent statistics", ft_cmd_stats, help_stats},
+    {"doctor", "System diagnostics", ft_cmd_doctor, help_doctor},
     {"config", "Show or validate the configuration", ft_cmd_config, help_config},
-    {"doctor", "Diagnose system compatibility", ft_cmd_doctor, help_doctor},
-    {"capabilities", "Show supported features", ft_cmd_capabilities, help_capabilities},
-    {"version", "Display version information", ft_cmd_version, help_version},
-    {"help", "Show command help", cmd_help, help_help},
+    {"version", "Version and build information", ft_cmd_version, help_version},
+    {"top", "Highest-volume processes, files or destinations", ft_cmd_top, help_top},
+    {"transfers", "Transfer records, with unattributed bytes", ft_cmd_transfers, help_transfers},
+    {"capabilities", "Supported features", ft_cmd_capabilities, help_capabilities},
+    {"daemon", "Run or control the background daemon", ft_cmd_daemon, help_daemon},
+    {"help", "Help for a command", cmd_help, help_help},
 };
+
+constexpr size_t MAIN_COMMANDS = 11;
+
+static void list_commands(FILE *o)
+{
+    fputs("Main commands:\n", o);
+    for (size_t i = 0; i < FT_ARRAY_LEN(commands); i++) {
+        if (i == MAIN_COMMANDS)
+            fputs("\nMore commands:\n", o);
+        fprintf(o, "  %-13s %s\n", commands[i].name, commands[i].summary);
+    }
+}
 
 void ft_help_overview(FILE *o)
 {
     fputs("Filetrace - File-to-Network Observability\n"
           "\n"
           "Usage:\n"
-          "  filetrace [--socket <path>] <command> [options]\n"
-          "\n"
-          "Commands:\n",
+          "  filetrace [--socket <path>] [--config <path>] <command> [options]\n"
+          "\n",
           o);
-    for (size_t i = 0; i < FT_ARRAY_LEN(commands); i++)
-        fprintf(o, "  %-13s %s\n", commands[i].name, commands[i].summary);
+    list_commands(o);
     fprintf(o,
             "\n"
             "Global options:\n"
@@ -517,6 +531,51 @@ void ft_help_overview(FILE *o)
             "\n"
             "See 'filetrace help <command>' for a command's options and examples.\n",
             ft_default_socket_path());
+}
+
+void ft_status_overview(const struct ft_cli *cli, FILE *o)
+{
+    struct ft_row_stats *stats = calloc(1, sizeof(*stats));
+    bool styled = ft_term_styled(o);
+    char rate[32];
+
+    if (!stats)
+        return;
+    fputs("Filetrace - File-to-Network Observability\n\n", o);
+    switch (ft_agent_ask(cli, stats)) {
+    case FT_AGENT_RUNNING: {
+        /* Tenths of a percent of the events that reached the collector. */
+        uint64_t delivered =
+            stats->events_received
+                ? (stats->events_received - stats->events_dropped) * 1000 / stats->events_received
+                : 1000;
+        ft_format_rate(stats->tx_rate, rate, sizeof(rate));
+        fprintf(o, "%s\u25cf RUNNING%s   %s, %s mode\n", styled ? "\033[32m" : "",
+                styled ? FT_STYLE_RESET : "", stats->backend, stats->mode);
+        fprintf(o,
+                "  %u active transfers   %u processes   %s outbound   "
+                "%llu.%llu%% of events delivered\n",
+                stats->active_transfers, stats->active_processes, rate,
+                (unsigned long long)(delivered / 10), (unsigned long long)(delivered % 10));
+        break;
+    }
+    case FT_AGENT_UNREACHABLE:
+        fprintf(o, "%s\u25cf RUNNING%s   its socket is not accessible to this user; use sudo\n",
+                styled ? "\033[33m" : "", styled ? FT_STYLE_RESET : "");
+        break;
+    default:
+        fputs("\u25cb NOT RUNNING   'sudo filetrace watch' collects for as long as it runs;\n"
+              "                'sudo filetrace daemon run' collects in the background\n",
+              o);
+        break;
+    }
+    free(stats);
+
+    fputc('\n', o);
+    list_commands(o);
+    fputs("\nSee 'filetrace help' for the options, and 'filetrace help <command>' for a\n"
+          "command's own.\n",
+          o);
 }
 
 bool ft_help_command(FILE *out, const char *name)
@@ -580,7 +639,16 @@ int main(int argc, char **argv)
     }
 
     const char *name = ft_args_take(&args);
-    if (!name || strcmp(name, "-h") == 0 || strcmp(name, "--help") == 0) {
+    if (!name) {
+        /* A broken configuration file has been reported; the overview is still due. */
+        ft_cli_load_config(&cli);
+        if (!cli.socket_path)
+            cli.socket_path = ft_default_socket_path();
+        ft_status_overview(&cli, stdout);
+        ft_cli_free_config(&cli);
+        return FT_EXIT_OK;
+    }
+    if (strcmp(name, "-h") == 0 || strcmp(name, "--help") == 0) {
         ft_help_overview(stdout);
         return FT_EXIT_OK;
     }

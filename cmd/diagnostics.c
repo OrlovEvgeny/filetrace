@@ -66,37 +66,8 @@ static const char *status_word(int exit_code)
     }
 }
 
-static void stats_collect(void *ctx, uint16_t type, const void *payload, size_t size)
-{
-    struct ft_row_stats *row = ctx;
-    if (type == FT_MSG_ROW_STATS)
-        memcpy(row, payload, size < sizeof(*row) ? size : sizeof(*row));
-}
-
-enum agent_state : uint8_t {
-    AGENT_RUNNING,
-    AGENT_STOPPED,
-    AGENT_UNREACHABLE,
-};
-
-/* What the running agent reports about its own pipeline, when one can be asked. */
-static enum agent_state ask_agent(const struct ft_cli *cli, struct ft_row_stats *stats)
-{
-    struct ft_error err = {0};
-    struct ft_client *c = ft_client_connect(cli->socket_path, &err);
-    struct ft_query q;
-
-    memset(stats, 0, sizeof(*stats));
-    if (!c)
-        return err.code == FT_EXIT_PERMISSION ? AGENT_UNREACHABLE : AGENT_STOPPED;
-    ft_query_init(&q, FT_Q_STATS);
-    int code = ft_client_query(c, &q, stats_collect, stats, nullptr, &err);
-    ft_client_close(c);
-    return code == FT_EXIT_OK ? AGENT_RUNNING : AGENT_UNREACHABLE;
-}
-
 static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info *host,
-                        enum agent_state agent, const struct ft_row_stats *stats, int code)
+                        enum ft_agent_state agent, const struct ft_row_stats *stats, int code)
 {
     char a[64];
     bool probes = false;
@@ -152,7 +123,7 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
         printf("  Reason: %s.\n", d->caps.items[0].reason);
 
     printf("\nEVENT PIPELINE\n");
-    if (agent == AGENT_RUNNING) {
+    if (agent == FT_AGENT_RUNNING) {
         printf("  %-18s%s, PID %u, %s mode\n", "Agent:", "running", stats->pid, stats->mode);
         ft_format_count(stats->events_received, a, sizeof(a));
         printf("  %-18s%s\n", "Events received:", a);
@@ -166,7 +137,7 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
         } else {
             printf("  %-18s%s\n", "Event log:", "off");
         }
-    } else if (agent == AGENT_UNREACHABLE) {
+    } else if (agent == FT_AGENT_UNREACHABLE) {
         printf("  %-18s%s\n", "Agent:", "running, but its socket is not accessible to this user");
     } else {
         printf("  %-18s%s\n", "Agent:",
@@ -176,14 +147,14 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
     }
 
     printf("\nSTATUS: %s\n", status_word(code));
-    if (agent == AGENT_RUNNING && stats->health != FT_HEALTH_OK)
+    if (agent == FT_AGENT_RUNNING && stats->health != FT_HEALTH_OK)
         printf("\nThe running agent has lost events recently; see 'filetrace stats'.\n");
     if (d->advice[0])
         printf("\n%s\n", d->advice);
 }
 
 static void doctor_json(const struct ft_diagnosis *d, const struct ft_host_info *host,
-                        enum agent_state agent, const struct ft_row_stats *stats, int code)
+                        enum ft_agent_state agent, const struct ft_row_stats *stats, int code)
 {
     static const char *const levels[] = {"ok", "warn", "fail"};
     static const char *const agents[] = {"running", "stopped", "unreachable"};
@@ -232,7 +203,7 @@ static void doctor_json(const struct ft_diagnosis *d, const struct ft_host_info 
         putchar('}');
     }
     printf("],\"agent\":{\"state\":\"%s\"", agents[agent]);
-    if (agent == AGENT_RUNNING)
+    if (agent == FT_AGENT_RUNNING)
         printf(",\"pid\":%u,\"mode\":\"%s\",\"events_received\":%llu,\"events_dropped\":%llu,"
                "\"ring_buffer_bytes\":%llu,\"event_log_bytes\":%llu",
                stats->pid, stats->mode, (unsigned long long)stats->events_received,
@@ -277,11 +248,11 @@ int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a)
 
     ft_sysinfo_host(&host);
     ft_backend_native()->diagnose(&cfg, d);
-    enum agent_state agent = ask_agent(cli, stats);
+    enum ft_agent_state agent = ft_agent_ask(cli, stats);
 
     /* Probes that attach do not help an agent that is dropping what they produce. */
     int code = d->exit_code;
-    if (code == FT_EXIT_OK && agent == AGENT_RUNNING && stats->health != FT_HEALTH_OK)
+    if (code == FT_EXIT_OK && agent == FT_AGENT_RUNNING && stats->health != FT_HEALTH_OK)
         code = FT_EXIT_PARTIAL;
 
     if (format == FT_FMT_JSON)
