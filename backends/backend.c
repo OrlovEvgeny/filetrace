@@ -8,9 +8,12 @@ void ft_backend_config_defaults(struct ft_backend_config *cfg)
 {
     *cfg = (struct ft_backend_config){
         .mode = FT_MODE_STANDARD,
+        .track_read = true,
+        .track_sendfile = true,
         .queue_bytes = 4u * 1024u * 1024u,
         .agg_entries = 16384,
         .known_files = 16384,
+        .drain_batch = 512,
         .corr_window_ns = 2 * FT_NS_PER_SEC,
     };
 }

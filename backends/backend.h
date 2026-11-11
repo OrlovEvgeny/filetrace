@@ -17,9 +17,12 @@ bool ft_probes_parse(const char *text, enum ft_probes *p);
 struct ft_backend_config {
     enum ft_mode mode;
     enum ft_probes probes;
+    bool track_read;     /* follow reads of regular files, for read-write attribution */
+    bool track_sendfile; /* follow sendfile, for exact attribution */
     uint32_t queue_bytes;
     uint32_t agg_entries;    /* distinct counters accumulated between flushes */
     uint32_t known_files;    /* file identities remembered as already described */
+    uint32_t drain_batch;    /* counters read from the kernel per call */
     uint64_t corr_window_ns; /* longest read-to-send gap that still correlates */
 };
 

@@ -150,6 +150,22 @@ static uint32_t round_up_pow2(uint32_t v, uint32_t min)
     return p;
 }
 
+static bool probe_wanted(const struct ft_probe_def *def, const struct ft_backend_config *cfg)
+{
+    if (cfg->mode < def->min_mode)
+        return false;
+    switch (def->group) {
+    case FT_PG_FILE_READ:
+        return cfg->track_read;
+    case FT_PG_SENDFILE:
+        return cfg->track_sendfile;
+    case FT_PG_FILE_END:
+        return cfg->track_read || cfg->track_sendfile;
+    default:
+        return true;
+    }
+}
+
 /* Whether any probe that identifies files is going to be loaded. */
 static bool enabled_file_probes(const struct ft_probe_set *set,
                                 const bool enabled[FT_LINUX_MAX_PROBES])
@@ -233,7 +249,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     for (size_t i = 0; i < set->count; i++) {
         const struct ft_probe_def *def = &set->defs[i];
 
-        enabled[i] = cfg->mode >= def->min_mode;
+        enabled[i] = probe_wanted(def, cfg);
         if (!enabled[i]) {
             out->status[i].state = FT_PROBE_NOT_NEEDED;
             continue;
@@ -355,8 +371,6 @@ bool ft_linux_network_attached(const struct ft_linux_probes *p)
         return false;
     return ft_linux_group_attached(p, FT_PG_NET);
 }
-
-constexpr size_t DRAIN_BATCH = 512;
 
 struct agg_record {
     struct ft_bpf_agg_key key;
@@ -624,7 +638,7 @@ static void drain_counters(struct ft_backend *b)
     struct ft_bpf_agg_key cursor;
     void *in = nullptr;
     for (;;) {
-        __u32 count = (__u32)DRAIN_BATCH;
+        __u32 count = b->cfg.drain_batch;
         int err = bpf_map_lookup_and_delete_batch(previous, in, &cursor, b->keys, b->vals, &count,
                                                   nullptr);
         if (err && errno != ENOENT) {
@@ -722,7 +736,7 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
 {
-    ft_linux_capabilities(&b->probes, b->cfg.mode, out);
+    ft_linux_capabilities(&b->probes, &b->cfg, out);
 }
 
 static void backend_close(struct ft_backend *b)
@@ -759,6 +773,8 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         return nullptr;
     }
     b->cfg = *cfg;
+    if (b->cfg.drain_batch == 0)
+        b->cfg.drain_batch = 512;
     b->sink = *sink;
 
     int rc = ft_linux_probes_load(cfg, &b->probes);
@@ -805,8 +821,8 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
 
     b->ring = ring_buffer__new(bpf_map__fd(events), on_ring_event, b, nullptr);
     b->cpu_values = calloc((size_t)(b->ncpus > 0 ? b->ncpus : 1), sizeof(uint64_t));
-    b->keys = calloc(DRAIN_BATCH, sizeof(*b->keys));
-    b->vals = calloc(DRAIN_BATCH, sizeof(*b->vals));
+    b->keys = calloc(b->cfg.drain_batch, sizeof(*b->keys));
+    b->vals = calloc(b->cfg.drain_batch, sizeof(*b->vals));
     b->transfers = calloc(cfg->agg_entries, sizeof(*b->transfers));
     if (!b->ring || b->ncpus <= 0 || !b->cpu_values || !b->keys || !b->vals || !b->transfers) {
         ft_error_set(err, FT_EXIT_ERROR, "Cannot set up event collection: %s",

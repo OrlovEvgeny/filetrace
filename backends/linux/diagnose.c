@@ -72,12 +72,14 @@ static const char *group_problem(const struct ft_linux_probes *p, enum ft_probe_
     return nullptr;
 }
 
-void ft_linux_capabilities(const struct ft_linux_probes *p, enum ft_mode mode,
+void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
                            struct ft_capabilities *out)
 {
     char why[240];
     const char *problem;
     const char *minimal = "disabled in minimal mode";
+    const char *configured = "turned off in the configuration";
+    enum ft_mode mode = cfg->mode;
     bool kprobes = p->set->kind == FT_PROBES_KPROBE;
     bool net = ft_linux_network_attached(p);
     bool v6 = ft_linux_group_attached(p, FT_PG_NET_IPV6);
@@ -133,7 +135,10 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, enum ft_mode mode,
         ft_capability_set(out, FT_FEAT_READ_SEND, FT_CAP_DISABLED, "%s", minimal);
     } else {
         problem = group_problem(p, FT_PG_FILE_READ, why, sizeof(why));
-        if (problem) {
+        if (!cfg->track_read) {
+            ft_capability_set(out, FT_FEAT_FILE_READ, FT_CAP_DISABLED, "%s", configured);
+            ft_capability_set(out, FT_FEAT_READ_SEND, FT_CAP_DISABLED, "%s", configured);
+        } else if (problem) {
             ft_capability_set(out, FT_FEAT_FILE_READ, FT_CAP_UNAVAILABLE, "%s", problem);
             ft_capability_set(out, FT_FEAT_READ_SEND, FT_CAP_UNAVAILABLE, "%s", problem);
         } else {
@@ -149,7 +154,9 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, enum ft_mode mode,
         }
 
         problem = group_problem(p, FT_PG_SENDFILE, why, sizeof(why));
-        if (problem)
+        if (!cfg->track_sendfile)
+            ft_capability_set(out, FT_FEAT_SENDFILE, FT_CAP_DISABLED, "%s", configured);
+        else if (problem)
             ft_capability_set(out, FT_FEAT_SENDFILE, FT_CAP_UNAVAILABLE, "%s", problem);
         else if (!net)
             ft_capability_set(out, FT_FEAT_SENDFILE, FT_CAP_UNAVAILABLE,
@@ -321,7 +328,7 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     bool have_network = ft_linux_network_attached(&probes);
     bool kprobes = probes.set->kind == FT_PROBES_KPROBE;
 
-    ft_linux_capabilities(&probes, cfg.mode, &out->caps);
+    ft_linux_capabilities(&probes, &cfg, &out->caps);
     snprintf(out->backend, sizeof(out->backend), "Linux eBPF (%s)",
              kprobes ? "kprobes" : "trampolines");
     ft_linux_probes_unload(&probes);
