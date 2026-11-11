@@ -97,8 +97,6 @@ jobs:
       contents: write # tags the commit and publishes the release
       id-token: write # signs the attestations
       attestations: write # stores the attestations
-    outputs:
-      site: ${{ steps.site.outcome == 'success' }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -110,6 +108,7 @@ jobs:
       LATEST: ${{ needs.plan.outputs.latest }}
       PRERELEASE: ${{ needs.plan.outputs.prerelease }}
       SIGNED: ${{ secrets.FILETRACE_GPG_KEY != '' && secrets.FILETRACE_APK_KEY != '' }}
+      HOSTED: ${{ secrets.R2_ACCOUNT_ID != '' && secrets.R2_BUCKET_NAME != '' && secrets.R2_ACCESS_KEY_ID != '' && secrets.R2_SECRET_ACCESS_KEY != '' }}
       TAPPED: ${{ secrets.HOMEBREW_TAP_KEY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -151,7 +150,7 @@ jobs:
           cp "$RUNNER_TEMP"/signed/*.rpm "$RUNNER_TEMP"/signed/*.apk dist/
       - name: Warn about unsigned packages
         if: env.SIGNED != 'true'
-        run: echo "::warning::no signing keys are set, so the rpm and apk packages are unsigned and the package repositories are left as they are"
+        run: echo "::warning::no signing keys are set, so the rpm and apk packages are unsigned"
 
       - name: Write the checksums
         working-directory: dist
@@ -197,13 +196,21 @@ jobs:
               gh api "repos/$GH_REPO/git/refs" -f ref="refs/heads/$LINE" -f sha="$COMMIT" --silent
           fi
 
-      - name: Build the download site
+      # The site is built from what is public, so it serves the very files of the release.
+      - name: Publish the download site
         id: site
-        if: env.SIGNED == 'true' && needs.plan.outputs.prerelease != 'true'
+        if: env.SIGNED == 'true' && env.HOSTED == 'true'
         uses: $/.github/actions/site
         with:
           gpg-key: ${{ secrets.FILETRACE_GPG_KEY }}
           apk-key: ${{ secrets.FILETRACE_APK_KEY }}
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-bucket-name: ${{ secrets.R2_BUCKET_NAME }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      - name: Warn about a download site left as it is
+        if: env.SIGNED != 'true' || env.HOSTED != 'true'
+        run: echo "::warning::the signing keys or the R2 credentials are not set, so the download site is left as it is"
 
       - name: Check out the Homebrew tap
         if: env.TAPPED == 'true' && needs.plan.outputs.latest == 'true'
@@ -227,22 +234,6 @@ jobs:
                   commit --quiet --message "filetrace $VERSION"
               git push --quiet
           fi
-
-  site:
-    name: Deploy the download site
-    needs: publish
-    if: needs.publish.outputs.site == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      pages: write # publishes the site
-      id-token: write # proves to Pages where the deployment comes from
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
   changelog:
     name: Propose the changelog entry

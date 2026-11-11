@@ -1,7 +1,7 @@
 name: Download site
 
-# Rebuilds the package repositories from the published releases, for when a
-# release could not update them or the site has to be restored.
+# Rebuilds the download site from the published releases and uploads it, for
+# when a release could not or the bucket has to be restored.
 on:
   workflow_dispatch:
 
@@ -13,31 +13,21 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build
+  publish:
+    name: Publish
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: $/.github/actions/mise
       - uses: $/.github/actions/site
         with:
           gpg-key: ${{ secrets.FILETRACE_GPG_KEY }}
           apk-key: ${{ secrets.FILETRACE_APK_KEY }}
-
-  deploy:
-    name: Deploy
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      pages: write # publishes the site
-      id-token: write # proves to Pages where the deployment comes from
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-bucket-name: ${{ secrets.R2_BUCKET_NAME }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
