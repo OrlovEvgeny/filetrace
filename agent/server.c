@@ -50,6 +50,7 @@ struct agent {
     struct ft_row_event *live; /* a record on its way to followers */
     struct ft_poller poller;
     struct ft_scrape *scrape;
+    struct ft_otlp *otlp;
 
     uint64_t start_wall_ns;
     uint64_t rate_mono_ns;
@@ -75,6 +76,17 @@ void ft_agent_config_defaults(struct ft_agent_config *cfg)
     cfg->socket_path = ft_default_socket_path();
     cfg->session_fd = -1;
     cfg->flush_interval_ms = 250;
+
+    ft_strlcpy(cfg->prometheus.listen, "127.0.0.1:9464", sizeof(cfg->prometheus.listen));
+    ft_strlcpy(cfg->otlp.endpoint, "127.0.0.1:4317", sizeof(cfg->otlp.endpoint));
+    cfg->otlp.logs = true;
+    cfg->otlp.metrics = true;
+    cfg->otlp.file_paths = true;
+    cfg->otlp.event_types = 1u << FT_REC_FILE_TRANSFER | 1u << FT_REC_EVENT_LOSS;
+    cfg->otlp.batch_size = 1024;
+    cfg->otlp.flush_interval_ns = 5 * FT_NS_PER_SEC;
+    cfg->otlp.metrics_interval_ns = 30 * FT_NS_PER_SEC;
+    cfg->otlp.timeout_ns = 10 * FT_NS_PER_SEC;
 }
 
 static void on_event(void *ctx, const struct ft_event *ev)
@@ -197,6 +209,7 @@ static void on_record(void *ctx, const struct ft_row_event *row)
     struct agent *d = ctx;
     struct ft_row_event *live = d->live;
 
+    ft_otlp_record(d->otlp, row);
     for (size_t i = 0; i < d->nclients; i++) {
         struct client *c = &d->clients[i];
 
@@ -489,6 +502,7 @@ static void agent_close(struct agent *d)
     while (d->nclients)
         client_drop(d, d->nclients - 1);
     ft_scrape_close(d->scrape);
+    ft_otlp_close(d->otlp);
     if (d->listen_fd >= 0) {
         close(d->listen_fd);
         unlink(d->cfg->socket_path);
@@ -537,6 +551,11 @@ static bool agent_open(struct agent *d, struct ft_error *err)
         if (!d->scrape)
             return false;
     }
+    if (cfg->otlp.enabled && (cfg->otlp.logs || cfg->otlp.metrics)) {
+        d->otlp = ft_otlp_open(&cfg->otlp, &src, err);
+        if (!d->otlp)
+            return false;
+    }
     return true;
 }
 
@@ -582,6 +601,7 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
         for (size_t i = 0; i < d->nclients; i++)
             ft_poller_add(p, d->clients[i].fd, d->clients[i].out_len ? POLLIN | POLLOUT : POLLIN);
         ft_scrape_poll(d->scrape, p);
+        ft_otlp_poll(d->otlp, p);
 
         int ready = ft_poller_wait(p, ft_clock_mono_ns());
         if (ready < 0 && errno != EINTR) {
@@ -619,6 +639,7 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
         if (ft_poller_revents(p, listen_slot) & POLLIN)
             accept_clients(d);
         ft_scrape_dispatch(d->scrape, p, now_ns);
+        ft_otlp_dispatch(d->otlp, p, now_ns);
     }
 
     ft_log(FT_LOG_INFO, "stopping");

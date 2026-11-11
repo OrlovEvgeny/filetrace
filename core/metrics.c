@@ -128,20 +128,6 @@ static const struct ft_metric memory_usage = {
     .description = "Resident memory of the agent.",
 };
 
-static const char *loss_label(enum ft_loss_kind kind)
-{
-    switch (kind) {
-    case FT_LOSS_EVENT_QUEUE:
-        return "event_queue";
-    case FT_LOSS_AGGREGATION:
-        return "counter_table";
-    case FT_LOSS_SOCKET_IDENT:
-        return "socket_identity";
-    default:
-        return "unknown";
-    }
-}
-
 static void emit_series(const struct ft_series *s, enum ft_series_kind kind,
                         const struct ft_metric *metric, ft_metric_fn *emit, void *ctx)
 {
@@ -204,7 +190,7 @@ void ft_metrics_collect(const struct ft_metrics_input *in, ft_metric_fn *emit, v
         struct ft_metric_point pt = {
             .metric = &events_dropped,
             .value = stats->loss[k],
-            .attrs = {{FT_ATTR_LOSS_KIND, loss_label((enum ft_loss_kind)k)}},
+            .attrs = {{FT_ATTR_LOSS_KIND, ft_loss_kind_label((enum ft_loss_kind)k)}},
             .attr_count = 1,
         };
         emit(ctx, &pt);

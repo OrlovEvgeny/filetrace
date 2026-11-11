@@ -78,7 +78,17 @@ static const char every_section[] = "[agent]\n"
                                     "\n"
                                     "[prometheus]\n"
                                     "enabled = true\n"
-                                    "listen = \"127.0.0.1:9900\"\n";
+                                    "listen = \"127.0.0.1:9900\"\n"
+                                    "\n"
+                                    "[otlp]\n"
+                                    "enabled = true\n"
+                                    "endpoint = \"unix:/run/otelcol.sock\"\n"
+                                    "metrics = false\n"
+                                    "events = [\"file_transfer\", \"process_exec\"]\n"
+                                    "file_paths = false\n"
+                                    "batch_size = 256\n"
+                                    "flush_interval = \"500ms\"\n"
+                                    "timeout = \"3s\"\n";
 
 static void reads_every_section(void)
 {
@@ -101,6 +111,16 @@ static void reads_every_section(void)
     CHECK_U64(cfg->agent.state_cfg.max_metric_series, 512);
     CHECK(cfg->agent.prometheus.enabled);
     CHECK_STR(cfg->agent.prometheus.listen, "127.0.0.1:9900");
+    CHECK(cfg->agent.otlp.enabled);
+    CHECK(cfg->agent.otlp.logs);
+    CHECK(!cfg->agent.otlp.metrics);
+    CHECK(!cfg->agent.otlp.file_paths);
+    CHECK_STR(cfg->agent.otlp.endpoint, "unix:/run/otelcol.sock");
+    CHECK_U64(cfg->agent.otlp.event_types, 1u << FT_REC_FILE_TRANSFER | 1u << FT_REC_PROCESS_EXEC);
+    CHECK_U64(cfg->agent.otlp.batch_size, 256);
+    CHECK_U64(cfg->agent.otlp.flush_interval_ns, 500 * FT_NS_PER_MS);
+    CHECK_U64(cfg->agent.otlp.metrics_interval_ns, 30 * FT_NS_PER_SEC);
+    CHECK_U64(cfg->agent.otlp.timeout_ns, 3 * FT_NS_PER_SEC);
 
     CHECK_U64(cfg->warning_count, 7);
     CHECK(warned(cfg, "[network] tc_egress"));
@@ -204,6 +224,9 @@ static void reports_what_is_wrong(void)
     rejects("[limits]\nflows = 3\n", "[limits] flows: expected a whole number from 64");
     rejects("[filters]\nexclude_paths = \"/proc/*\"\n", "expected a list of strings");
     rejects("[filters]\nexclude_paths = [\"/proc/*\"\n", "expected ',' or ']'");
+    rejects("[otlp]\nevents = [\"file_sent\"]\n", "\"file_sent\" is not an event type");
+    rejects("[otlp]\nbatch_size = 5\n", "[otlp] batch_size: expected a whole number from 16");
+    rejects("[prometheus]\nport = 9464\n", "unknown setting 'port' in [prometheus]");
     rejects("[agent]\nsocket = \"/run/x\n", ":2: the string is not closed");
     rejects("[agent]\nenabled = true false\n", ":2: unexpected text after the value");
 
@@ -239,6 +262,9 @@ static void prints_what_it_reads(void)
     CHECK_U64(second->storage_retention_ns, first->storage_retention_ns);
     CHECK(second->agent.prometheus.enabled);
     CHECK_STR(second->agent.prometheus.listen, "127.0.0.1:9900");
+    CHECK_U64(second->agent.otlp.event_types, first->agent.otlp.event_types);
+    CHECK_U64(second->agent.otlp.flush_interval_ns, 500 * FT_NS_PER_MS);
+    CHECK(!second->agent.otlp.file_paths);
 
     /* Printing the defaults reads back without a warning. */
     free(text);

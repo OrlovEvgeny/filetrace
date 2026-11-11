@@ -110,4 +110,7 @@ struct ft_sink {
 
 const char *ft_loss_kind_name(enum ft_loss_kind kind);
 
+/* The kind as exported telemetry spells it: "event_queue". */
+const char *ft_loss_kind_label(enum ft_loss_kind kind);
+
 #endif

@@ -71,3 +71,17 @@ const char *ft_loss_kind_name(enum ft_loss_kind kind)
         return "unknown";
     }
 }
+
+const char *ft_loss_kind_label(enum ft_loss_kind kind)
+{
+    switch (kind) {
+    case FT_LOSS_EVENT_QUEUE:
+        return "event_queue";
+    case FT_LOSS_AGGREGATION:
+        return "counter_table";
+    case FT_LOSS_SOCKET_IDENT:
+        return "socket_identity";
+    default:
+        return "unknown";
+    }
+}

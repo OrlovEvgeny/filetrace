@@ -1,8 +1,13 @@
 #include "unit/test.h"
 
 #include "agent/agent.h"
+#include "exporters/otlp.h"
 #include "filetrace/client.h"
 #include "filetrace/clock.h"
+#include "rpc/grpc.h"
+
+#include "opentelemetry/proto/collector/logs/v1/logs_service.pb-c.h"
+#include "opentelemetry/proto/collector/metrics/v1/metrics_service.pb-c.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -499,6 +504,133 @@ static void serves_metrics_to_a_scraper(void)
     free(page);
 }
 
+/* Stands in for an OpenTelemetry collector and adds up what it is sent. */
+struct collector {
+    uint64_t transfer_bytes;
+    uint64_t sent_bytes;
+    char path[64];
+};
+
+static void collect_logs(struct collector *c, const uint8_t *request, size_t size)
+{
+    Opentelemetry__Proto__Collector__Logs__V1__ExportLogsServiceRequest *logs =
+        opentelemetry__proto__collector__logs__v1__export_logs_service_request__unpack(
+            nullptr, size, request);
+
+    CHECK(logs != nullptr && logs->n_resource_logs == 1);
+    if (!logs)
+        return;
+    const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope = logs->resource_logs[0]->scope_logs[0];
+    for (size_t i = 0; i < scope->n_log_records; i++) {
+        const Opentelemetry__Proto__Logs__V1__LogRecord *r = scope->log_records[i];
+        for (size_t k = 0; k < r->n_attributes; k++) {
+            if (strcmp(r->attributes[k]->key, "filetrace.transfer.bytes") == 0)
+                c->transfer_bytes += (uint64_t)r->attributes[k]->value->int_value;
+            if (strcmp(r->attributes[k]->key, "file.path") == 0)
+                ft_strlcpy(c->path, r->attributes[k]->value->string_value, sizeof(c->path));
+        }
+    }
+    opentelemetry__proto__collector__logs__v1__export_logs_service_request__free_unpacked(logs,
+                                                                                          nullptr);
+}
+
+static void collect_metrics(struct collector *c, const uint8_t *request, size_t size)
+{
+    Opentelemetry__Proto__Collector__Metrics__V1__ExportMetricsServiceRequest *metrics =
+        opentelemetry__proto__collector__metrics__v1__export_metrics_service_request__unpack(
+            nullptr, size, request);
+
+    CHECK(metrics != nullptr && metrics->n_resource_metrics == 1);
+    if (!metrics)
+        return;
+    const Opentelemetry__Proto__Metrics__V1__ScopeMetrics *scope =
+        metrics->resource_metrics[0]->scope_metrics[0];
+    for (size_t i = 0; i < scope->n_metrics; i++) {
+        const Opentelemetry__Proto__Metrics__V1__Metric *m = scope->metrics[i];
+        /* Cumulative: the latest value stands for all before it. */
+        if (strcmp(m->name, "filetrace.file.sent") == 0 && m->sum->n_data_points == 1)
+            c->sent_bytes = (uint64_t)m->sum->data_points[0]->as_int;
+    }
+    opentelemetry__proto__collector__metrics__v1__export_metrics_service_request__free_unpacked(
+        metrics, nullptr);
+}
+
+static void collector_call(void *ctx, struct ft_grpc_call *call, const char *path,
+                           const uint8_t *request, size_t size)
+{
+    if (strcmp(path, FT_OTLP_LOGS_PATH) == 0) {
+        collect_logs(ctx, request, size);
+    } else if (strcmp(path, FT_OTLP_METRICS_PATH) == 0) {
+        collect_metrics(ctx, request, size);
+    } else {
+        ft_grpc_finish(call, FT_GRPC_UNIMPLEMENTED, path);
+        return;
+    }
+    /* An empty response message: nothing was refused. */
+    ft_grpc_send(call, nullptr, 0);
+    ft_grpc_finish(call, FT_GRPC_OK, nullptr);
+}
+
+static void collector_end(void *ctx, struct ft_grpc_call *call)
+{
+    (void)ctx;
+    (void)call;
+}
+
+static void export_to(struct ft_agent_config *cfg, void *arg)
+{
+    cfg->otlp.enabled = true;
+    ft_strlcpy(cfg->otlp.endpoint, arg, sizeof(cfg->otlp.endpoint));
+    cfg->otlp.flush_interval_ns = 50 * FT_NS_PER_MS;
+    cfg->otlp.metrics_interval_ns = 50 * FT_NS_PER_MS;
+}
+
+/* The collector starts after the agent has already failed to reach it once. */
+static void exports_to_a_collector_that_appears_later(void)
+{
+    static struct ft_poller poller;
+    char dir[] = "/tmp/filetrace-otlp-XXXXXX";
+    char endpoint[96];
+    struct collector seen = {0};
+    struct ft_grpc_service service = {
+        .ctx = &seen,
+        .on_call = collector_call,
+        .on_end = collector_end,
+    };
+    struct ft_net_addr addr;
+    struct ft_error err = {0};
+    int pair[2];
+
+    CHECK(mkdtemp(dir) != nullptr);
+    snprintf(endpoint, sizeof(endpoint), "unix:%s/collector.sock", dir);
+    CHECK(ft_net_addr_parse(endpoint, &addr));
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    pid_t pid = start_agent_with(&scripted_ops, nullptr, pair[1], pair[0], export_to, endpoint);
+    close(pair[1]);
+    pause_ms(200);
+
+    int listen_fd = ft_net_listen(&addr, &err);
+    CHECK(listen_fd >= 0);
+    struct ft_grpc_server *server = ft_grpc_server_new(listen_fd, true, &service);
+    uint64_t give_up_ns = ft_clock_mono_ns() + 10 * FT_NS_PER_SEC;
+    while ((seen.transfer_bytes == 0 || seen.sent_bytes == 0) && ft_clock_mono_ns() < give_up_ns) {
+        uint64_t now_ns = ft_clock_mono_ns();
+        ft_poller_begin(&poller, now_ns + 20 * FT_NS_PER_MS);
+        ft_grpc_server_poll(server, &poller);
+        ft_poller_wait(&poller, now_ns);
+        ft_grpc_server_dispatch(server, &poller);
+    }
+    CHECK_U64(seen.transfer_bytes, 148293012);
+    CHECK_U64(seen.sent_bytes, 148293012);
+    CHECK_STR(seen.path, "/data/export/report, \"final\".csv");
+
+    close(pair[0]);
+    CHECK_U64(wait_exit(pid), FT_EXIT_OK);
+    ft_grpc_server_free(server);
+    unlink(endpoint + 5);
+    rmdir(dir);
+}
+
 void test_agent(void)
 {
     serves_queries_over_a_socket();
@@ -506,4 +638,5 @@ void test_agent(void)
     streams_events_to_a_follower();
     reports_a_backend_that_cannot_start();
     serves_metrics_to_a_scraper();
+    exports_to_a_collector_that_appears_later();
 }

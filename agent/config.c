@@ -34,8 +34,6 @@ struct ft_config *ft_config_new(void)
     cfg->track_process_lifecycle = true;
     cfg->timestamps = true;
     ft_strlcpy(cfg->format, "table", sizeof(cfg->format));
-    ft_strlcpy(cfg->agent.prometheus.listen, "127.0.0.1:9464",
-               sizeof(cfg->agent.prometheus.listen));
     ft_strlcpy(cfg->storage_path, "/var/lib/filetrace", sizeof(cfg->storage_path));
     cfg->storage_retention_ns = 7 * 24 * 3600 * FT_NS_PER_SEC;
     return cfg;
@@ -626,6 +624,59 @@ static bool apply_prometheus(struct ft_config *cfg, const char *key, struct valu
     return false;
 }
 
+static bool apply_otlp(struct ft_config *cfg, const char *key, struct value *v, char *why,
+                       size_t size, bool *known)
+{
+    struct ft_otlp_config *otlp = &cfg->agent.otlp;
+    uint64_t n;
+
+    if (strcmp(key, "enabled") == 0)
+        return want_bool(v, &otlp->enabled, why, size);
+    if (strcmp(key, "endpoint") == 0)
+        return want_string(v, otlp->endpoint, sizeof(otlp->endpoint), why, size);
+    if (strcmp(key, "logs") == 0)
+        return want_bool(v, &otlp->logs, why, size);
+    if (strcmp(key, "metrics") == 0)
+        return want_bool(v, &otlp->metrics, why, size);
+    if (strcmp(key, "file_paths") == 0)
+        return want_bool(v, &otlp->file_paths, why, size);
+    if (strcmp(key, "events") == 0) {
+        uint32_t types = 0;
+
+        for (size_t i = 0; v->type == VALUE_STRINGS && i < v->count; i++) {
+            enum ft_record_type type;
+            if (!ft_record_type_parse(v->items[i], &type)) {
+                snprintf(why, size, "\"%s\" is not an event type; see 'filetrace help events'",
+                         v->items[i]);
+                return false;
+            }
+            types |= 1u << type;
+        }
+        if (v->type != VALUE_STRINGS) {
+            snprintf(why, size, "expected a list of event types, such as [\"file_transfer\"]");
+            return false;
+        }
+        otlp->event_types = types;
+        return true;
+    }
+    if (strcmp(key, "batch_size") == 0) {
+        if (!want_count(v, 16, 4096, &n, why, size))
+            return false;
+        otlp->batch_size = (uint32_t)n;
+        return true;
+    }
+    if (strcmp(key, "flush_interval") == 0)
+        return want_duration(v, 100 * FT_NS_PER_MS, 3600 * FT_NS_PER_SEC, &otlp->flush_interval_ns,
+                             why, size);
+    if (strcmp(key, "metrics_interval") == 0)
+        return want_duration(v, FT_NS_PER_SEC, 3600 * FT_NS_PER_SEC, &otlp->metrics_interval_ns,
+                             why, size);
+    if (strcmp(key, "timeout") == 0)
+        return want_duration(v, FT_NS_PER_SEC, 300 * FT_NS_PER_SEC, &otlp->timeout_ns, why, size);
+    *known = false;
+    return false;
+}
+
 static const struct {
     const char *name;
     bool (*apply)(struct ft_config *cfg, const char *key, struct value *v, char *why, size_t size,
@@ -640,6 +691,7 @@ static const struct {
     {"output", apply_output},
     {"filters", apply_filters},
     {"prometheus", apply_prometheus},
+    {"otlp", apply_otlp},
 };
 
 static bool parse(struct parser *ps, struct ft_config *cfg)
@@ -886,4 +938,25 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fputs("\n[prometheus]\n", o);
     fprintf(o, "enabled = %s\n", yes_no(cfg->agent.prometheus.enabled));
     print_string(o, "listen", cfg->agent.prometheus.listen);
+
+    const struct ft_otlp_config *otlp = &cfg->agent.otlp;
+    fputs("\n[otlp]\n", o);
+    fprintf(o, "enabled = %s\n", yes_no(otlp->enabled));
+    fputs("# gRPC without TLS: a collector on this host, by numeric address or \"unix:\" path.\n",
+          o);
+    print_string(o, "endpoint", otlp->endpoint);
+    fprintf(o, "logs = %s\n", yes_no(otlp->logs));
+    fprintf(o, "metrics = %s\n", yes_no(otlp->metrics));
+    fputs("events = [", o);
+    for (int type = 1, listed = 0; type < FT_REC_TYPE_COUNT; type++) {
+        if (otlp->event_types & (1u << type))
+            fprintf(o, "%s\"%s\"", listed++ ? ", " : "",
+                    ft_record_type_name((enum ft_record_type)type));
+    }
+    fputs("]\n", o);
+    fprintf(o, "file_paths = %s\n", yes_no(otlp->file_paths));
+    fprintf(o, "batch_size = %u\n", otlp->batch_size);
+    print_duration(o, "flush_interval", otlp->flush_interval_ns);
+    print_duration(o, "metrics_interval", otlp->metrics_interval_ns);
+    print_duration(o, "timeout", otlp->timeout_ns);
 }

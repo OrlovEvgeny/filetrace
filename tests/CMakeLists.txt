@@ -3,6 +3,7 @@ add_executable(ft_unit_tests
     unit/test_format.c
     unit/test_grpc.c
     unit/test_model.c
+    unit/test_otlp.c
     unit/test_table.c
     unit/test_state.c
     unit/test_agent.c

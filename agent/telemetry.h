@@ -30,4 +30,19 @@ void ft_scrape_close(struct ft_scrape *s);
 void ft_scrape_poll(struct ft_scrape *s, struct ft_poller *p);
 void ft_scrape_dispatch(struct ft_scrape *s, const struct ft_poller *p, uint64_t now_ns);
 
+/* Sends records and metrics to an OpenTelemetry collector. A nullptr exporter does nothing. */
+struct ft_otlp;
+
+struct ft_otlp *ft_otlp_open(const struct ft_otlp_config *cfg,
+                             const struct ft_telemetry_source *src, struct ft_error *err);
+
+/* Gives what is still waiting a moment to leave. */
+void ft_otlp_close(struct ft_otlp *o);
+
+/* row carries monotonic time, as the state hands it out. */
+void ft_otlp_record(struct ft_otlp *o, const struct ft_row_event *row);
+
+void ft_otlp_poll(struct ft_otlp *o, struct ft_poller *p);
+void ft_otlp_dispatch(struct ft_otlp *o, const struct ft_poller *p, uint64_t now_ns);
+
 #endif

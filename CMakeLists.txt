@@ -162,9 +162,11 @@ target_include_directories(ft_rpc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(ft_agent STATIC
     agent/config.c
     agent/lifecycle.c
+    agent/otlp.c
     agent/prometheus.c
     agent/server.c
     agent/telemetry.c
+    exporters/otlp.c
     exporters/prometheus.c
 )
 target_link_libraries(ft_agent PUBLIC ft_core ft_backend ft_rpc ft_proto)

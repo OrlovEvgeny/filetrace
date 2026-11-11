@@ -51,5 +51,6 @@ void test_views(void);
 void test_config(void);
 void test_metrics(void);
 void test_grpc(void);
+void test_otlp(void);
 
 #endif
