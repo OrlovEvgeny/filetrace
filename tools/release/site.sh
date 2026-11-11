@@ -42,7 +42,6 @@ if [ -z "$(ls "$site/dist")" ]; then
     echo "site.sh: no release under $releases" >&2
     exit 1
 fi
-install -m 0644 "$root/packaging/site/index.html" "$site/index.html"
 
 latest=$(newest stable lts)
 # Candidates alone give nothing to index and no version to install by channel.
