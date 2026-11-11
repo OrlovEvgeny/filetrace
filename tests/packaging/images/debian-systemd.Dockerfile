@@ -1,4 +1,4 @@
-FROM debian:13
+FROM debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
 
 # policy-rc.d keeps services from starting while an image is built; a booted
 # system has none.

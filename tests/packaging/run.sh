@@ -91,11 +91,17 @@ start()
     containers="$containers $container"
 }
 
+# image <name>: builds tests/packaging/images/<name>.Dockerfile.
+image()
+{
+    docker build -q -t "filetrace-test-$1" -f "tests/packaging/images/$1.Dockerfile" \
+        tests/packaging/images >/dev/null
+}
+
 # boot <name> <image>: a container with systemd as its init.
 boot()
 {
-    docker build -q -t "filetrace-test-$2" -f "tests/packaging/images/$2.Dockerfile" \
-        tests/packaging/images >/dev/null
+    image "$2"
     start "$1" --privileged --cgroupns=host --tmpfs /run --tmpfs /run/lock \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw "filetrace-test-$2"
     tries=60
@@ -128,25 +134,27 @@ for name in "$@"; do
         boot rpm rocky-systemd && run_case rpm || code=$?
         ;;
     apk)
-        docker build -q -t filetrace-test-alpine-openrc \
-            -f tests/packaging/images/alpine-openrc.Dockerfile tests/packaging/images >/dev/null
-        start apk --privileged --init filetrace-test-alpine-openrc && run_case apk || code=$?
+        image alpine-openrc &&
+            start apk --privileged --init filetrace-test-alpine-openrc &&
+            run_case apk || code=$?
         ;;
     sysv)
-        start sysv --privileged --init debian:13 sleep infinity && run_case sysv || code=$?
+        image debian &&
+            start sysv --privileged --init filetrace-test-debian &&
+            run_case sysv || code=$?
         ;;
     install-systemd)
         boot install-systemd debian-systemd && run_case install-systemd || code=$?
         ;;
     install-openrc)
-        docker build -q -t filetrace-test-alpine-openrc \
-            -f tests/packaging/images/alpine-openrc.Dockerfile tests/packaging/images >/dev/null
-        start install-openrc --privileged --init filetrace-test-alpine-openrc &&
+        image alpine-openrc &&
+            start install-openrc --privileged --init filetrace-test-alpine-openrc &&
             run_case install-openrc || code=$?
         ;;
     unprivileged)
-        start unprivileged --user 65534:65534 --cap-drop ALL \
-            -v "$root/$work/tarball:/opt:ro" debian:13 sleep infinity &&
+        image debian &&
+            start unprivileged --user 65534:65534 --cap-drop ALL \
+                -v "$root/$work/tarball:/opt:ro" filetrace-test-debian &&
             run_case unprivileged || code=$?
         ;;
     *)
