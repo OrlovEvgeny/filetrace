@@ -1,0 +1,92 @@
+# Filetrace agent configuration.
+#
+# Every setting is listed with its built-in default. Uncomment a line to change
+# it, then restart the agent: the file is read once, when the agent starts.
+#
+#   filetrace config validate    checks this file
+#   filetrace config show        prints the values in effect
+
+[agent]
+# enabled = true
+# "minimal" records processes, sockets and byte counts only.
+# mode = "standard"
+# "auto", "trampoline" or "kprobe".
+# probes = "auto"
+# socket = "/run/filetrace/agent.sock"
+# Kernel-to-agent event queue; 1MB by default in minimal mode.
+# ring_buffer_size = "4MB"
+# Counters read from the kernel per call.
+# event_batch_size = 512
+# flush_interval = "250ms"
+# Memory for the log of recent events; 0 keeps none. 256KB by default in minimal mode.
+# event_log_size = "1MB"
+# "error", "warn", "info" or "debug".
+# log_level = "info"
+
+[network]
+# tcp = true
+# udp = true
+# ipv4 = true
+# ipv6 = true
+
+[file]
+# Attribution of files a thread reads and then sends.
+# track_read = true
+# Attribution of files sent with sendfile.
+# track_sendfile = true
+
+[correlation]
+# enabled = true
+# Longest read-to-send gap that still associates a file with a send.
+# window = "2s"
+# "exact" reports sendfile transfers only.
+# confidence_threshold = "inferred"
+# inferred_min_bytes = "1KB"
+# inferred_min_percent = 5
+
+# Entries per table; the least recently used go first.
+[limits]
+# processes = 4096
+# sockets = 16384
+# flows = 16384
+# files = 16384
+# transfers = 16384
+# kernel_counters = 16384
+# kernel_files = 16384
+# Label sets of the exported counters.
+# metric_series = 2048
+
+[output]
+# Default format of the listing commands.
+# format = "table"
+# timestamps = true
+
+[filters]
+# exclude_processes = []
+# exclude_paths = []
+
+# A page of metrics for Prometheus to scrape, served without authentication.
+[prometheus]
+# enabled = false
+# listen = "127.0.0.1:9464"
+
+# Events and metrics pushed to an OpenTelemetry collector over gRPC without TLS.
+[otlp]
+# enabled = false
+# A numeric address and port, or a "unix:" path.
+# endpoint = "127.0.0.1:4317"
+# logs = true
+# metrics = true
+# events = ["file_transfer", "event_loss"]
+# file_paths = true
+# Records per request.
+# batch_size = 1024
+# flush_interval = "5s"
+# metrics_interval = "30s"
+# timeout = "10s"
+
+# An API that lists and streams transfers. A "unix:" socket admits root and the
+# agent's user; an address and port admits anyone who can reach it.
+[grpc]
+# enabled = false
+# listen = "unix:/run/filetrace/api.sock"
