@@ -113,6 +113,16 @@ endif()
 # Libraries
 # ---------------------------------------------------------------------------
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PROTOBUF_C REQUIRED IMPORTED_TARGET libprotobuf-c>=1.3)
+pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2>=1.60)
+
+# Written by `buf generate` from proto/ and the OpenTelemetry module; see buf.gen.yaml.
+file(GLOB_RECURSE FT_PROTO_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/gen/*.pb-c.c)
+add_library(ft_proto STATIC ${FT_PROTO_SOURCES})
+target_include_directories(ft_proto SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/gen)
+target_link_libraries(ft_proto PUBLIC PkgConfig::PROTOBUF_C)
+
 add_library(ft_core STATIC
     core/base.c
     core/capabilities.c

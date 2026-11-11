@@ -1,0 +1,14 @@
+version: v2
+clean: true
+plugins:
+  - remote: buf.build/community/protobuf-c:v1.5.2
+    out: gen
+inputs:
+  - module: buf.build/opentelemetry/opentelemetry:v1.11.1
+    paths:
+      - opentelemetry/proto/common/v1
+      - opentelemetry/proto/resource/v1
+      - opentelemetry/proto/logs/v1
+      - opentelemetry/proto/metrics/v1
+      - opentelemetry/proto/collector/logs/v1
+      - opentelemetry/proto/collector/metrics/v1

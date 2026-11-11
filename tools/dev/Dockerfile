@@ -10,6 +10,8 @@ RUN apt-get update \
         libbpf-dev \
         libclang-rt-dev \
         libelf-dev \
+        libnghttp2-dev \
+        libprotobuf-c-dev \
         linux-libc-dev \
         llvm \
         ninja-build \
