@@ -124,6 +124,7 @@ target_include_directories(ft_proto SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ge
 target_link_libraries(ft_proto PUBLIC PkgConfig::PROTOBUF_C)
 
 add_library(ft_core STATIC
+    core/arena.c
     core/base.c
     core/capabilities.c
     core/client.c

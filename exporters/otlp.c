@@ -1,7 +1,7 @@
 #include "exporters/otlp.h"
 
+#include "filetrace/arena.h"
 #include "filetrace/event.h"
-#include "filetrace/format.h"
 #include "filetrace/schema.h"
 #include "filetrace/table.h"
 
@@ -36,80 +36,22 @@ constexpr size_t MAX_BATCH_BYTES = 3 * 1024 * 1024;
 constexpr size_t RECORD_OVERHEAD = 1024; /* attribute keys and framing of one log record */
 constexpr size_t MAX_ATTRS = 24;
 
-/* Messages under construction; all of them are released at once. */
-struct chunk {
-    struct chunk *next;
-    size_t used;
-    size_t size;
-    max_align_t data[];
-};
-
-struct arena {
-    struct chunk *chunks;
-    bool failed;
-};
-
-static void *arena_alloc(struct arena *a, size_t size)
-{
-    constexpr size_t CHUNK_BYTES = 64 * 1024;
-    struct chunk *c = a->chunks;
-
-    size = (size + alignof(max_align_t) - 1) & ~(alignof(max_align_t) - 1);
-    if (!c || c->size - c->used < size) {
-        size_t room = size > CHUNK_BYTES ? size : CHUNK_BYTES;
-        c = malloc(sizeof(*c) + room);
-        if (!c) {
-            a->failed = true;
-            return nullptr;
-        }
-        c->next = a->chunks;
-        c->used = 0;
-        c->size = room;
-        a->chunks = c;
-    }
-    void *p = (unsigned char *)c->data + c->used;
-    c->used += size;
-    memset(p, 0, size);
-    return p;
-}
-
-static void arena_release(struct arena *a)
-{
-    while (a->chunks) {
-        struct chunk *next = a->chunks->next;
-        free(a->chunks);
-        a->chunks = next;
-    }
-}
-
 /* protobuf-c reads strings through pointers that are not const. */
 static char *text_of(const char *s)
 {
     return (char *)(uintptr_t)s;
 }
 
-/* A protobuf string must be valid UTF-8, which a path or a process name need not be. */
-static char *arena_text(struct arena *a, const char *s)
-{
-    size_t size = strlen(s) + 1;
-    char *copy = arena_alloc(a, size);
-
-    if (!copy)
-        return text_of("");
-    ft_utf8_copy(copy, s, size);
-    return copy;
-}
-
 struct attrs {
-    struct arena *arena;
+    struct ft_arena *arena;
     KeyValue **items;
     size_t count;
     size_t capacity;
 };
 
-static struct attrs attrs_begin(struct arena *a, size_t capacity)
+static struct attrs attrs_begin(struct ft_arena *a, size_t capacity)
 {
-    struct attrs l = {.arena = a, .items = arena_alloc(a, capacity * sizeof(KeyValue *))};
+    struct attrs l = {.arena = a, .items = ft_arena_alloc(a, capacity * sizeof(KeyValue *))};
 
     l.capacity = l.items ? capacity : 0;
     return l;
@@ -119,8 +61,8 @@ static AnyValue *attr_add(struct attrs *l, const char *key)
 {
     if (l->count == l->capacity)
         return nullptr;
-    KeyValue *kv = arena_alloc(l->arena, sizeof(*kv));
-    AnyValue *value = arena_alloc(l->arena, sizeof(*value));
+    KeyValue *kv = ft_arena_alloc(l->arena, sizeof(*kv));
+    AnyValue *value = ft_arena_alloc(l->arena, sizeof(*value));
     if (!kv || !value)
         return nullptr;
     opentelemetry__proto__common__v1__key_value__init(kv);
@@ -137,7 +79,7 @@ static void attr_string(struct attrs *l, const char *key, const char *value)
     if (!v)
         return;
     v->value_case = OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_STRING_VALUE;
-    v->string_value = arena_text(l->arena, value);
+    v->string_value = ft_arena_text(l->arena, value);
 }
 
 static void attr_int(struct attrs *l, const char *key, uint64_t value)
@@ -158,9 +100,9 @@ static void attr_bool(struct attrs *l, const char *key, bool value)
     v->bool_value = value;
 }
 
-static Resource *make_resource(struct arena *a, const struct ft_metric_attr *attrs, size_t count)
+static Resource *make_resource(struct ft_arena *a, const struct ft_metric_attr *attrs, size_t count)
 {
-    Resource *resource = arena_alloc(a, sizeof(*resource));
+    Resource *resource = ft_arena_alloc(a, sizeof(*resource));
     struct attrs l = attrs_begin(a, count);
 
     if (!resource)
@@ -173,9 +115,9 @@ static Resource *make_resource(struct arena *a, const struct ft_metric_attr *att
     return resource;
 }
 
-static Scope *make_scope(struct arena *a)
+static Scope *make_scope(struct ft_arena *a)
 {
-    Scope *scope = arena_alloc(a, sizeof(*scope));
+    Scope *scope = ft_arena_alloc(a, sizeof(*scope));
 
     if (!scope)
         return nullptr;
@@ -405,11 +347,11 @@ static void describe(struct attrs *l, const struct ft_row_event *e)
     }
 }
 
-static LogRecord *make_record(struct arena *a, const struct ft_row_event *e, uint64_t now_wall_ns)
+static LogRecord *make_record(struct ft_arena *a, const struct ft_row_event *e, uint64_t now_wall_ns)
 {
     const char *type = ft_record_type_name((enum ft_record_type)e->type);
-    LogRecord *record = arena_alloc(a, sizeof(*record));
-    AnyValue *body = arena_alloc(a, sizeof(*body));
+    LogRecord *record = ft_arena_alloc(a, sizeof(*record));
+    AnyValue *body = ft_arena_alloc(a, sizeof(*body));
     char name[48];
 
     if (!record || !body)
@@ -425,7 +367,7 @@ static LogRecord *make_record(struct arena *a, const struct ft_row_event *e, uin
              : OPENTELEMETRY__PROTO__LOGS__V1__SEVERITY_NUMBER__SEVERITY_NUMBER_INFO;
     record->severity_text = text_of(loss ? "WARN" : "INFO");
     snprintf(name, sizeof(name), "filetrace.%s", type);
-    record->event_name = arena_text(a, name);
+    record->event_name = ft_arena_text(a, name);
     body->value_case = OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_STRING_VALUE;
     body->string_value = text_of(type);
     record->body = body;
@@ -440,7 +382,7 @@ static LogRecord *make_record(struct arena *a, const struct ft_row_event *e, uin
 uint8_t *ft_otlp_logs_encode(struct ft_otlp_logs *b, const struct ft_metric_attr *resource,
                              size_t resource_count, uint64_t now_wall_ns, size_t *size)
 {
-    struct arena a = {0};
+    struct ft_arena a = {0};
     LogsRequest request;
     ResourceLogs resource_logs;
     ResourceLogs *resource_list[1] = {&resource_logs};
@@ -457,7 +399,7 @@ uint8_t *ft_otlp_logs_encode(struct ft_otlp_logs *b, const struct ft_metric_attr
     resource_logs.scope_logs = scope_list;
     resource_logs.n_scope_logs = 1;
     scope_logs.scope = make_scope(&a);
-    scope_logs.log_records = arena_alloc(&a, (b->count ? b->count : 1) * sizeof(LogRecord *));
+    scope_logs.log_records = ft_arena_alloc(&a, (b->count ? b->count : 1) * sizeof(LogRecord *));
 
     for (size_t offset = 0; offset < b->rows_len && scope_logs.log_records;) {
         const struct ft_row_event *row = row_at(b, offset);
@@ -477,7 +419,7 @@ uint8_t *ft_otlp_logs_encode(struct ft_otlp_logs *b, const struct ft_metric_attr
             opentelemetry__proto__collector__logs__v1__export_logs_service_request__pack(&request,
                                                                                          out);
     }
-    arena_release(&a);
+    ft_arena_release(&a);
     ft_table_clear(b->merged);
     b->rows_len = 0;
     b->count = 0;
@@ -486,7 +428,7 @@ uint8_t *ft_otlp_logs_encode(struct ft_otlp_logs *b, const struct ft_metric_attr
 }
 
 struct ft_otlp_metrics {
-    struct arena arena;
+    struct ft_arena arena;
     uint64_t start_wall_ns;
     uint64_t now_wall_ns;
     Metric **metrics;
@@ -529,7 +471,7 @@ static void close_metric(struct ft_otlp_metrics *m)
     if (!m->current || m->metric_count == 0)
         return;
     Metric *metric = m->metrics[m->metric_count - 1];
-    NumberDataPoint **points = arena_alloc(&m->arena, (m->point_count + 1) * sizeof(*points));
+    NumberDataPoint **points = ft_arena_alloc(&m->arena, (m->point_count + 1) * sizeof(*points));
 
     if (!points)
         return;
@@ -547,9 +489,9 @@ static void close_metric(struct ft_otlp_metrics *m)
 
 static void open_metric(struct ft_otlp_metrics *m, const struct ft_metric *def)
 {
-    Metric *metric = arena_alloc(&m->arena, sizeof(*metric));
-    Sum *sum = arena_alloc(&m->arena, sizeof(*sum));
-    Gauge *gauge = arena_alloc(&m->arena, sizeof(*gauge));
+    Metric *metric = ft_arena_alloc(&m->arena, sizeof(*metric));
+    Sum *sum = ft_arena_alloc(&m->arena, sizeof(*sum));
+    Gauge *gauge = ft_arena_alloc(&m->arena, sizeof(*gauge));
 
     m->current = nullptr;
     if (!metric || !sum || !gauge)
@@ -587,7 +529,7 @@ void ft_otlp_metrics_point(void *ctx, const struct ft_metric_point *pt)
         if (!m->current)
             return;
     }
-    NumberDataPoint *point = arena_alloc(&m->arena, sizeof(*point));
+    NumberDataPoint *point = ft_arena_alloc(&m->arena, sizeof(*point));
     if (!point)
         return;
     opentelemetry__proto__metrics__v1__number_data_point__init(point);
@@ -644,7 +586,7 @@ uint8_t *ft_otlp_metrics_encode(struct ft_otlp_metrics *m, const struct ft_metri
             opentelemetry__proto__collector__metrics__v1__export_metrics_service_request__pack(
                 &request, out);
     }
-    arena_release(&m->arena);
+    ft_arena_release(&m->arena);
     free(m->metrics);
     free(m->points);
     free(m);
