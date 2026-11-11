@@ -1,7 +1,7 @@
 #!/bin/sh
 # usage: fetch.sh <directory>
-# Downloads the packages and the installer of every published release into
-# <directory>/<tag>/, the layout site.sh reads. Candidates are left out.
+# Downloads the files of every published release, candidates included, into
+# <directory>/<tag>/, the layout site.sh reads.
 # Needs gh, signed in to the repository.
 set -eu
 
@@ -10,14 +10,12 @@ set -eu
     exit 2
 }
 
-gh release list --exclude-drafts --exclude-pre-releases --limit 1000 \
-    --json tagName --jq '.[].tagName' |
+gh release list --exclude-drafts --limit 1000 --json tagName --jq '.[].tagName' |
     while read -r tag; do
         case $tag in
-        v*-stable | v*-lts) ;;
+        v*-stable | v*-lts | v*-prestable) ;;
         *) continue ;;
         esac
         mkdir -p "$1/$tag"
-        gh release download "$tag" --dir "$1/$tag" --clobber \
-            --pattern '*.deb' --pattern '*.rpm' --pattern '*.apk' --pattern install.sh
+        gh release download "$tag" --dir "$1/$tag" --clobber
     done

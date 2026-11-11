@@ -19,7 +19,7 @@ for channel in $channels; do
         for package in /releases/*/filetrace_*_"$arch".apk; do
             [ -f "$package" ] || continue
             case $channel:$package in
-            stable:* | lts:/releases/v*-lts/*) ;;
+            stable:/releases/v*-stable/* | *:/releases/v*-lts/*) ;;
             *) continue ;;
             esac
             # apk fetches a package by the name and version its index records.

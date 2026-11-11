@@ -15,7 +15,7 @@ sign()
     gpg --batch --yes --local-user "$key" --armor --detach-sign --output "$2" "$1"
 }
 
-# The lts channel offers the releases of lts lines; stable offers every release.
+# The lts channel offers the releases of lts lines; stable offers those and the stable ones.
 lts_versions=
 for release in /releases/v*-lts; do
     [ -d "$release" ] || continue
@@ -29,14 +29,16 @@ channels=stable
 in_channel()
 {
     case $1:$2 in
-    stable:* | lts:/releases/v*-lts/*) return 0 ;;
+    stable:/releases/v*-stable/* | *:/releases/v*-lts/*) return 0 ;;
     esac
     return 1
 }
 
 pool=pool/main/f/filetrace
 mkdir -p "/site/apt/$pool"
-cp /releases/*/filetrace_*.deb "/site/apt/$pool/"
+for package in /releases/*/filetrace_*.deb; do
+    ! in_channel stable "$package" || cp "$package" "/site/apt/$pool/"
+done
 cd /site/apt
 for channel in $channels; do
     for arch in amd64 arm64; do
