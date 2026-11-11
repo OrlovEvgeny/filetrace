@@ -5,6 +5,11 @@ const DOCS_HOST = "filetrace.mintlify.site";
 
 const DOWNLOADS = /^\/(?:install\.sh|gpg\.key|(?:apt|rpm|apk|dist|channels|versions)\/)/;
 
+// Mintlify names its own hosts in the files that list the pages: sitemap.xml,
+// robots.txt, llms.txt and the Markdown copies of the pages.
+const MINTLIFY_ORIGINS = /https:\/\/filetrace\.mintlify\.(?:app|site)/g;
+const TEXT_TYPES = /^(?:text\/(?:plain|markdown|xml)|application\/xml)\b/;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -94,6 +99,9 @@ async function docs(request, url) {
   const response = await fetch(proxied, { redirect: "manual" });
   const location = response.headers.get("location");
   if (!location) {
+    if (request.method === "GET" && TEXT_TYPES.test(response.headers.get("content-type") ?? "")) {
+      return withPublicOrigin(response, `https://${publicHost}`);
+    }
     return response;
   }
   const next = new URL(location, target);
@@ -105,4 +113,16 @@ async function docs(request, url) {
   const rewritten = new Response(response.body, response);
   rewritten.headers.set("location", next.toString());
   return rewritten;
+}
+
+async function withPublicOrigin(response, origin) {
+  const text = await response.text();
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  headers.delete("etag");
+  return new Response(text.replace(MINTLIFY_ORIGINS, origin), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
