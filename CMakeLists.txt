@@ -151,6 +151,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(ft_backend SYSTEM PRIVATE ${LIBBPF_INCLUDE_DIRS})
 endif()
 
+add_library(ft_rpc STATIC
+    rpc/grpc_client.c
+    rpc/grpc_server.c
+    rpc/h2.c
+)
+target_link_libraries(ft_rpc PUBLIC ft_core PRIVATE PkgConfig::NGHTTP2)
+target_include_directories(ft_rpc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
 add_library(ft_agent STATIC
     agent/config.c
     agent/lifecycle.c
@@ -159,7 +167,7 @@ add_library(ft_agent STATIC
     agent/telemetry.c
     exporters/prometheus.c
 )
-target_link_libraries(ft_agent PUBLIC ft_core ft_backend)
+target_link_libraries(ft_agent PUBLIC ft_core ft_backend ft_rpc ft_proto)
 target_include_directories(ft_agent PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ---------------------------------------------------------------------------

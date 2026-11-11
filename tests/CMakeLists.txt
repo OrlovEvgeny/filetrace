@@ -1,6 +1,7 @@
 add_executable(ft_unit_tests
     unit/main.c
     unit/test_format.c
+    unit/test_grpc.c
     unit/test_model.c
     unit/test_table.c
     unit/test_state.c
