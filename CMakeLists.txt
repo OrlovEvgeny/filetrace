@@ -164,6 +164,11 @@ target_link_libraries(filetrace PRIVATE ft_cli)
 
 install(TARGETS filetrace filetraced RUNTIME DESTINATION bin)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(ft_bench_syscalls benchmarks/syscalls.c)
+    target_link_libraries(ft_bench_syscalls PRIVATE ft_build)
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
