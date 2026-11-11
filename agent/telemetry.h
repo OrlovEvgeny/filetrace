@@ -45,4 +45,17 @@ void ft_otlp_record(struct ft_otlp *o, const struct ft_row_event *row);
 void ft_otlp_poll(struct ft_otlp *o, struct ft_poller *p);
 void ft_otlp_dispatch(struct ft_otlp *o, const struct ft_poller *p, uint64_t now_ns);
 
+/* Answers gRPC calls about what the agent holds. A nullptr API does nothing. */
+struct ft_api;
+
+struct ft_api *ft_api_open(const struct ft_api_config *cfg, const struct ft_telemetry_source *src,
+                           struct ft_error *err);
+void ft_api_close(struct ft_api *a);
+
+/* row carries monotonic time, as the state hands it out. */
+void ft_api_record(struct ft_api *a, const struct ft_row_event *row);
+
+void ft_api_poll(struct ft_api *a, struct ft_poller *p);
+void ft_api_dispatch(struct ft_api *a, const struct ft_poller *p);
+
 #endif

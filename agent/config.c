@@ -677,6 +677,19 @@ static bool apply_otlp(struct ft_config *cfg, const char *key, struct value *v, 
     return false;
 }
 
+static bool apply_grpc(struct ft_config *cfg, const char *key, struct value *v, char *why,
+                       size_t size, bool *known)
+{
+    struct ft_api_config *api = &cfg->agent.api;
+
+    if (strcmp(key, "enabled") == 0)
+        return want_bool(v, &api->enabled, why, size);
+    if (strcmp(key, "listen") == 0)
+        return want_string(v, api->listen, sizeof(api->listen), why, size);
+    *known = false;
+    return false;
+}
+
 static const struct {
     const char *name;
     bool (*apply)(struct ft_config *cfg, const char *key, struct value *v, char *why, size_t size,
@@ -692,6 +705,7 @@ static const struct {
     {"filters", apply_filters},
     {"prometheus", apply_prometheus},
     {"otlp", apply_otlp},
+    {"grpc", apply_grpc},
 };
 
 static bool parse(struct parser *ps, struct ft_config *cfg)
@@ -959,4 +973,10 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     print_duration(o, "flush_interval", otlp->flush_interval_ns);
     print_duration(o, "metrics_interval", otlp->metrics_interval_ns);
     print_duration(o, "timeout", otlp->timeout_ns);
+
+    fputs("\n[grpc]\n", o);
+    fprintf(o, "enabled = %s\n", yes_no(cfg->agent.api.enabled));
+    fputs("# A \"unix:\" socket admits root and the agent's user; an address and port, anyone.\n",
+          o);
+    print_string(o, "listen", cfg->agent.api.listen);
 }

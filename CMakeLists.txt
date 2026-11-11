@@ -161,6 +161,7 @@ target_link_libraries(ft_rpc PUBLIC ft_core PRIVATE PkgConfig::NGHTTP2)
 target_include_directories(ft_rpc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(ft_agent STATIC
+    agent/api.c
     agent/config.c
     agent/lifecycle.c
     agent/otlp.c

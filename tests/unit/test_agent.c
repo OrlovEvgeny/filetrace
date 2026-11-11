@@ -6,6 +6,7 @@
 #include "filetrace/clock.h"
 #include "rpc/grpc.h"
 
+#include "filetrace/v1/filetrace.pb-c.h"
 #include "opentelemetry/proto/collector/logs/v1/logs_service.pb-c.h"
 #include "opentelemetry/proto/collector/metrics/v1/metrics_service.pb-c.h"
 
@@ -108,6 +109,50 @@ static void ticking_flush(struct ft_backend *b)
     scripted_emit(b, &ev);
 }
 
+/* Describes one file once, then reports a hundred more of its bytes sent at every flush. */
+static void sending_flush(struct ft_backend *b)
+{
+    static const uint8_t remote[16] = {203, 0, 113, 42};
+    uint64_t now = ft_clock_mono_ns();
+    struct ft_event ev;
+
+    if (!b->emitted) {
+        b->emitted = true;
+        ev = (struct ft_event){.type = FT_EVENT_PROCESS_EXEC, .ts_ns = now};
+        ev.process.pid = 1842;
+        ev.process.ppid = 1;
+        ev.process.start_ns = now;
+        ft_strlcpy(ev.process.comm, "nginx", sizeof(ev.process.comm));
+        ft_strlcpy(ev.process.exe, "/usr/sbin/nginx", sizeof(ev.process.exe));
+        scripted_emit(b, &ev);
+
+        ev = (struct ft_event){.type = FT_EVENT_FILE_SEEN, .ts_ns = now};
+        ev.file.id = (struct ft_file_id){.dev = 2049, .ino = 77};
+        ev.file.path = "/var/www/stream.bin";
+        ev.file.size = 4096;
+        scripted_emit(b, &ev);
+    }
+
+    ev = (struct ft_event){.type = FT_EVENT_FLOW, .ts_ns = now};
+    ev.flow.sock_id = 127;
+    ev.flow.pid = 1842;
+    ev.flow.proto = FT_PROTO_TCP;
+    ev.flow.first_ns = now;
+    ev.flow.tx_bytes = 100;
+    ft_endpoint_set(&ev.flow.remote, false, remote, 52144);
+    scripted_emit(b, &ev);
+
+    ev = (struct ft_event){.type = FT_EVENT_TRANSFER, .ts_ns = now};
+    ev.transfer.sock_id = 127;
+    ev.transfer.pid = 1842;
+    ev.transfer.method = FT_METHOD_SENDFILE;
+    ev.transfer.file = (struct ft_file_id){.dev = 2049, .ino = 77};
+    ev.transfer.first_ns = now;
+    ev.transfer.bytes = 100;
+    ev.transfer.ops = 1;
+    scripted_emit(b, &ev);
+}
+
 static void scripted_stats(struct ft_backend *b, struct ft_backend_stats *out)
 {
     out->events = b->events;
@@ -139,6 +184,15 @@ static const struct ft_backend_ops ticking_ops = {
     .name = "ticking",
     .open = scripted_open,
     .flush = ticking_flush,
+    .stats = scripted_stats,
+    .capabilities = scripted_capabilities,
+    .close = scripted_close,
+};
+
+static const struct ft_backend_ops sending_ops = {
+    .name = "sending",
+    .open = scripted_open,
+    .flush = sending_flush,
     .stats = scripted_stats,
     .capabilities = scripted_capabilities,
     .close = scripted_close,
@@ -631,6 +685,234 @@ static void exports_to_a_collector_that_appears_later(void)
     rmdir(dir);
 }
 
+struct api_reply {
+    bool done;
+    enum ft_grpc_status status;
+    char message[160];
+    uint8_t *bytes;
+    size_t size;
+    int events;
+    uint64_t last_sequence;
+    bool events_as_expected;
+};
+
+static void api_done(void *ctx, enum ft_grpc_status status, const char *message,
+                     const uint8_t *reply, size_t size)
+{
+    struct api_reply *r = ctx;
+
+    r->done = true;
+    r->status = status;
+    ft_strlcpy(r->message, message, sizeof(r->message));
+    r->bytes = malloc(size ? size : 1);
+    r->size = size;
+    if (size)
+        memcpy(r->bytes, reply, size);
+}
+
+static void api_event(void *ctx, const uint8_t *message, size_t size)
+{
+    struct api_reply *r = ctx;
+    Filetrace__V1__WatchTransfersResponse *w =
+        filetrace__v1__watch_transfers_response__unpack(nullptr, size, message);
+
+    if (!w || !w->event) {
+        r->events_as_expected = false;
+        return;
+    }
+    const Filetrace__V1__TransferEvent *e = w->event;
+    r->events_as_expected = r->events_as_expected && e->sequence > r->last_sequence &&
+                            e->bytes_sent == 100 &&
+                            e->method == FILETRACE__V1__METHOD__METHOD_SENDFILE &&
+                            e->confidence == FILETRACE__V1__CONFIDENCE__CONFIDENCE_EXACT &&
+                            w->missed == 0 && strcmp(e->process->name, "nginx") == 0 &&
+                            strcmp(e->file->path, "/var/www/stream.bin") == 0 &&
+                            strcmp(e->connection->remote->address, "203.0.113.42") == 0;
+    r->last_sequence = e->sequence;
+    r->events++;
+    filetrace__v1__watch_transfers_response__free_unpacked(w, nullptr);
+}
+
+static bool enough_events(const struct api_reply *r)
+{
+    return r->events >= 3;
+}
+
+static bool answered(const struct api_reply *r)
+{
+    return r->done;
+}
+
+static void api_pump(struct ft_grpc_client *client, const struct api_reply *r,
+                     bool (*until)(const struct api_reply *r))
+{
+    static struct ft_poller poller;
+    uint64_t give_up_ns = ft_clock_mono_ns() + 5 * FT_NS_PER_SEC;
+
+    while (!until(r) && ft_clock_mono_ns() < give_up_ns) {
+        uint64_t now_ns = ft_clock_mono_ns();
+        ft_poller_begin(&poller, now_ns + 20 * FT_NS_PER_MS);
+        ft_grpc_client_poll(client, &poller);
+        ft_poller_wait(&poller, now_ns);
+        ft_grpc_client_dispatch(client, &poller, ft_clock_mono_ns());
+    }
+}
+
+/* One unary call of the API with an already packed request. */
+static struct api_reply api_call(struct ft_grpc_client *client, const char *method,
+                                 const ProtobufCMessage *request)
+{
+    struct api_reply r = {0};
+    char path[96];
+    uint8_t packed[512];
+    size_t size = protobuf_c_message_pack(request, packed);
+
+    snprintf(path, sizeof(path), "/filetrace.v1.FiletraceService/%s", method);
+    ft_grpc_client_call(client, path, packed, size, ft_clock_mono_ns() + 5 * FT_NS_PER_SEC,
+                        api_done, &r);
+    api_pump(client, &r, answered);
+    return r;
+}
+
+static Filetrace__V1__ListTransfersResponse *
+api_list(struct ft_grpc_client *client, Filetrace__V1__TransferFilter *filter, struct api_reply *r)
+{
+    Filetrace__V1__ListTransfersRequest request = FILETRACE__V1__LIST_TRANSFERS_REQUEST__INIT;
+
+    request.filter = filter;
+    *r = api_call(client, "ListTransfers", &request.base);
+    Filetrace__V1__ListTransfersResponse *list =
+        r->status == FT_GRPC_OK
+            ? filetrace__v1__list_transfers_response__unpack(nullptr, r->size, r->bytes)
+            : nullptr;
+    free(r->bytes);
+    return list;
+}
+
+static void serve_api(struct ft_agent_config *cfg, void *arg)
+{
+    cfg->api.enabled = true;
+    ft_strlcpy(cfg->api.listen, arg, sizeof(cfg->api.listen));
+}
+
+static void answers_grpc_calls(void)
+{
+    char dir[] = "/tmp/filetrace-api-XXXXXX";
+    char listen[96];
+    struct ft_net_addr addr;
+    struct api_reply r;
+    int pair[2];
+
+    CHECK(mkdtemp(dir) != nullptr);
+    snprintf(listen, sizeof(listen), "unix:%s/api.sock", dir);
+    CHECK(ft_net_addr_parse(listen, &addr));
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    pid_t pid = start_agent_with(&sending_ops, nullptr, pair[1], pair[0], serve_api, listen);
+    close(pair[1]);
+    for (int attempt = 0; attempt < 200 && access(listen + 5, F_OK) != 0; attempt++)
+        pause_ms(10);
+
+    struct ft_grpc_client *client = ft_grpc_client_new(&addr, "localhost");
+    Filetrace__V1__GetStatusRequest status_request = FILETRACE__V1__GET_STATUS_REQUEST__INIT;
+    r = api_call(client, "GetStatus", &status_request.base);
+    CHECK_U64(r.status, FT_GRPC_OK);
+    Filetrace__V1__GetStatusResponse *status =
+        filetrace__v1__get_status_response__unpack(nullptr, r.size, r.bytes);
+    CHECK(status != nullptr);
+    if (status) {
+        CHECK_STR(status->version, FT_VERSION);
+        CHECK_STR(status->backend, "sending");
+        CHECK_STR(status->mode, "standard");
+        CHECK(status->start_time_unix_nano != 0);
+        CHECK(!status->degraded);
+        filetrace__v1__get_status_response__free_unpacked(status, nullptr);
+    }
+    free(r.bytes);
+
+    Filetrace__V1__ListTransfersResponse *list = nullptr;
+    for (int attempt = 0; attempt < 200; attempt++) {
+        list = api_list(client, nullptr, &r);
+        if (!list || list->n_transfers == 1)
+            break;
+        filetrace__v1__list_transfers_response__free_unpacked(list, nullptr);
+        list = nullptr;
+        pause_ms(10);
+    }
+    CHECK(list != nullptr && list->n_transfers == 1);
+    if (list && list->n_transfers == 1) {
+        const Filetrace__V1__Transfer *t = list->transfers[0];
+        CHECK(t->bytes_sent >= 100 && t->bytes_sent % 100 == 0);
+        CHECK_U64(t->method, FILETRACE__V1__METHOD__METHOD_SENDFILE);
+        CHECK_U64(t->confidence, FILETRACE__V1__CONFIDENCE__CONFIDENCE_EXACT);
+        CHECK(t->n_evidence >= 1);
+        if (t->n_evidence)
+            CHECK_STR(t->evidence[0], "direct_file_to_socket_transfer");
+        CHECK(t->active);
+        CHECK_U64(t->process->pid, 1842);
+        CHECK_STR(t->process->name, "nginx");
+        CHECK_STR(t->process->executable, "/usr/sbin/nginx");
+        CHECK_STR(t->file->path, "/var/www/stream.bin");
+        CHECK_U64(t->file->inode, 77);
+        CHECK_U64(t->file->size, 4096);
+        CHECK_U64(t->connection->socket_id, 127);
+        CHECK_U64(t->connection->transport, FILETRACE__V1__TRANSPORT__TRANSPORT_TCP);
+        CHECK_STR(t->connection->remote->address, "203.0.113.42");
+        CHECK_U64(t->connection->remote->port, 52144);
+        CHECK(list->observed_since_unix_nano != 0);
+    }
+    if (list)
+        filetrace__v1__list_transfers_response__free_unpacked(list, nullptr);
+
+    /* The filters are the ones the command line has. */
+    Filetrace__V1__TransferFilter filter = FILETRACE__V1__TRANSFER_FILTER__INIT;
+    filter.remote = "203.0.113.0/24";
+    filter.path = "/var/www/*";
+    filter.confidence = FILETRACE__V1__CONFIDENCE__CONFIDENCE_EXACT;
+    list = api_list(client, &filter, &r);
+    CHECK(list != nullptr && list->n_transfers == 1);
+    if (list)
+        filetrace__v1__list_transfers_response__free_unpacked(list, nullptr);
+
+    filter.remote = "198.51.100.0/24";
+    list = api_list(client, &filter, &r);
+    CHECK(list != nullptr && list->n_transfers == 0);
+    if (list)
+        filetrace__v1__list_transfers_response__free_unpacked(list, nullptr);
+
+    filter.remote = "the internet";
+    list = api_list(client, &filter, &r);
+    CHECK(list == nullptr);
+    CHECK_U64(r.status, FT_GRPC_INVALID_ARGUMENT);
+    CHECK_STR(r.message, "remote is neither an IP address nor a CIDR network.");
+
+    r = api_call(client, "DeleteEverything", &status_request.base);
+    CHECK_U64(r.status, FT_GRPC_UNIMPLEMENTED);
+    free(r.bytes);
+
+    /* A watcher receives each record as the agent makes it. */
+    Filetrace__V1__WatchTransfersRequest watch_request =
+        FILETRACE__V1__WATCH_TRANSFERS_REQUEST__INIT;
+    Filetrace__V1__TransferFilter by_process = FILETRACE__V1__TRANSFER_FILTER__INIT;
+    uint8_t packed[128];
+    struct api_reply watched = {.events_as_expected = true};
+
+    by_process.process = "ngin*";
+    watch_request.filter = &by_process;
+    size_t size = filetrace__v1__watch_transfers_request__pack(&watch_request, packed);
+    ft_grpc_client_stream(client, "/filetrace.v1.FiletraceService/WatchTransfers", packed, size,
+                          ft_clock_mono_ns() + 5 * FT_NS_PER_SEC, api_event, api_done, &watched);
+    api_pump(client, &watched, enough_events);
+    CHECK(watched.events >= 3);
+    CHECK(watched.events_as_expected);
+    CHECK(!watched.done);
+
+    ft_grpc_client_free(client);
+    close(pair[0]);
+    CHECK_U64(wait_exit(pid), FT_EXIT_OK);
+    CHECK(access(listen + 5, F_OK) != 0);
+    rmdir(dir);
+}
+
 void test_agent(void)
 {
     serves_queries_over_a_socket();
@@ -639,4 +921,5 @@ void test_agent(void)
     reports_a_backend_that_cannot_start();
     serves_metrics_to_a_scraper();
     exports_to_a_collector_that_appears_later();
+    answers_grpc_calls();
 }

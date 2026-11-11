@@ -88,7 +88,11 @@ static const char every_section[] = "[agent]\n"
                                     "file_paths = false\n"
                                     "batch_size = 256\n"
                                     "flush_interval = \"500ms\"\n"
-                                    "timeout = \"3s\"\n";
+                                    "timeout = \"3s\"\n"
+                                    "\n"
+                                    "[grpc]\n"
+                                    "enabled = true\n"
+                                    "listen = \"127.0.0.1:9500\"\n";
 
 static void reads_every_section(void)
 {
@@ -121,6 +125,8 @@ static void reads_every_section(void)
     CHECK_U64(cfg->agent.otlp.flush_interval_ns, 500 * FT_NS_PER_MS);
     CHECK_U64(cfg->agent.otlp.metrics_interval_ns, 30 * FT_NS_PER_SEC);
     CHECK_U64(cfg->agent.otlp.timeout_ns, 3 * FT_NS_PER_SEC);
+    CHECK(cfg->agent.api.enabled);
+    CHECK_STR(cfg->agent.api.listen, "127.0.0.1:9500");
 
     CHECK_U64(cfg->warning_count, 7);
     CHECK(warned(cfg, "[network] tc_egress"));
@@ -265,6 +271,7 @@ static void prints_what_it_reads(void)
     CHECK_U64(second->agent.otlp.event_types, first->agent.otlp.event_types);
     CHECK_U64(second->agent.otlp.flush_interval_ns, 500 * FT_NS_PER_MS);
     CHECK(!second->agent.otlp.file_paths);
+    CHECK_STR(second->agent.api.listen, "127.0.0.1:9500");
 
     /* Printing the defaults reads back without a warning. */
     free(text);

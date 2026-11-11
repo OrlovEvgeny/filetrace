@@ -51,6 +51,7 @@ struct agent {
     struct ft_poller poller;
     struct ft_scrape *scrape;
     struct ft_otlp *otlp;
+    struct ft_api *api;
 
     uint64_t start_wall_ns;
     uint64_t rate_mono_ns;
@@ -87,6 +88,11 @@ void ft_agent_config_defaults(struct ft_agent_config *cfg)
     cfg->otlp.flush_interval_ns = 5 * FT_NS_PER_SEC;
     cfg->otlp.metrics_interval_ns = 30 * FT_NS_PER_SEC;
     cfg->otlp.timeout_ns = 10 * FT_NS_PER_SEC;
+
+    /* Beside the socket the command-line interface uses. */
+    char dir[sizeof(cfg->api.listen)];
+    ft_strlcpy(dir, cfg->socket_path, sizeof(dir));
+    snprintf(cfg->api.listen, sizeof(cfg->api.listen), "unix:%s/api.sock", dirname(dir));
 }
 
 static void on_event(void *ctx, const struct ft_event *ev)
@@ -210,6 +216,7 @@ static void on_record(void *ctx, const struct ft_row_event *row)
     struct ft_row_event *live = d->live;
 
     ft_otlp_record(d->otlp, row);
+    ft_api_record(d->api, row);
     for (size_t i = 0; i < d->nclients; i++) {
         struct client *c = &d->clients[i];
 
@@ -503,6 +510,7 @@ static void agent_close(struct agent *d)
         client_drop(d, d->nclients - 1);
     ft_scrape_close(d->scrape);
     ft_otlp_close(d->otlp);
+    ft_api_close(d->api);
     if (d->listen_fd >= 0) {
         close(d->listen_fd);
         unlink(d->cfg->socket_path);
@@ -556,6 +564,11 @@ static bool agent_open(struct agent *d, struct ft_error *err)
         if (!d->otlp)
             return false;
     }
+    if (cfg->api.enabled) {
+        d->api = ft_api_open(&cfg->api, &src, err);
+        if (!d->api)
+            return false;
+    }
     return true;
 }
 
@@ -602,6 +615,7 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
             ft_poller_add(p, d->clients[i].fd, d->clients[i].out_len ? POLLIN | POLLOUT : POLLIN);
         ft_scrape_poll(d->scrape, p);
         ft_otlp_poll(d->otlp, p);
+        ft_api_poll(d->api, p);
 
         int ready = ft_poller_wait(p, ft_clock_mono_ns());
         if (ready < 0 && errno != EINTR) {
@@ -640,6 +654,7 @@ int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
             accept_clients(d);
         ft_scrape_dispatch(d->scrape, p, now_ns);
         ft_otlp_dispatch(d->otlp, p, now_ns);
+        ft_api_dispatch(d->api, p);
     }
 
     ft_log(FT_LOG_INFO, "stopping");

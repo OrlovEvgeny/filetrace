@@ -131,6 +131,21 @@ static void resume(struct ft_grpc_call *call)
     nghttp2_session_resume_data(call->conn->h2.session, call->stream_id);
 }
 
+void ft_grpc_start(struct ft_grpc_call *call)
+{
+    const nghttp2_nv headers[] = {
+        FT_H2_NV(":status", "200"),
+        FT_H2_NV("content-type", "application/grpc"),
+    };
+    nghttp2_data_provider2 body = {.source.ptr = call, .read_callback = read_response};
+
+    if (call->responding)
+        return;
+    call->responding = true;
+    nghttp2_submit_response2(call->conn->h2.session, call->stream_id, headers,
+                             FT_ARRAY_LEN(headers), &body);
+}
+
 bool ft_grpc_send(struct ft_grpc_call *call, const uint8_t *message, size_t size)
 {
     size_t unread = call->out_len - call->out_off;
@@ -159,17 +174,7 @@ bool ft_grpc_send(struct ft_grpc_call *call, const uint8_t *message, size_t size
         memcpy(call->out + call->out_len + sizeof(prefix), message, size);
     call->out_len = need;
 
-    if (!call->responding) {
-        const nghttp2_nv headers[] = {
-            FT_H2_NV(":status", "200"),
-            FT_H2_NV("content-type", "application/grpc"),
-        };
-        nghttp2_data_provider2 body = {.source.ptr = call, .read_callback = read_response};
-
-        call->responding = true;
-        nghttp2_submit_response2(call->conn->h2.session, call->stream_id, headers,
-                                 FT_ARRAY_LEN(headers), &body);
-    }
+    ft_grpc_start(call);
     resume(call);
     return true;
 }

@@ -44,6 +44,7 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s)
         /* Exporting is the agent's business, not that of one command's collector. */
         cfg.prometheus.enabled = false;
         cfg.otlp.enabled = false;
+        cfg.api.enabled = false;
         _exit(ft_agent_run(&cfg, &err));
     }
 

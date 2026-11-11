@@ -83,6 +83,9 @@ void ft_grpc_server_free(struct ft_grpc_server *s);
 void ft_grpc_server_poll(struct ft_grpc_server *s, struct ft_poller *p);
 void ft_grpc_server_dispatch(struct ft_grpc_server *s, const struct ft_poller *p);
 
+/* Sends the response headers now rather than with the first message. */
+void ft_grpc_start(struct ft_grpc_call *call);
+
 /* Queues one response message. False when the caller has too much unread: nothing was queued. */
 bool ft_grpc_send(struct ft_grpc_call *call, const uint8_t *message, size_t size);
 

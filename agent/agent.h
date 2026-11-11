@@ -22,6 +22,11 @@ struct ft_otlp_config {
     uint64_t timeout_ns;
 };
 
+struct ft_api_config {
+    bool enabled;
+    char listen[108];
+};
+
 struct ft_agent_config {
     const struct ft_backend_ops *backend;
     struct ft_backend_config backend_cfg;
@@ -37,6 +42,7 @@ struct ft_agent_config {
 
     struct ft_prometheus_config prometheus;
     struct ft_otlp_config otlp;
+    struct ft_api_config api;
 };
 
 void ft_agent_config_defaults(struct ft_agent_config *cfg);
