@@ -2,6 +2,22 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.2.11 (2026-11-11)
+
+### New Feature
+
+- Report files in no_minimum_paths below the inferred minimums ([eebbfc6](https://github.com/OrlovEvgeny/filetrace/commit/eebbfc6ebdc51f46d51673651f7d5d729b59a6bb))
+
+### Bug Fix
+
+- Send only the exact installer and key paths to the bucket ([ba947c3](https://github.com/OrlovEvgeny/filetrace/commit/ba947c3fef7560829fc5ec141c495a4a17a3f213))
+- Answer a failed precondition by the body R2 leaves undefined ([aa35b66](https://github.com/OrlovEvgeny/filetrace/commit/aa35b66e4033d799b90bd0272f22f026fe7c5b89))
+- Install the libraries the agent links to in the vm image ([21248e3](https://github.com/OrlovEvgeny/filetrace/commit/21248e327ae4e833c1d165fab86a566dd939527c))
+- Let a receive end the file claim of the kprobe set ([78e461a](https://github.com/OrlovEvgeny/filetrace/commit/78e461a08bbd85ec604c49e8e16e147a5d96bfee))
+- Refuse a channel without a release before configuring a repository ([9142f85](https://github.com/OrlovEvgeny/filetrace/commit/9142f85a95a611b38a976fc47034d01834ce3bf9))
+- Let a receive on any socket end the file claim of the kprobe set ([3cba2b8](https://github.com/OrlovEvgeny/filetrace/commit/3cba2b898f461c51e05dcf6b11c5207d7f550309))
+- Check a channel where the chosen install method reads it ([43e5839](https://github.com/OrlovEvgeny/filetrace/commit/43e583932cd47cef06a55e546e615608ce72c63d))
+
 ## 26.11.1.160 (2026-11-11)
 
 ### New Feature
