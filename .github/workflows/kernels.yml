@@ -1,0 +1,28 @@
+name: Kernels
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: Linux ${{ matrix.kernel }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ["6.1", "6.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run the integration tests under QEMU
+        env:
+          KERNEL: ${{ matrix.kernel }}
+        run: tools/dev/vm.sh "$KERNEL" 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'
