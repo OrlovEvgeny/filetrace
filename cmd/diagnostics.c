@@ -2,6 +2,7 @@
 
 #include "backends/backend.h"
 #include "exporters/exporters.h"
+#include "filetrace/format.h"
 #include "filetrace/sysinfo.h"
 #include "ui/ui.h"
 
@@ -25,50 +26,235 @@ static const char *level_tag(enum ft_check_level level)
     }
 }
 
-static void print_checks(const struct ft_diagnosis *d, bool optional)
+static const char *level_word(enum ft_check_level level)
 {
-    for (size_t i = 0; i < d->count; i++) {
-        const struct ft_check *c = &d->checks[i];
-        if (c->optional != optional)
-            continue;
-        printf("%s %s", level_tag(c->level), c->text);
-        if (c->detail[0])
-            printf(c->level == FT_CHECK_OK ? " (%s)" : ": %s", c->detail);
-        putchar('\n');
+    switch (level) {
+    case FT_CHECK_OK:
+        return "AVAILABLE";
+    case FT_CHECK_WARN:
+        return "LIMITED";
+    default:
+        return "MISSING";
     }
 }
 
-static bool has_optional(const struct ft_diagnosis *d)
+static const char *feature_tag(enum ft_cap_status status)
 {
-    for (size_t i = 0; i < d->count; i++) {
-        if (d->checks[i].optional)
-            return true;
+    switch (status) {
+    case FT_CAP_FULL:
+        return "[OK]";
+    case FT_CAP_PARTIAL:
+        return "[WARN]";
+    case FT_CAP_DISABLED:
+        return "[OFF]";
+    default:
+        return "[NONE]";
     }
-    return false;
 }
 
-static void print_daemon_line(const struct ft_cli *cli)
+static const char *status_word(int exit_code)
+{
+    switch (exit_code) {
+    case FT_EXIT_OK:
+        return "READY";
+    case FT_EXIT_PARTIAL:
+        return "DEGRADED";
+    case FT_EXIT_PERMISSION:
+        return "NEEDS PRIVILEGES";
+    default:
+        return "UNAVAILABLE";
+    }
+}
+
+static void stats_collect(void *ctx, uint16_t type, const void *payload, size_t size)
+{
+    struct ft_row_stats *row = ctx;
+    if (type == FT_MSG_ROW_STATS)
+        memcpy(row, payload, size < sizeof(*row) ? size : sizeof(*row));
+}
+
+enum agent_state : uint8_t {
+    AGENT_RUNNING,
+    AGENT_STOPPED,
+    AGENT_UNREACHABLE,
+};
+
+/* What the running agent reports about its own pipeline, when one can be asked. */
+static enum agent_state ask_agent(const struct ft_cli *cli, struct ft_row_stats *stats)
 {
     struct ft_error err = {0};
     struct ft_client *c = ft_client_connect(cli->socket_path, &err);
+    struct ft_query q;
 
-    if (c)
-        printf("Running (%s)\n", cli->socket_path);
-    else if (err.code == FT_EXIT_PERMISSION)
-        printf("Running, but its socket is not accessible to this user\n");
-    else
-        printf("Not running\n");
+    memset(stats, 0, sizeof(*stats));
+    if (!c)
+        return err.code == FT_EXIT_PERMISSION ? AGENT_UNREACHABLE : AGENT_STOPPED;
+    ft_query_init(&q, FT_Q_STATS);
+    int code = ft_client_query(c, &q, stats_collect, stats, nullptr, &err);
     ft_client_close(c);
+    return code == FT_EXIT_OK ? AGENT_RUNNING : AGENT_UNREACHABLE;
+}
+
+static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info *host,
+                        enum agent_state agent, const struct ft_row_stats *stats, int code)
+{
+    char a[64];
+    bool probes = false;
+
+    printf("FILETRACE DIAGNOSTICS\n\n");
+    printf("%-20s%s\n", "Platform:", system_title(host));
+    printf("%-20s%s\n", "Kernel:", host->release);
+    printf("%-20s%s\n", "Architecture:", host->arch);
+    for (size_t i = 0; i < d->count; i++) {
+        const struct ft_check *c = &d->checks[i];
+        if (c->probe) {
+            probes = true;
+            continue;
+        }
+        snprintf(a, sizeof(a), "%s:", c->text);
+        printf("%-20s%s", a, level_word(c->level));
+        if (c->detail[0])
+            printf(" (%s)", c->detail);
+        putchar('\n');
+    }
+    printf("%-20s%s\n", "Backend:", d->backend);
+
+    if (probes) {
+        printf("\nPROBES\n");
+        for (size_t i = 0; i < d->count; i++) {
+            const struct ft_check *c = &d->checks[i];
+            if (!c->probe)
+                continue;
+            printf("  %s %s", level_tag(c->level), c->text);
+            if (c->detail[0])
+                printf(": %s", c->detail);
+            putchar('\n');
+        }
+        printf("  Each probe above was loaded into the kernel and attached for this check.\n");
+    }
+
+    /* One cause behind every feature is stated once instead of on each line. */
+    bool uniform = d->caps.items[0].reason[0] != '\0';
+    for (size_t f = 1; f < FT_FEAT_COUNT; f++) {
+        if (d->caps.items[f].status != d->caps.items[0].status ||
+            strcmp(d->caps.items[f].reason, d->caps.items[0].reason) != 0)
+            uniform = false;
+    }
+    printf("\nFEATURES\n");
+    for (size_t f = 0; f < FT_FEAT_COUNT; f++) {
+        const struct ft_capability *cap = &d->caps.items[f];
+        printf("  %s %s", feature_tag(cap->status), ft_feature_title((enum ft_feature)f));
+        if (!uniform && cap->reason[0] && cap->status != FT_CAP_FULL)
+            printf(": %s", cap->reason);
+        putchar('\n');
+    }
+    if (uniform)
+        printf("  Reason: %s.\n", d->caps.items[0].reason);
+
+    printf("\nEVENT PIPELINE\n");
+    if (agent == AGENT_RUNNING) {
+        printf("  %-18s%s, PID %u, %s mode\n", "Agent:", "running", stats->pid, stats->mode);
+        ft_format_count(stats->events_received, a, sizeof(a));
+        printf("  %-18s%s\n", "Events received:", a);
+        ft_format_count(stats->events_dropped, a, sizeof(a));
+        printf("  %-18s%s\n", "Events dropped:", a);
+        ft_format_bytes(stats->queue_bytes, a, sizeof(a));
+        printf("  %-18s%s\n", "Ring buffer:", a);
+        if (stats->event_log_bytes) {
+            ft_format_bytes(stats->event_log_bytes, a, sizeof(a));
+            printf("  %-18s%s\n", "Event log:", a);
+        } else {
+            printf("  %-18s%s\n", "Event log:", "off");
+        }
+    } else if (agent == AGENT_UNREACHABLE) {
+        printf("  %-18s%s\n", "Agent:", "running, but its socket is not accessible to this user");
+    } else {
+        printf("  %-18s%s\n", "Agent:",
+               d->exit_code == FT_EXIT_OK || d->exit_code == FT_EXIT_PARTIAL
+                   ? "not running; start it with 'sudo filetrace daemon run'"
+                   : "not running");
+    }
+
+    printf("\nSTATUS: %s\n", status_word(code));
+    if (agent == AGENT_RUNNING && stats->health != FT_HEALTH_OK)
+        printf("\nThe running agent has lost events recently; see 'filetrace stats'.\n");
+    if (d->advice[0])
+        printf("\n%s\n", d->advice);
+}
+
+static void doctor_json(const struct ft_diagnosis *d, const struct ft_host_info *host,
+                        enum agent_state agent, const struct ft_row_stats *stats, int code)
+{
+    static const char *const levels[] = {"ok", "warn", "fail"};
+    static const char *const agents[] = {"running", "stopped", "unreachable"};
+    const char *status = status_word(code);
+    bool first = true;
+
+    printf("{\"status\":\"");
+    for (const char *p = status; *p; p++)
+        putchar(*p == ' ' ? '_' : (*p >= 'A' && *p <= 'Z' ? *p + 32 : *p));
+    printf("\",\"platform\":\"%s\",\"kernel\":", system_title(host));
+    ft_json_string(stdout, host->release);
+    printf(",\"architecture\":");
+    ft_json_string(stdout, host->arch);
+    printf(",\"backend\":");
+    ft_json_string(stdout, d->backend);
+
+    for (int probes = 0; probes < 2; probes++) {
+        printf(",\"%s\":[", probes ? "probes" : "checks");
+        first = true;
+        for (size_t i = 0; i < d->count; i++) {
+            const struct ft_check *c = &d->checks[i];
+            if (c->probe != (probes == 1))
+                continue;
+            printf("%s{\"name\":", first ? "" : ",");
+            ft_json_string(stdout, c->text);
+            printf(",\"status\":\"%s\"", levels[c->level]);
+            if (c->detail[0]) {
+                printf(",\"detail\":");
+                ft_json_string(stdout, c->detail);
+            }
+            putchar('}');
+            first = false;
+        }
+        putchar(']');
+    }
+
+    printf(",\"features\":[");
+    for (size_t f = 0; f < FT_FEAT_COUNT; f++) {
+        const struct ft_capability *cap = &d->caps.items[f];
+        printf("%s{\"feature\":\"%s\",\"status\":\"%s\"", f ? "," : "",
+               ft_feature_key((enum ft_feature)f), ft_cap_status_name(cap->status));
+        if (cap->reason[0]) {
+            printf(",\"detail\":");
+            ft_json_string(stdout, cap->reason);
+        }
+        putchar('}');
+    }
+    printf("],\"agent\":{\"state\":\"%s\"", agents[agent]);
+    if (agent == AGENT_RUNNING)
+        printf(",\"pid\":%u,\"mode\":\"%s\",\"events_received\":%llu,\"events_dropped\":%llu,"
+               "\"ring_buffer_bytes\":%llu,\"event_log_bytes\":%llu",
+               stats->pid, stats->mode, (unsigned long long)stats->events_received,
+               (unsigned long long)stats->events_dropped, (unsigned long long)stats->queue_bytes,
+               (unsigned long long)stats->event_log_bytes);
+    printf("}}\n");
 }
 
 int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a)
 {
+    enum ft_format format = ft_cli_format(cli, FT_FORMATS_REPORT);
     struct ft_backend_config cfg;
     const char *v;
     int r;
 
     ft_backend_config_defaults(&cfg);
     while (!ft_args_done(a)) {
+        if ((r = ft_args_format(a, "doctor", FT_FORMATS_REPORT, &format)) != 0) {
+            if (r < 0)
+                return FT_EXIT_USAGE;
+            continue;
+        }
         if ((r = ft_args_value(a, "--probes", &v)) == 0)
             return ft_usage_error("doctor", "unknown argument '%s'", ft_args_peek(a));
         if (r < 0)
@@ -81,35 +267,29 @@ int ft_cmd_doctor(const struct ft_cli *cli, struct ft_args *a)
     }
 
     struct ft_diagnosis *d = calloc(1, sizeof(*d));
+    struct ft_row_stats *stats = calloc(1, sizeof(*stats));
     struct ft_host_info host;
-    if (!d)
+    if (!d || !stats) {
+        free(d);
+        free(stats);
         return FT_EXIT_ERROR;
+    }
 
     ft_sysinfo_host(&host);
     ft_backend_native()->diagnose(&cfg, d);
+    enum agent_state agent = ask_agent(cli, stats);
 
-    printf("FILETRACE DOCTOR\n\n"
-           "Platform: %s\n"
-           "%s %s\n"
-           "Arch:     %s\n\n",
-           system_title(&host),
-           strcmp(host.system, "Linux") == 0 ? "Kernel:  " : "Version: ", host.release, host.arch);
-
-    printf("CHECKS\n");
-    print_checks(d, false);
-    if (has_optional(d)) {
-        printf("\nOPTIONAL\n");
-        print_checks(d, true);
-    }
-    printf("\nBACKEND\n%s\n", d->backend);
-    printf("\nDAEMON\n");
-    print_daemon_line(cli);
-    printf("\nRESULT\n%s\n", d->result);
-    if (d->advice[0])
-        printf("\n%s\n", d->advice);
-
+    /* Probes that attach do not help an agent that is dropping what they produce. */
     int code = d->exit_code;
+    if (code == FT_EXIT_OK && agent == AGENT_RUNNING && stats->health != FT_HEALTH_OK)
+        code = FT_EXIT_PARTIAL;
+
+    if (format == FT_FMT_JSON)
+        doctor_json(d, &host, agent, stats, code);
+    else
+        doctor_text(d, &host, agent, stats, code);
     free(d);
+    free(stats);
     return code;
 }
 

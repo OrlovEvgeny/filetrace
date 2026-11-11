@@ -82,24 +82,30 @@ bool ft_linux_lookup_process(uint32_t pid, struct ft_ev_process *out)
     return true;
 }
 
-bool ft_linux_privileged(void)
+void ft_linux_held_capabilities(struct ft_linux_caps *out)
 {
-    char buf[2048];
-
-    if (geteuid() == 0)
-        return true;
-    if (!read_file("/proc/self/status", buf, sizeof(buf)))
-        return false;
-
-    const char *line = strstr(buf, "\nCapEff:");
-    unsigned long long caps = 0;
-    if (!line || sscanf(line, "\nCapEff: %llx", &caps) != 1)
-        return false;
-
+    constexpr unsigned long long CAP_SYS_ADMIN_BIT = 1ULL << 21;
     constexpr unsigned long long CAP_PERFMON_BIT = 1ULL << 38;
     constexpr unsigned long long CAP_BPF_BIT = 1ULL << 39;
-    constexpr unsigned long long CAP_SYS_ADMIN_BIT = 1ULL << 21;
-    return (caps & CAP_SYS_ADMIN_BIT) || ((caps & CAP_BPF_BIT) && (caps & CAP_PERFMON_BIT));
+    unsigned long long caps = 0;
+    char buf[2048];
+
+    if (read_file("/proc/self/status", buf, sizeof(buf))) {
+        const char *line = strstr(buf, "\nCapEff:");
+        if (!line || sscanf(line, "\nCapEff: %llx", &caps) != 1)
+            caps = 0;
+    }
+    out->sys_admin = (caps & CAP_SYS_ADMIN_BIT) != 0;
+    out->bpf = (caps & CAP_BPF_BIT) != 0;
+    out->perfmon = (caps & CAP_PERFMON_BIT) != 0;
+}
+
+bool ft_linux_privileged(void)
+{
+    struct ft_linux_caps caps;
+
+    ft_linux_held_capabilities(&caps);
+    return caps.sys_admin || (caps.bpf && caps.perfmon);
 }
 
 bool ft_linux_kernel_version(unsigned *major, unsigned *minor)

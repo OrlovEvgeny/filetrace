@@ -72,6 +72,14 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_back
 void ft_linux_diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *out);
 
 bool ft_linux_lookup_process(uint32_t pid, struct ft_ev_process *out);
+/* Effective capabilities; CAP_SYS_ADMIN stands in for the other two. */
+struct ft_linux_caps {
+    bool sys_admin;
+    bool bpf;
+    bool perfmon;
+};
+
+void ft_linux_held_capabilities(struct ft_linux_caps *out);
 bool ft_linux_privileged(void);
 bool ft_linux_kernel_version(unsigned *major, unsigned *minor);
 void ft_linux_fs_type(uint64_t magic, char *buf, size_t size);

@@ -342,11 +342,20 @@ static void help_stats(FILE *o)
 static void help_doctor(FILE *o)
 {
     fputs("Usage:\n"
-          "  filetrace doctor [--probes auto|trampoline|kprobe]\n"
+          "  filetrace doctor [--probes auto|trampoline|kprobe] [--json]\n"
           "\n"
-          "Checks whether this machine can be monitored: kernel support, privileges\n"
-          "and each instrumentation point. The probes are loaded and attached for\n"
-          "the duration of the check, then removed.\n"
+          "Checks whether this machine can be monitored and how well:\n"
+          "\n"
+          "  the kernel, BTF, BPF and the capabilities needed to load programs;\n"
+          "  PROBES    every instrumentation point, loaded into the kernel and\n"
+          "            attached for the duration of the check, then removed;\n"
+          "  FEATURES  what the attached probes add up to: [OK] in full, [WARN]\n"
+          "            in part, [OFF] turned off, [NONE] not available;\n"
+          "  EVENT PIPELINE\n"
+          "            what the running agent received and dropped.\n"
+          "\n"
+          "A probe is reported as attached only if the kernel accepted the program\n"
+          "and every kernel field it reads was found.\n"
           "\n"
           "Kernel functions are traced through BPF trampolines where the kernel has\n"
           "them and through kprobes otherwise; --probes checks one of the two.\n"
@@ -354,10 +363,12 @@ static void help_doctor(FILE *o)
           "Examples:\n"
           "  sudo filetrace doctor\n"
           "  sudo filetrace doctor --probes kprobe\n"
+          "  sudo filetrace doctor --json\n"
           "\n"
           "Exit codes:\n"
-          "  0  monitoring available         5  monitoring unavailable\n"
-          "  3  privileges missing           9  partial monitoring available\n",
+          "  0  READY                        5  UNAVAILABLE\n"
+          "  3  NEEDS PRIVILEGES             9  DEGRADED: some probes are missing,\n"
+          "                                     or the agent is losing events\n",
           o);
 }
 

@@ -37,6 +37,7 @@ enum ft_check_level : uint8_t {
 struct ft_check {
     enum ft_check_level level;
     bool optional;
+    bool probe; /* an instrumentation point that was loaded and attached for the check */
     char text[96];
     char detail[240];
 };
@@ -56,6 +57,10 @@ struct ft_diagnosis {
 [[gnu::format(printf, 5, 6)]]
 void ft_diagnosis_add(struct ft_diagnosis *d, enum ft_check_level level, bool optional,
                       const char *text, const char *detail_fmt, ...);
+
+[[gnu::format(printf, 5, 6)]]
+void ft_diagnosis_add_probe(struct ft_diagnosis *d, enum ft_check_level level, bool optional,
+                            const char *text, const char *detail_fmt, ...);
 
 struct ft_backend_stats {
     uint64_t events; /* records received from the kernel */

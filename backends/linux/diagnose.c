@@ -8,28 +8,6 @@
 
 constexpr int ENOTSUPP_KERNEL = 524; /* the kernel's ENOTSUPP, which libc cannot name */
 
-static const char *group_title(const struct ft_linux_probes *p, enum ft_probe_group group)
-{
-    bool kprobes = p->set->kind == FT_PROBES_KPROBE;
-
-    switch (group) {
-    case FT_PG_PROCESS:
-        return "Process lifecycle tracepoints";
-    case FT_PG_TCP_STATE:
-        return "TCP state tracepoint";
-    case FT_PG_NET:
-        return kprobes ? "Network send and receive probes" : "IPv4 send and receive probes";
-    case FT_PG_NET_IPV6:
-        return kprobes ? "IPv6 datagram probe" : "IPv6 send and receive probes";
-    case FT_PG_FILE_READ:
-        return "File read probe";
-    case FT_PG_SENDFILE:
-        return "sendfile probe";
-    default:
-        return "File deletion probe";
-    }
-}
-
 static const char *error_text(int error)
 {
     return error == ENOTSUPP_KERNEL ? "not supported by this kernel" : strerror(error);
@@ -195,24 +173,28 @@ static bool lockdown_blocks_reads(void)
     return strstr(buf, "[confidentiality]") != nullptr;
 }
 
-/* Adds one check per probe group; returns how many groups are not fully attached. */
-static size_t report_groups(struct ft_diagnosis *out, const struct ft_linux_probes *p)
+/* Adds one check per probe that was to be attached; returns how many are not. */
+static size_t report_probes(struct ft_diagnosis *out, const struct ft_linux_probes *p)
 {
     size_t failed = 0;
 
-    for (size_t g = 0; g < FT_PG_COUNT; g++) {
-        enum ft_probe_group group = (enum ft_probe_group)g;
-        char why[240];
-        const char *problem = group_problem(p, group, why, sizeof(why));
-        bool required =
-            group == FT_PG_NET || (group == FT_PG_TCP_STATE && p->set->kind == FT_PROBES_KPROBE);
+    for (size_t i = 0; i < p->set->count; i++) {
+        const struct ft_probe_def *def = &p->set->defs[i];
+        const struct ft_probe_status *st = &p->status[i];
+        bool required = def->group == FT_PG_NET ||
+                        (def->group == FT_PG_TCP_STATE && p->set->kind == FT_PROBES_KPROBE);
+        char name[96];
+        char why[160];
 
-        if (problem) {
-            ft_diagnosis_add(out, required ? FT_CHECK_FAIL : FT_CHECK_WARN, !required,
-                             group_title(p, group), "%s", problem);
-            failed++;
+        if (st->state == FT_PROBE_NOT_NEEDED)
+            continue;
+        snprintf(name, sizeof(name), "%s %s", def->kind, def->target);
+        if (st->state == FT_PROBE_ATTACHED) {
+            ft_diagnosis_add_probe(out, FT_CHECK_OK, !required, name, "%s", "");
         } else {
-            ft_diagnosis_add(out, FT_CHECK_OK, !required, group_title(p, group), "%s", "");
+            ft_diagnosis_add_probe(out, required ? FT_CHECK_FAIL : FT_CHECK_WARN, !required, name,
+                                   "%s", probe_problem(st, why, sizeof(why)));
+            failed++;
         }
     }
     return failed;
@@ -233,20 +215,23 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
         ft_diagnosis_add(out, FT_CHECK_WARN, true, "Kernel version",
                          "%u.%u is older than 6.1, the oldest kernel Filetrace is built for", major,
                          minor);
-    else
-        ft_diagnosis_add(out, FT_CHECK_OK, false, "Kernel version", "%u.%u", major, minor);
 
     if (access("/sys/kernel/btf/vmlinux", R_OK) == 0) {
-        ft_diagnosis_add(out, FT_CHECK_OK, false, "BTF available", "%s", "");
+        ft_diagnosis_add(out, FT_CHECK_OK, false, "BTF", "%s", "");
     } else {
-        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "BTF available",
+        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "BTF",
                          "/sys/kernel/btf/vmlinux is missing; the kernel must be built with "
                          "CONFIG_DEBUG_INFO_BTF");
         blocked = true;
     }
 
-    ft_diagnosis_add(out, FT_CHECK_OK, false, "libbpf available", "version %s",
-                     libbpf_version_string());
+    struct ft_linux_caps caps;
+    ft_linux_held_capabilities(&caps);
+    ft_diagnosis_add(out, caps.bpf || caps.sys_admin ? FT_CHECK_OK : FT_CHECK_FAIL, false,
+                     "CAP_BPF", "%s", caps.bpf || !caps.sys_admin ? "" : "through CAP_SYS_ADMIN");
+    ft_diagnosis_add(out, caps.perfmon || caps.sys_admin ? FT_CHECK_OK : FT_CHECK_FAIL, false,
+                     "CAP_PERFMON", "%s",
+                     caps.perfmon || !caps.sys_admin ? "" : "through CAP_SYS_ADMIN");
 
     if (lockdown_blocks_reads()) {
         ft_diagnosis_add(out, FT_CHECK_FAIL, false, "Kernel lockdown",
@@ -255,8 +240,9 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     }
 
     if (!ft_linux_privileged()) {
-        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "Required privileges",
-                         "root, or CAP_BPF with CAP_PERFMON, is needed to load BPF programs");
+        ft_diagnosis_add(out, FT_CHECK_WARN, false, "BPF",
+                         "not checked: loading BPF programs needs root, or CAP_BPF with "
+                         "CAP_PERFMON");
         ft_capability_set_all(&out->caps, FT_CAP_UNAVAILABLE,
                               "not verified: insufficient privileges");
         out->exit_code = FT_EXIT_PERMISSION;
@@ -269,20 +255,13 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
                  "if the kernel lacks the required support.");
         return;
     }
-    ft_diagnosis_add(out, FT_CHECK_OK, false, "Required privileges", "%s", "");
-
-    if (libbpf_probe_bpf_map_type(BPF_MAP_TYPE_RINGBUF, nullptr) == 1) {
-        ft_diagnosis_add(out, FT_CHECK_OK, false, "Ring Buffer support", "%s", "");
+    bool ring = libbpf_probe_bpf_map_type(BPF_MAP_TYPE_RINGBUF, nullptr) == 1;
+    bool storage = libbpf_probe_bpf_map_type(BPF_MAP_TYPE_TASK_STORAGE, nullptr) == 1;
+    if (ring && storage) {
+        ft_diagnosis_add(out, FT_CHECK_OK, false, "BPF", "libbpf %s", libbpf_version_string());
     } else {
-        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "Ring Buffer support",
-                         "the kernel cannot create BPF ring buffers");
-        blocked = true;
-    }
-    if (libbpf_probe_bpf_map_type(BPF_MAP_TYPE_TASK_STORAGE, nullptr) == 1) {
-        ft_diagnosis_add(out, FT_CHECK_OK, false, "Task storage support", "%s", "");
-    } else {
-        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "Task storage support",
-                         "the kernel cannot create BPF task storage maps");
+        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "BPF", "the kernel cannot create %s",
+                         ring ? "BPF task storage maps" : "BPF ring buffers");
         blocked = true;
     }
 
@@ -304,7 +283,7 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
             rc ? strerror(-rc) : group_problem(&probes, FT_PG_NET, why, sizeof(why));
 
         ft_diagnosis_add(out, FT_CHECK_WARN, false, "BPF trampolines",
-                         "unavailable (%s); kernel functions are traced with kprobes", problem);
+                         "%s; kernel functions are traced with kprobes instead", problem);
         if (!rc)
             ft_linux_probes_unload(&probes);
         cfg.probes = FT_PROBES_KPROBE;
@@ -314,17 +293,18 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     }
 
     if (rc) {
-        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "BPF programs load", "%s (%s)", strerror(-rc),
-                         ft_linux_last_libbpf_message());
+        ft_diagnosis_add(out, FT_CHECK_FAIL, false, "BPF programs", "do not load: %s (%s)",
+                         strerror(-rc), ft_linux_last_libbpf_message());
         ft_capability_set_all(&out->caps, FT_CAP_UNAVAILABLE,
                               "the BPF programs could not be loaded");
         out->exit_code = FT_EXIT_UNSUPPORTED;
         snprintf(out->result, sizeof(out->result), "Monitoring unavailable");
         return;
     }
-    ft_diagnosis_add(out, FT_CHECK_OK, false, "BPF programs load", "%s", "");
+    ft_diagnosis_add(out, FT_CHECK_OK, false, "BPF programs",
+                     "loaded; every kernel field they read was found");
 
-    size_t failed_groups = report_groups(out, &probes);
+    size_t failed_groups = report_probes(out, &probes);
     bool have_network = ft_linux_network_attached(&probes);
     bool kprobes = probes.set->kind == FT_PROBES_KPROBE;
 

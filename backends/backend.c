@@ -41,19 +41,35 @@ bool ft_probes_parse(const char *text, enum ft_probes *p)
     return false;
 }
 
-void ft_diagnosis_add(struct ft_diagnosis *d, enum ft_check_level level, bool optional,
-                      const char *text, const char *detail_fmt, ...)
+[[gnu::format(printf, 6, 0)]]
+static void add_check(struct ft_diagnosis *d, enum ft_check_level level, bool optional, bool probe,
+                      const char *text, const char *detail_fmt, va_list ap)
 {
     if (d->count >= FT_MAX_CHECKS)
         return;
 
     struct ft_check *c = &d->checks[d->count++];
-    va_list ap;
-
     c->level = level;
     c->optional = optional;
+    c->probe = probe;
     ft_strlcpy(c->text, text, sizeof(c->text));
-    va_start(ap, detail_fmt);
     vsnprintf(c->detail, sizeof(c->detail), detail_fmt, ap);
+}
+
+void ft_diagnosis_add(struct ft_diagnosis *d, enum ft_check_level level, bool optional,
+                      const char *text, const char *detail_fmt, ...)
+{
+    va_list ap;
+    va_start(ap, detail_fmt);
+    add_check(d, level, optional, false, text, detail_fmt, ap);
+    va_end(ap);
+}
+
+void ft_diagnosis_add_probe(struct ft_diagnosis *d, enum ft_check_level level, bool optional,
+                            const char *text, const char *detail_fmt, ...)
+{
+    va_list ap;
+    va_start(ap, detail_fmt);
+    add_check(d, level, optional, true, text, detail_fmt, ap);
     va_end(ap);
 }
