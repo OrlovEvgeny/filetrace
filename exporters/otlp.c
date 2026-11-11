@@ -347,7 +347,8 @@ static void describe(struct attrs *l, const struct ft_row_event *e)
     }
 }
 
-static LogRecord *make_record(struct ft_arena *a, const struct ft_row_event *e, uint64_t now_wall_ns)
+static LogRecord *make_record(struct ft_arena *a, const struct ft_row_event *e,
+                              uint64_t now_wall_ns)
 {
     const char *type = ft_record_type_name((enum ft_record_type)e->type);
     LogRecord *record = ft_arena_alloc(a, sizeof(*record));
