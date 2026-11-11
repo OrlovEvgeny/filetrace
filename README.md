@@ -49,7 +49,7 @@ upgrades arrive with the system's own. Where none of them is present it
 unpacks the release archive under `/usr/local`.
 
 ```sh
-curl -fsSL https://orlovevgeny.github.io/filetrace/install.sh | sudo sh
+curl -fsSL https://filetrace.eorlov.org/install.sh | sudo sh
 ```
 
 Append `-s -- --help` to `sh` for the options: a version, the `lts` channel,
@@ -64,28 +64,28 @@ and the agent speak one protocol version.
 | Channel | How |
 |---|---|
 | Homebrew, on macOS 15 or later and on Linux | `brew install orlovevgeny/filetrace/filetrace` for the newest release, `orlovevgeny/filetrace/filetrace@26.11` to stay on a line; the programs only, without a service |
-| Debian, Ubuntu | `apt`, from `https://orlovevgeny.github.io/filetrace/apt` |
-| Fedora, RHEL and derivatives, openSUSE | `dnf`, `yum` or `zypper`, from `https://orlovevgeny.github.io/filetrace/rpm` |
-| Alpine | `apk`, from `https://orlovevgeny.github.io/filetrace/apk` |
-| Anything else | the archives of a [release](https://github.com/OrlovEvgeny/filetrace/releases) |
+| Debian, Ubuntu | `apt`, from `https://filetrace.eorlov.org/apt` |
+| Fedora, RHEL and derivatives, openSUSE | `dnf`, `yum` or `zypper`, from `https://filetrace.eorlov.org/rpm` |
+| Alpine | `apk`, from `https://filetrace.eorlov.org/apk` |
+| Anything else | the archives of a [release](https://github.com/OrlovEvgeny/filetrace/releases), also at `https://filetrace.eorlov.org/dist/<tag>/` |
 
 To set a repository up by hand:
 
 ```sh
 # apt
-curl -fsSL https://orlovevgeny.github.io/filetrace/gpg.key | sudo tee /etc/apt/keyrings/filetrace.asc >/dev/null
-printf 'Types: deb\nURIs: https://orlovevgeny.github.io/filetrace/apt\nSuites: stable\nComponents: main\nSigned-By: /etc/apt/keyrings/filetrace.asc\n' |
+curl -fsSL https://filetrace.eorlov.org/gpg.key | sudo tee /etc/apt/keyrings/filetrace.asc >/dev/null
+printf 'Types: deb\nURIs: https://filetrace.eorlov.org/apt\nSuites: stable\nComponents: main\nSigned-By: /etc/apt/keyrings/filetrace.asc\n' |
     sudo tee /etc/apt/sources.list.d/filetrace.sources >/dev/null
 sudo apt update && sudo apt install filetrace
 
 # dnf
-printf '[filetrace]\nname=Filetrace\nbaseurl=https://orlovevgeny.github.io/filetrace/rpm/stable/$basearch\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=https://orlovevgeny.github.io/filetrace/gpg.key\n' |
+printf '[filetrace]\nname=Filetrace\nbaseurl=https://filetrace.eorlov.org/rpm/stable/$basearch\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=https://filetrace.eorlov.org/gpg.key\n' |
     sudo tee /etc/yum.repos.d/filetrace.repo >/dev/null
 sudo dnf install filetrace && sudo systemctl enable --now filetrace-agent
 
 # apk
-wget -O /etc/apk/keys/filetrace.rsa.pub https://orlovevgeny.github.io/filetrace/apk/filetrace.rsa.pub
-echo https://orlovevgeny.github.io/filetrace/apk/stable >>/etc/apk/repositories
+wget -O /etc/apk/keys/filetrace.rsa.pub https://filetrace.eorlov.org/apk/filetrace.rsa.pub
+echo https://filetrace.eorlov.org/apk/stable >>/etc/apk/repositories
 apk add filetrace && rc-update add filetrace-agent default && rc-service filetrace-agent start
 ```
 

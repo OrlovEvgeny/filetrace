@@ -22,5 +22,5 @@ gh attestation verify <file> --repo OrlovEvgeny/filetrace
 ```
 
 The apt and yum repositories and the rpm packages are signed with the OpenPGP
-key at <https://orlovevgeny.github.io/filetrace/gpg.key>, the apk repository
-and packages with <https://orlovevgeny.github.io/filetrace/apk/filetrace.rsa.pub>.
+key at <https://filetrace.eorlov.org/gpg.key>, the apk repository
+and packages with <https://filetrace.eorlov.org/apk/filetrace.rsa.pub>.

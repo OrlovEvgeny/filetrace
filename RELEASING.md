@@ -42,14 +42,17 @@ which can also be started from the Actions tab. The workflow
    tags the commit, and publishes the GitHub release with notes generated
    from the commit subjects;
 5. opens the branch of a new line;
-6. rebuilds the apt, yum and apk repositories from every published release
-   and deploys them, with the installer, to GitHub Pages;
+6. rebuilds the download site from every published release and uploads it:
+   the files of each release, the apt, yum and apk repositories, and the
+   installer;
 7. writes the formula `filetrace@<line>` in the Homebrew tap
    `OrlovEvgeny/homebrew-filetrace`, and `filetrace` too when the release is
    the newest one;
 8. opens a pull request that adds the notes to `CHANGELOG.md`.
 
-A candidate stops after step 4.
+A candidate is published and its files reach the download site. It opens no
+branch, enters no repository and no formula, and adds nothing to the
+changelog.
 
 ## Patching a line
 
@@ -61,19 +64,40 @@ patch is how a second release in a month is made.
 ## When a release stops halfway
 
 Every job can be run again from the workflow run: an existing tag is accepted
-if it names the same commit, a draft release is filled and published, and the
-site is rebuilt from what is published. `Download site` rebuilds and deploys
-the repositories on its own.
+if it names the same commit, a draft release is filled and published, a
+public one is left as it is, and the site is rebuilt from what is published.
+`Download site` rebuilds and uploads the site on its own.
 
 A published release cannot be changed. A bad one is followed by a patch.
+
+## The download site
+
+`https://filetrace.eorlov.org` is a Cloudflare R2 bucket connected to that
+domain.
+
+| Path | Holds |
+|---|---|
+| `install.sh` | the installer of the newest release |
+| `dist/<tag>/` | the files of a release, the same as its GitHub assets |
+| `apt/`, `rpm/`, `apk/` | the package repositories, with the `stable` and `lts` channels |
+| `channels/<channel>`, `versions/<version>` | what the installer reads to find a release |
+| `gpg.key`, `apk/filetrace.rsa.pub` | the public halves of the signing keys |
+
+The site is built from the GitHub releases every time, so the bucket holds
+nothing that cannot be made again: `Download site` fills an empty one.
+
+`tools/release/deploy.sh` uploads the release files, the packages and the
+indexes named after their checksum first, to be cached for good, and the
+indexes that name them after, to be checked on every request. A file under
+`dist/` that differs from the bucket's stops the upload. Nothing is deleted,
+so a client that holds an older index still finds every file it lists.
 
 ## Setting the repository up
 
 `tools/release/github-setup.sh` applies the settings below and is safe to run
 again:
 
-- GitHub Pages deployed by Actions, immutable releases, private vulnerability
-  reports;
+- immutable releases and private vulnerability reports;
 - the `release` environment, with the repository owner as its reviewer;
 - rules: `master` and the line branches keep a linear history and can be
   neither rewritten nor deleted; release tags can be neither moved nor
@@ -81,18 +105,28 @@ again:
 - rebase as the only way to merge, and permission for workflows to open pull
   requests.
 
-Three secrets of the `release` environment hold the keys:
+The bucket is set up once in the Cloudflare dashboard: create it, connect
+`filetrace.eorlov.org` to it as a custom domain, and create an R2 API token
+with Object Read & Write permission on that bucket alone. R2 serves no index
+document, so `https://filetrace.eorlov.org/` shows a page only with a rule
+that rewrites `/` to `/index.html`.
+
+These secrets, of the repository or of its `release` environment, hold the
+keys and the way into the bucket:
 
 | Secret | Holds | Without it |
 |---|---|---|
-| `FILETRACE_GPG_KEY` | OpenPGP private key for the apt and yum repositories and the rpm packages | the package repositories are not updated |
+| `FILETRACE_GPG_KEY` | OpenPGP private key for the apt and yum repositories and the rpm packages | the packages are unsigned, and neither the site nor the formulae are updated |
 | `FILETRACE_APK_KEY` | RSA private key for the apk repository and packages | the same |
+| `R2_ACCOUNT_ID`, `R2_BUCKET_NAME` | the Cloudflare account and the bucket of the download site | neither the site nor the formulae are updated |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | the R2 API token | the same |
 | `HOMEBREW_TAP_KEY` | SSH deploy key with write access to `OrlovEvgeny/homebrew-filetrace` | the formulae are not updated |
 
-`tools/release/keys.sh <directory>` creates the first two;
+`tools/release/keys.sh <directory>` creates the two signing keys;
 `tools/release/github-setup.sh --keys <directory>` stores them and creates
-the third. Keep a copy of the directory somewhere safe and offline: the keys
-have no passphrase, and losing them means every user has to trust new ones.
+the deploy key. Keep a copy of the directory somewhere safe and offline: the
+keys have no passphrase, and losing them means every user has to trust new
+ones.
 
 To replace a key, create a new one, store it, and run `Download site`: the
 repositories are signed again and serve the new public key. Users of apt and
