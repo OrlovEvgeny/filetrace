@@ -2,6 +2,17 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.5.6 (2026-11-11)
+
+### New Feature
+
+- Report a PID namespace other than the host's in doctor ([b69be3f](https://github.com/OrlovEvgeny/filetrace/commit/b69be3f6739f276ba0a411f7ef5cc7732a574d1c))
+
+### Bug Fix
+
+- Take the command line and directory from the exec record ([5dd7e0b](https://github.com/OrlovEvgeny/filetrace/commit/5dd7e0b9de14ab6fe58406a4ce1a82420d901571))
+- Skip /proc reads outside the host PID namespace ([310560c](https://github.com/OrlovEvgeny/filetrace/commit/310560cb60f6eb7e21cd79d2f5ff4486464dea2f))
+
 ## 26.11.4.16 (2026-11-11)
 
 ### New Feature
