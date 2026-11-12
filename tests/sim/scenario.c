@@ -345,15 +345,15 @@ static const struct ft_sim_process storm_processes[] = {
 };
 
 static const struct ft_sim_flavor storm_static[] = {
-    {.weight = 1, .path = "/var/www/cdn/static/chunk-%04llx.js", .numbering = FT_SIM_NUMBER_RANDOM,
-     .first = 0, .last = 4095, .size_min = KIB(32), .size_max = MIB(2), .rate_min = 40,
+    {.weight = 1, .path = "/var/www/cdn/vod/part-%04llx.m4s", .numbering = FT_SIM_NUMBER_RANDOM,
+     .first = 0, .last = 4095, .size_min = KIB(256), .size_max = MIB(8), .rate_min = 40,
      .rate_max = 300},
     {0},
 };
 
 static const struct ft_sim_flavor storm_cache[] = {
     {.weight = 1, .path = "/srv/media/cache/%05llx.bin", .numbering = FT_SIM_NUMBER_RANDOM,
-     .first = 0, .last = 8191, .size_min = KIB(32), .size_max = MIB(2), .rate_min = 40,
+     .first = 0, .last = 8191, .size_min = KIB(256), .size_max = MIB(8), .rate_min = 40,
      .rate_max = 250},
     {0},
 };
@@ -373,7 +373,7 @@ static const struct {
     const struct ft_sim_process *processes;
     const struct ft_sim_generator *generators;
     struct ft_sim_recycle recycle;
-    bool scaled; /* its transfers are split among the generators by count */
+    bool scaled; /* the transfers asked for are split among the generators */
 } known[] = {
     {"edge", edge_processes, edge_generators, {18800, 240, 600, 18837}, false},
     {"quiet", quiet_processes, quiet_generators, {0}, false},
@@ -422,8 +422,10 @@ struct ft_sim_scenario *ft_sim_scenario_create(const char *name, uint32_t transf
             return nullptr;
         }
         if (known[i].scaled) {
-            uint32_t cache = transfers / 7;
-            sc->generators[0].slots = transfers - cache;
+            /* Finished transfers stay active for another five seconds, a sixth of their life. */
+            uint32_t running = transfers - transfers / 7;
+            uint32_t cache = running / 6;
+            sc->generators[0].slots = running - cache;
             sc->generators[1].slots = cache;
         }
         return sc;
