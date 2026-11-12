@@ -228,10 +228,9 @@ struct dial {
     __u64 first_ns; /* the dial */
     __u64 sent_ns;  /* the first send, or 0 */
     __u64 last_ns;
-    __u64 wire;       /* what the connection took, sendfile aside */
-    __u64 burst;      /* of that, since the connection last heard from its peer */
-    __u64 max_burst;  /* the most it took between two receives */
-    __u64 next_burst; /* the second most */
+    __u64 wire;    /* what the connection took, sendfile aside */
+    __u64 burst;   /* of that, since the connection last heard from its peer */
+    __u64 runs[3]; /* the three longest of those between two receives, longest first */
     struct dialed_file cands[CARRY_CANDIDATES];
 };
 
@@ -724,6 +723,21 @@ static __always_inline void carry_close(void *map, __u64 sk, enum carry_end end,
     bpf_map_delete_elem(&carries, &sk);
 }
 
+/* Keeps the three longest runs of sends, longest first. */
+static __always_inline void runs_keep(__u64 *runs, __u64 run)
+{
+    if (run > runs[0]) {
+        runs[2] = runs[1];
+        runs[1] = runs[0];
+        runs[0] = run;
+    } else if (run > runs[1]) {
+        runs[2] = runs[1];
+        runs[1] = run;
+    } else if (run > runs[2]) {
+        runs[2] = run;
+    }
+}
+
 /* What of a candidate a connection must take whole: what was read of it, up to its size. */
 static __always_inline __u64 dialed_whole(const struct dialed_file *k)
 {
@@ -734,10 +748,10 @@ static __always_inline __u64 dialed_whole(const struct dialed_file *k)
  * Adds the upload a dialed connection carried and the base rule missed: the one candidate the
  * connection took whole, give or take a handshake, a client certificate and a request head, or a
  * first piece read to look at the file. Not when two match or the match is stale, when the
- * connection was not used soon after the dial, or when the two longest runs of sends between
+ * connection was not used soon after the dial, or when the three longest runs of sends between
  * receives did not carry nearly the whole file: request and reply traffic adds up to any size,
- * an upload goes out in one run after the setup of its connection, or in two when the client
- * reads a session ticket on the way.
+ * an upload goes out in one run after the setup of its connection, or in up to three when the
+ * client reads the session tickets of TLS 1.3 on the way.
  */
 static __always_inline void dial_judge(void *map, const struct dial *d)
 {
@@ -758,15 +772,9 @@ static __always_inline void dial_judge(void *map, const struct dial *d)
         return;
     const struct dialed_file *k = &d->cands[match & (CARRY_CANDIDATES - 1)];
     __u64 whole = dialed_whole(k);
-    __u64 first = d->max_burst;
-    __u64 second = d->next_burst;
-    if (d->burst > first) {
-        second = first;
-        first = d->burst;
-    } else if (d->burst > second) {
-        second = d->burst;
-    }
-    if (!k->fresh || (first + second) * 10 < whole * 9 || k->charged * 10 >= whole * 9)
+    __u64 runs[3] = {d->runs[0], d->runs[1], d->runs[2]};
+    runs_keep(runs, d->burst);
+    if (!k->fresh || (runs[0] + runs[1] + runs[2]) * 10 < whole * 9 || k->charged * 10 >= whole * 9)
         return;
     transfer_report(map, d->cookie, d->tgid, &k->file, d->first_ns, d->last_ns, whole - k->charged,
                     k->charged ? 0 : k->read, d->sends, 0, d->script);
@@ -855,12 +863,7 @@ static __always_inline void carry_received(void *map, __u64 sk, __u64 now)
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (!d)
         return;
-    if (d->burst > d->max_burst) {
-        d->next_burst = d->max_burst;
-        d->max_burst = d->burst;
-    } else if (d->burst > d->next_burst) {
-        d->next_burst = d->burst;
-    }
+    runs_keep(d->runs, d->burst);
     d->burst = 0;
     __u64 largest = 0;
 #pragma unroll
