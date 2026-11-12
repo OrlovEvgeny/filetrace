@@ -276,7 +276,7 @@ head -c 4096 /dev/zero >"$data/libfake.so.3"
 "$workload" read "$data/libfake.so.3" >/dev/null
 settle
 "$workload" readloadsend "$data/upload-pm.bin" 20000 "$data/Extra.pm" 5647 >/dev/null
-"$workload" readloadsend "$data/upload-so.bin" 20000 "$data/_queue.cpython-313.so" 832 >/dev/null
+"$workload" readloadsend "$data/upload-so.bin" 20000 "$data/_queue.cpython-313.so" 1500 >/dev/null
 "$workload" readloadsend "$data/upload-so3.bin" 20000 "$data/libfake.so.3" 4096 >/dev/null
 settle
 expect "module loaded before the send: modules not reported" \
@@ -600,7 +600,8 @@ expect "sendfile at the end of the file, then the read sent: bytes" \
 # A small file sent after a datagram elsewhere, and one shipped round after round to a peer that
 # never answers, are judged by what each send took.
 "$workload" metricfirst "$data/page.html" 5000 >/dev/null
-"$workload" resend "$data/status.txt" 2048 5 >/dev/null
+"$workload" resend "$data/status.txt" 2048 5 heard >/dev/null
+"$workload" resend "$data/status-silent.txt" 2048 5 silent >/dev/null
 "$workload" tail "$data/tailed.log" 10240 500 20 >/dev/null
 settle
 expect "strict file after a large read: bytes" \
@@ -616,8 +617,26 @@ expect "small file after a datagram elsewhere: bytes" \
     "$(ft files --path "$data/page.html" --format csv | column transfer.bytes_sent)" 4940
 expect "small file sent round after round: bytes" \
     "$(ft files --path "$data/status.txt" --format csv | column transfer.bytes_sent)" 10240
+expect "small file sent round after round to a peer that never spoke: bytes" \
+    "$(ft files --path "$data/status-silent.txt" --format csv | column transfer.bytes_sent)" 10240
 expect "file tailed to a peer that never answers: bytes" \
     "$(ft files --path "$data/tailed.log" --format csv | column transfer.bytes_sent)" 10000
+
+# An upload that is the first request on a fresh connection, a last chunk after it, answered,
+# then the next request at once; a file sent in parts while a reader thread hears between them;
+# and two files of 5000 bytes, one after the other, in a first flight that is never answered.
+"$workload" putnext "$data/put-next.csv" 20000 >/dev/null
+"$workload" readerthread "$data/reader-thread.html" 20000 >/dev/null
+"$workload" twofiles "$data/flight-e.json" "$data/flight-f.json" 5000 >/dev/null
+settle
+expect "first request answered, next request at once: bytes" \
+    "$(ft files --path "$data/put-next.csv" --format csv | column transfer.bytes_sent)" 20000
+expect "file sent in parts with a reader thread hearing between: bytes" \
+    "$(ft files --path "$data/reader-thread.html" --format csv | column transfer.bytes_sent)" 20000
+for name in e f; do
+    expect "first flight of two 5000-byte files: file $name bytes" \
+        "$(ft files --path "$data/flight-$name.json" --format csv | column transfer.bytes_sent)" 5000
+done
 
 # A first flight that one large send takes past a handshake is judged by what went when it holds
 # a small file: a large upload does not carry a token read after the connection, nor a large
@@ -660,12 +679,21 @@ held_strict=$!
 held_page=$!
 "$workload" holdopen "$data/held-cfg.ini" 5000 2000 10 >/dev/null &
 held_cfg=$!
+# A small first flight waits for its peer: closed unanswered, it is reported as an upload.
 "$workload" slowflight "$data/slow-token.txt" 1500 1600 10 >/dev/null &
 slow_flight=$!
 "$workload" cutreply "$data/cut-reply.bin" 60000 60000 >"$work/cut-reply.out" &
 cut_reply=$!
 "$workload" cutreply "$data/cut-other.cfg" 50000 40000 >/dev/null &
 cut_other=$!
+# Kprobes see a send as it starts: a send the peer is slow to take keeps its window open. Where
+# a send is seen as it returns, one that returns after the correlation window has passed since
+# the read is not associated with it.
+stall_send=
+if ft stats | grep -q 'eBPF (kprobes)'; then
+    "$workload" stallsend "$data/stall-send.jar" 4194304 >/dev/null &
+    stall_send=$!
+fi
 "$workload" twosenders "$data/token.txt" 2000 150 2100 >/dev/null
 "$workload" latebody "$data/client.conf" 5000 200 4 5000 >/dev/null
 sleep 2
@@ -680,13 +708,19 @@ expect "first flight to a slow peer not reported while it waits" \
 expect "reply cut short, then another peer heard: bytes that went" \
     "$(ft files --path "$data/cut-reply.bin" --format csv | column transfer.bytes_sent)" \
     "$(field "$(cat "$work/cut-reply.out")" bytes)"
+if [ -n "$stall_send" ]; then
+    expect "one send the peer was slow to take, held while it was taken: bytes" \
+        "$(ft files --path "$data/stall-send.jar" --format csv | column transfer.bytes_sent)" \
+        4194304
+fi
 expect "reply cut short, given less than the file read before it: not reported" \
     "$(ft files --path "$data/cut-other.cfg" --format csv | rows)" 0
 expect "reply with another thread's bytes on the connection not reported" \
     "$(ft files --path "$data/token.txt" --format csv | rows)" 0
 expect "body long after a small file's read not reported" \
     "$(ft files --path "$data/client.conf" --format csv | rows)" 0
-wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply" "$cut_other"
+wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply" "$cut_other" \
+    ${stall_send:+"$stall_send"}
 
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.

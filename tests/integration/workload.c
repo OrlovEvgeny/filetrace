@@ -70,6 +70,7 @@ enum sink_mode {
     SINK_GREET,   /* sends one line to each peer first */
     SINK_ANSWER,  /* answers each read with one line, as a server answers requests */
     SINK_STALL,   /* greets each peer and reads nothing for two seconds */
+    SINK_LATE,    /* answers each read, from half a second after the peer connected */
 };
 
 static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
@@ -113,8 +114,10 @@ static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
                 _exit(1);
             if (mode == SINK_STALL)
                 sleep(2);
+            if (mode == SINK_LATE)
+                usleep(500 * 1000);
             while (read(c, buf, sizeof(buf)) > 0) {
-                if (mode == SINK_ANSWER && write(c, "hello\n", 6) != 6)
+                if ((mode == SINK_ANSWER || mode == SINK_LATE) && write(c, "hello\n", 6) != 6)
                     _exit(1);
             }
             close(c);
@@ -1400,18 +1403,20 @@ static void scenario_metric_first(const char *path, size_t size)
 }
 
 /*
- * resend <path> <bytes> <rounds>: over a connection that has heard from its peer and never hears
- * again, reads the file and sends it, round after round, as a status file is shipped.
+ * resend <path> <bytes> <rounds> <heard|silent>: over a connection that has heard from its peer
+ * once, or that never hears, reads the file and sends it, round after round, as a status file is
+ * shipped.
  */
-static void scenario_resend(const char *path, size_t size, size_t rounds)
+static void scenario_resend(const char *path, size_t size, size_t rounds, bool heard)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    struct sink sink = start_sink(SOCK_STREAM, false, heard ? SINK_GREET : SINK_DISCARD);
     make_file(path, size);
     char *contents = malloc(size);
     if (!contents)
         die("malloc");
     int sock = connect_sink(&sink);
-    hear(sock);
+    if (heard)
+        hear(sock);
     int file = open_file(path);
     for (size_t i = 0; i < rounds; i++) {
         if (pread(file, contents, size, 0) != (ssize_t)size)
@@ -1707,6 +1712,91 @@ static void scenario_read_many(const char *dir, size_t count, const char *suffix
         close(fd);
     }
     report("readmany", dir, count, 0);
+}
+
+/*
+ * putnext <path> <bytes>: connects, reads the file, sends a request head, the file and a last
+ * chunk before the peer answers, hears the answer, then sends the next request at once.
+ */
+static void scenario_put_next(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_LATE);
+    char head[200];
+    char chunk[5];
+    char *next = calloc(1, 3000);
+    if (!next)
+        die("malloc");
+    memset(head, 'H', sizeof(head));
+    memset(chunk, '0', sizeof(chunk));
+    int sock = connect_sink(&sink);
+    char *contents = read_whole_file(path, size);
+    send_all(sock, head, sizeof(head));
+    send_all(sock, contents, size);
+    send_all(sock, chunk, sizeof(chunk));
+    hear(sock);
+    send_all(sock, next, 3000);
+    hear(sock);
+    close(sock);
+    free(contents);
+    free(next);
+    report("putnext", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+static void *hear_main(void *arg)
+{
+    hear(*(int *)arg);
+    return nullptr;
+}
+
+/*
+ * readerthread <path> <bytes>: over a connection that has heard from its peer, a writer reads the
+ * file and sends a head and the file in two parts, while a reader thread hears an answer between
+ * the sends.
+ */
+static void scenario_reader_thread(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char head[300] = {0};
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    size_t first = size < 16384 ? size / 2 : 16384;
+    send_all(sock, head, sizeof(head));
+    for (int i = 0; i < 2; i++) {
+        pthread_t reader;
+        if (pthread_create(&reader, nullptr, hear_main, &sock) != 0)
+            die("pthread_create");
+        pthread_join(reader, nullptr);
+        if (i == 0)
+            send_all(sock, contents, first);
+        else
+            send_all(sock, contents + first, size - first);
+    }
+    close(sock);
+    free(contents);
+    report("readerthread", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * stallsend <path> <bytes>: over a connection to a peer that reads nothing for two seconds, reads
+ * the file and sends it in one blocking send, then keeps the connection open.
+ */
+static void scenario_stall_send(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_STALL);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    send_all(sock, contents, size);
+    report("stallsend", path, size, sink.port);
+    fflush(stdout);
+    sleep(6);
+    close(sock);
+    free(contents);
+    stop_sink(&sink);
 }
 
 /*
@@ -2417,8 +2507,15 @@ int main(int argc, char **argv)
         scenario_metric_first(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "tail") == 0 && argc == 6)
         scenario_tail(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
-    else if (strcmp(name, "resend") == 0 && argc == 5)
-        scenario_resend(argv[2], arg_size(argv[3]), arg_size(argv[4]));
+    else if (strcmp(name, "resend") == 0 && argc == 6)
+        scenario_resend(argv[2], arg_size(argv[3]), arg_size(argv[4]),
+                        strcmp(argv[5], "heard") == 0);
+    else if (strcmp(name, "putnext") == 0 && argc == 4)
+        scenario_put_next(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readerthread") == 0 && argc == 4)
+        scenario_reader_thread(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "stallsend") == 0 && argc == 4)
+        scenario_stall_send(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "sendbeside") == 0 && argc == 7)
         scenario_send_beside(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
                              arg_size(argv[6]));
