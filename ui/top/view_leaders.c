@@ -472,10 +472,26 @@ static void ranking_layout(struct ft_rect r, enum ft_top_sort by, struct ranking
     }
 }
 
-static void draw_ranking_header(struct ft_top_draw *d, struct ft_rect header,
-                                const struct ranking_layout *lay, enum ft_top_sort by,
-                                enum ft_leader_window window)
+static const char *key_label(enum ft_leader_key key)
 {
+    switch (key) {
+    case FT_LEADER_DIRECTORY:
+        return "DIRECTORY";
+    case FT_LEADER_EXTENSION:
+        return "EXTENSION";
+    case FT_LEADER_DESTINATION:
+        return "DESTINATION";
+    default:
+        return "FILE";
+    }
+}
+
+static void draw_ranking_header(struct ft_top_draw *d, struct ft_rect header,
+                                const struct ranking_layout *lay, const struct ft_top_leaders *l)
+{
+    enum ft_top_sort by = l->by;
+    enum ft_leader_window window = l->window;
+    enum ft_leader_key key = l->key;
     static const enum ft_top_sort sorts[COL_COUNT] = {
         [COL_BYTES] = FT_TOP_SORT_BYTES,
         [COL_XFERS] = FT_TOP_SORT_TRANSFERS,
@@ -489,7 +505,9 @@ static void draw_ranking_header(struct ft_top_draw *d, struct ft_rect header,
     snprintf(trend, sizeof(trend), "TREND %s", ft_leader_window_name(window));
     for (int i = 0; i < COL_COUNT; i++) {
         int w = lay->w[i];
-        const char *label = i == COL_TREND ? trend : columns[i].label;
+        const char *label = i == COL_TREND  ? trend
+                            : i == COL_FILE ? key_label(key)
+                                            : columns[i].label;
         char bracketed[32];
         if (w == 0)
             continue;
@@ -667,7 +685,7 @@ void ft_top_draw_leaders_table(struct ft_top_draw *d, struct ft_rect header, str
 
     ranking_layout(header, l->by, &lay);
     if (header.h > 0)
-        draw_ranking_header(d, header, &lay, l->by, l->window);
+        draw_ranking_header(d, header, &lay, l);
     ft_canvas_clip(d->canvas, rows);
     ranking_layout((struct ft_rect){rows.x, rows.y, rows.w, 1}, l->by, &lay);
 
