@@ -454,6 +454,38 @@ static int snapshot(const struct ft_top_model *m, const struct ft_top_options *o
     return ft_finish_query(FT_EXIT_OK, &none, &frame->end, &out);
 }
 
+/* One document per frame, each on a line, until interrupted or until the reader has gone. */
+static int stream(struct ft_top_source *src, struct ft_top_model *m,
+                  const struct ft_top_options *opt, struct ft_top_frame *frame)
+{
+    char reported[sizeof(frame->error)] = "";
+
+    for (;;) {
+        enum delivery result = deliver(m, opt, false);
+
+        if (result == READER_GONE)
+            return FT_EXIT_OK;
+        if (result == DELIVERY_FAILED)
+            return FT_EXIT_ERROR;
+        for (;;) {
+            if (wait_frame(src, frame, UINT64_MAX) < 0)
+                return FT_EXIT_OK;
+            if (frame->code == FT_EXIT_OK)
+                break;
+            /* The source keeps asking; the agent's trouble is told once per kind. */
+            if (strcmp(reported, frame->error) != 0) {
+                fprintf(stderr, "%s\n", frame->error);
+                ft_strlcpy(reported, frame->error, sizeof(reported));
+            }
+        }
+        reported[0] = '\0';
+        if (!feed(m, opt, frame)) {
+            fprintf(stderr, "filetrace: out of memory\n");
+            return FT_EXIT_ERROR;
+        }
+    }
+}
+
 static int serve(struct ft_session *s, const struct ft_cli *cli, const struct ft_top_options *opt,
                  struct ft_top_model *m, struct ft_top_frame *frame)
 {
@@ -470,7 +502,7 @@ static int serve(struct ft_session *s, const struct ft_cli *cli, const struct ft
     int code = first_sample(src, m, opt, frame);
 
     if (code == FT_EXIT_OK)
-        code = snapshot(m, opt, frame);
+        code = opt->once ? snapshot(m, opt, frame) : stream(src, m, opt, frame);
     ft_top_source_stop(src);
     return code;
 }
