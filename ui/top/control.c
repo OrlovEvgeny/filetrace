@@ -2194,6 +2194,10 @@ unsigned ft_top_control_tick(struct ft_top_controller *c)
             c->linger_ns = 0;
             bits |= FT_TOP_DO_REDRAW;
         }
+        if (c->shown_mono_ns && now > c->shown_mono_ns + 2 * ui->delay_ns) {
+            ui->lag_ns = now - c->shown_mono_ns;
+            bits |= FT_TOP_DO_REDRAW;
+        }
     }
     return bits;
 }
@@ -2214,6 +2218,10 @@ uint64_t ft_top_control_deadline(const struct ft_top_controller *c)
         sooner(&next, c->ui.waiting ? c->spin_ns : c->await_ns + SPINNER_NS);
     if (!c->ui.paused)
         sooner(&next, c->linger_ns);
+    if (!c->ui.paused && c->shown_mono_ns) {
+        uint64_t stale_ns = c->shown_mono_ns + 2 * c->ui.delay_ns + 1;
+        sooner(&next, c->now_ns < stale_ns ? stale_ns : c->now_ns + FT_NS_PER_SEC);
+    }
     return next;
 }
 

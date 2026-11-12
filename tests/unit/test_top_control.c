@@ -427,6 +427,48 @@ static void pause_holds_frames(void)
     rig_close(&r);
 }
 
+static void agent_that_stops_answering(void)
+{
+    struct rig r;
+    CHECK(rig_open(&r, FT_TOP_TRANSFERS));
+    struct ft_top_ui *ui = &r.c->ui;
+    uint64_t stale = 2 * ui->delay_ns;
+
+    fill(&r, 3);
+    deliver(&r);
+    uint64_t shown = r.c->now_ns;
+
+    /* A frame up to twice the delay late is nothing to show. */
+    r.c->now_ns = shown + stale;
+    ft_top_control_tick(r.c);
+    CHECK_U64(ui->lag_ns, 0);
+    CHECK_U64(ft_top_control_deadline(r.c), shown + stale + 1);
+
+    /* Later the lag counts from the frame shown, the loop waking every second to show it. */
+    r.c->now_ns = shown + stale + SECOND / 2;
+    CHECK(ft_top_control_tick(r.c) & FT_TOP_DO_REDRAW);
+    CHECK_U64(ui->lag_ns, stale + SECOND / 2);
+    CHECK_U64(ft_top_control_deadline(r.c), r.c->now_ns + SECOND);
+
+    /* Paused, the screen is meant to stand still. */
+    press(&r, FT_KEY_F9);
+    r.c->now_ns += 5 * SECOND;
+    ft_top_control_tick(r.c);
+    CHECK_U64(ui->lag_ns, stale + SECOND / 2);
+    CHECK(ft_top_control_deadline(r.c) > r.c->now_ns + SECOND);
+    press(&r, FT_KEY_F9);
+    ft_top_control_tick(r.c);
+    CHECK_U64(ui->lag_ns, r.c->now_ns - shown);
+
+    /* A frame that comes ends it. */
+    r.at = r.c->now_ns / SECOND;
+    fill(&r, 3);
+    deliver(&r);
+    ft_top_control_tick(r.c);
+    CHECK_U64(ui->lag_ns, 0);
+    rig_close(&r);
+}
+
 static void filter_that_does_not_parse(void)
 {
     struct rig r;
@@ -724,6 +766,7 @@ void test_top_control(void)
     modes();
     selection_and_scroll();
     pause_holds_frames();
+    agent_that_stops_answering();
     filter_that_does_not_parse();
     clicks_act_as_keys();
     requests();
