@@ -632,6 +632,26 @@ expect "one large send: token read after the connection not reported" \
 expect "large requests: configuration read before them not reported" \
     "$(ft files --path "$data/big-request.conf" --format csv | rows)" 0
 
+# A server streaming a large file in pieces, hearing a window update between them, sends it all.
+"$workload" framedserve "$data/streamed-h2.bin" 4194304 >/dev/null
+# An upload read after a large file that is never sent, both before a handshake, is the upload.
+"$workload" readtwo "$data/large-config.conf" 75000 "$data/upload-after-config.bin" 200000 2 \
+    >/dev/null
+# A file read once and sent over one connection is not sent again by other bytes over another.
+"$workload" twosockets "$data/sent-once.py" 20000 20500 >/dev/null
+settle
+expect "pieces between window updates: bytes" \
+    "$(ft files --path "$data/streamed-h2.bin" --format csv | column transfer.bytes_sent)" 4194304
+expect "upload after a large file never sent: bytes" \
+    "$(ft files --path "$data/upload-after-config.bin" --format csv | column transfer.bytes_sent)" \
+    200000
+expect "upload after a large file never sent: that file not reported" \
+    "$(ft files --path "$data/large-config.conf" --format csv | rows)" 0
+csv=$(ft files --path "$data/sent-once.py" --format csv)
+expect "one read over two connections: rows" "$(printf '%s\n' "$csv" | rows)" 1
+expect "one read over two connections: bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" \
+    20000
+
 # A reply its peer never answers is judged once the correlation window has passed, while the
 # connection is still open: by what went, and as the base rule took it when that is short.
 "$workload" holdopen "$data/held.js" 20000 20300 10 >/dev/null &

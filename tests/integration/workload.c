@@ -1623,6 +1623,72 @@ static void scenario_read_beside(const char *path, size_t size, const char *othe
 }
 
 /*
+ * framedserve <path> <bytes>: over a connection that has heard from its peer, reads the file in
+ * pieces of 64 KB, sends each in four writes and hears a small frame after it, as an HTTP/2
+ * server waits for a window update.
+ */
+static void scenario_framed_serve(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    make_file(path, size);
+    char *piece = malloc(65536);
+    if (!piece)
+        die("malloc");
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    int file = open_file(path);
+    for (;;) {
+        ssize_t n = read(file, piece, 65536);
+        if (n < 0)
+            die("read");
+        if (n == 0)
+            break;
+        size_t quarter = ((size_t)n + 3) / 4;
+        for (size_t at = 0; at < (size_t)n; at += quarter)
+            send_all(sock, piece + at, (size_t)n - at < quarter ? (size_t)n - at : quarter);
+        hear(sock);
+    }
+    close(file);
+    close(sock);
+    free(piece);
+    report("framedserve", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * twosockets <path> <bytes> <other bytes>: over two connections that have heard from their peers,
+ * reads the file once, sends it over the first and as many other bytes over the second, and
+ * hears both.
+ */
+static void scenario_two_sockets(const char *path, size_t size, size_t other)
+{
+    struct sink first = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    struct sink second = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    int a = connect_sink(&first);
+    int b = connect_sink(&second);
+    send_all(a, "hello\n", 6);
+    hear(a);
+    send_all(b, "hello\n", 6);
+    hear(b);
+    char *contents = read_whole_file(path, size);
+    char *bytes = calloc(1, other);
+    if (!bytes)
+        die("malloc");
+    send_all(a, contents, size);
+    send_all(b, bytes, other);
+    hear(a);
+    hear(b);
+    close(a);
+    close(b);
+    free(bytes);
+    free(contents);
+    report("twosockets", path, size, first.port);
+    stop_sink(&second);
+    stop_sink(&first);
+}
+
+/*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
  */
@@ -2303,6 +2369,10 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "framedserve") == 0 && argc == 4)
+        scenario_framed_serve(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "twosockets") == 0 && argc == 5)
+        scenario_two_sockets(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readbeside") == 0 && argc == 6)
         scenario_read_beside(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "slowflight") == 0 && argc == 6)
