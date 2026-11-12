@@ -1195,6 +1195,7 @@ CONFIG
 : >"$data/strict-halves.py"
 : >"$data/strict-framed.js"
 : >"$data/strict-after.bin"
+: >"$data/bg-flooded.bin"
 : >"$data/strict-short.py"
 mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
@@ -1255,6 +1256,15 @@ csv=$(ft files --path /etc/passwd --pid "$(field "$passwd_report" pid)" --format
 expect "strict: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "strict: /etc/passwd upload bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "$(stat -L -c %s /etc/passwd)"
+
+# Files learned by name as they are read do not push out the files the patterns resolved to.
+mkdir -p "$data/flood"
+"$workload" readmany "$data/flood" 17000 .both >/dev/null
+"$workload" readsend "$data/bg-flooded.bin" 4096 65536 >/dev/null
+settle
+expect "background: a resolved file after many learned by name not reported" \
+    "$(ft files --path "$data/bg-flooded.bin" --format csv | rows)" 0
+rm -rf "$data/flood"
 
 # A listed file made after the agent started is background once a read reports its path.
 head -c 200000 /dev/zero >"$data/bg-late.crt"

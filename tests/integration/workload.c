@@ -1693,6 +1693,22 @@ static void scenario_two_sockets(const char *path, size_t size, size_t other)
     stop_sink(&first);
 }
 
+/* readmany <dir> <count> <suffix>: makes count small files in dir named with suffix, reads each. */
+static void scenario_read_many(const char *dir, size_t count, const char *suffix)
+{
+    char path[4096];
+    char byte;
+    for (size_t i = 0; i < count; i++) {
+        snprintf(path, sizeof(path), "%s/f%zu%s", dir, i, suffix);
+        make_file(path, 1);
+        int fd = open_file(path);
+        if (read(fd, &byte, 1) != 1)
+            die("read");
+        close(fd);
+    }
+    report("readmany", dir, count, 0);
+}
+
 /*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
@@ -2374,6 +2390,8 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readmany") == 0 && argc == 5)
+        scenario_read_many(argv[2], arg_size(argv[3]), argv[4]);
     else if (strcmp(name, "framedserve") == 0 && argc == 4)
         scenario_framed_serve(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "twosockets") == 0 && argc == 5)
