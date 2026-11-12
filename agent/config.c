@@ -896,6 +896,37 @@ static int check_addresses(const struct ft_config *cfg, const char *path, struct
     return FT_EXIT_OK;
 }
 
+/*
+ * The account databases were background files in a default list that configuration files copied;
+ * their uploads are what people look for, so they are strict files whichever list names them.
+ */
+static void move_account_databases(struct ft_config *cfg)
+{
+    static const char *const moved[] = {"/etc/passwd", "/etc/group"};
+    for (size_t m = 0; m < FT_ARRAY_LEN(moved); m++) {
+        for (size_t i = 0; i < cfg->background_path_count; i++) {
+            if (strcmp(cfg->background_paths[i], moved[m]) != 0)
+                continue;
+            char *pattern = cfg->background_paths[i];
+            memmove(&cfg->background_paths[i], &cfg->background_paths[i + 1],
+                    (cfg->background_path_count - i - 1) * sizeof(cfg->background_paths[0]));
+            cfg->background_path_count--;
+            bool held = false;
+            for (size_t j = 0; j < cfg->strict_path_count; j++)
+                held |= strcmp(cfg->strict_paths[j], pattern) == 0;
+            if (!held && cfg->strict_path_count < FT_CONFIG_MAX_PATTERNS)
+                cfg->strict_paths[cfg->strict_path_count++] = pattern;
+            else
+                free(pattern);
+            warn(cfg,
+                 "[correlation] background_paths names %s, which is taken as one of strict_paths: "
+                 "its uploads are reported",
+                 moved[m]);
+            break;
+        }
+    }
+}
+
 int ft_config_load(struct ft_config *cfg, const char *path, struct ft_error *err)
 {
     constexpr long MAX_FILE_BYTES = 256 * 1024;
@@ -928,6 +959,7 @@ int ft_config_load(struct ft_config *cfg, const char *path, struct ft_error *err
     free(text);
     if (!ok)
         return FT_EXIT_CONFIG;
+    move_account_databases(cfg);
     int code = check_addresses(cfg, path, err);
     if (code != FT_EXIT_OK)
         return code;

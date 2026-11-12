@@ -382,6 +382,19 @@ static void background_paths_default_to_shared_files(void)
     ft_config_finish(cfg);
     CHECK_U64(backend->background_path_count, 1);
     CHECK_STR(backend->background_paths[0], "/opt/app/ca.pem");
+
+    /* The account databases a release-era list named as background are strict files. */
+    CHECK_U64(load(cfg,
+                   "[correlation]\nbackground_paths = [\"/etc/passwd\", \"/opt/app/ca.pem\"]\n"
+                   "strict_paths = [\"*.lua\"]\n",
+                   &err),
+              FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK_U64(backend->background_path_count, 1);
+    CHECK_STR(backend->background_paths[0], "/opt/app/ca.pem");
+    CHECK_U64(backend->strict_path_count, 2);
+    CHECK_STR(backend->strict_paths[1], "/etc/passwd");
+    CHECK(warned(cfg, "/etc/passwd"));
     ft_config_free(cfg);
 }
 
