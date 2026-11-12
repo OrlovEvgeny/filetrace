@@ -140,6 +140,7 @@ struct thread_state {
     __u64 strict_unreported;
     __u64 strict_last_ns;
     __u64 strict_read_ns;
+    __u64 strict_datagrams; /* what datagrams took since the strict file was read */
 };
 
 struct {
@@ -1146,8 +1147,20 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
             carry_strict(c, ts);
         return;
     }
-    if (skip || !ts->pending)
+    if (skip)
         return;
+    if (!ts->pending) {
+        /* A datagram socket holds no window: a strict file is sent once datagrams took its size. */
+        if (!sk && ts->strict_pending) {
+            ts->strict_datagrams += sent;
+            if (strict_matches(ts->strict_datagrams, ts->strict_pending)) {
+                charge_send(map, cookie, tgid, &ts->strict_file, 0, ts->script, ts->strict_pending,
+                            &ts->strict_pending, &ts->strict_unreported, &ts->strict_fresh, now);
+                ts->strict_datagrams = 0;
+            }
+        }
+        return;
+    }
     __u64 take = sent < ts->pending ? sent : ts->pending;
     charge_send(map, cookie, tgid, &ts->file, 0, ts->script, sent, &ts->pending, &ts->unreported,
                 &ts->fresh, now);
