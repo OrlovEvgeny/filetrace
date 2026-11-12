@@ -931,8 +931,8 @@ static __always_inline void dialed_read(struct dial *d, const struct candidate *
 
 /*
  * Counts a read of a file towards it as a candidate, when it is large enough to be judged by
- * size, and towards the window of the connection the thread dialed last. A new candidate takes
- * a free place, else a stale one's, else the place of the one read least.
+ * size, and towards the window of the connection the thread dialed last. A file not yet a
+ * candidate takes a free place, else a stale one's, else the place of the one read least.
  */
 static __always_inline void candidate_read(struct thread_state *ts, const struct file_ref *file,
                                            __u64 size, __u64 bytes, __u64 now)
@@ -1039,7 +1039,7 @@ static __always_inline bool carry_dial(struct sock *sk, __u64 cookie, __u64 now)
 }
 
 /*
- * The window a send goes into: the one open on the socket, or a new one when the socket has
+ * The window a send goes into: the one open on the socket, or one opened when the socket has
  * heard nothing yet, or when the file the thread was sending is small enough to be judged by
  * the reply it went into, or when there is only a strict file to judge. NULL with *skip set:
  * nowhere, as another thread's window holds the socket; NULL otherwise: charged as it is. wire:

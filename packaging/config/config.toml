@@ -58,8 +58,8 @@
 # Files that programs load as they run and that people also send: account
 # databases, modules, shared libraries. Reading one does not change what the thread
 # is sending either; it is taken as sent only when what a connection took matches
-# its size, and never when it was read before the connection was opened. Matched as
-# background_paths is.
+# its size, and, when it was read before the connection was opened, only when it
+# went before the peer answered. Matched as background_paths is.
 # strict_paths = ["/etc/passwd", "/etc/group", "*.py", "*.rb", "*.js", "*.mjs", "*.cjs", "*.node", "*.jar", "*.class", "*.pm", "*.pl", "*.php", "*.so", "*.so.*"]
 
 # Entries per table; the least recently used go first.
