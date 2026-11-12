@@ -249,6 +249,8 @@ void ft_state_sweep(struct ft_state *st, uint64_t now_ns)
     uint32_t idle[256];
     size_t count;
 
+    st->clock_ns = now_ns;
+
     do {
         count = 0;
         for (struct ft_process *p = ft_table_first(st->processes); p && count < FT_ARRAY_LEN(idle);
@@ -445,8 +447,13 @@ static void rank_transfer(struct ft_state *st, const struct ft_transfer *t,
                           const struct ft_process *p, enum ft_confidence conf, uint64_t bytes,
                           bool started, uint64_t ts_ns)
 {
+    /* A sample stamped beyond the server's clock would carry every window ahead of real time. */
+    constexpr uint64_t AHEAD_NS = 60 * FT_NS_PER_SEC;
     const struct ft_file *f = ft_table_find(st->files, &t->file);
     const struct ft_socket *s = ft_table_find(st->sockets, &t->sock_id);
+
+    if (st->clock_ns && ts_ns > st->clock_ns + AHEAD_NS)
+        ts_ns = st->clock_ns;
     struct ft_leader_sample sample = {
         .ts_ns = ts_ns,
         .file = t->file,

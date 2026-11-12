@@ -805,6 +805,80 @@ static void through_the_state(void)
     free(rows.leaders.rows);
 }
 
+/* One sample stamped an hour ahead of the server's clock must not carry the windows with it. */
+static void sample_from_the_future(void)
+{
+    struct ft_state_config cfg;
+    struct state_rows rows = {.leaders.rows = calloc(ROWS, sizeof(struct ft_row_leader))};
+    struct ft_msg_end end;
+    struct ft_error err = {0};
+    struct ft_query q;
+    uint64_t now = ft_clock_mono_ns();
+
+    ft_state_config_defaults(&cfg);
+    struct ft_state *st = ft_state_create(&cfg);
+    st->start_ns = now;
+
+    struct ft_event ev = {.type = FT_EVENT_PROCESS_EXEC};
+    ev.process.pid = 1842;
+    ev.process.ppid = 1;
+    ev.process.start_ns = 1000 * SEC;
+    ft_strlcpy(ev.process.comm, "nginx", sizeof(ev.process.comm));
+    ingest(st, &ev, now);
+    for (uint64_t k = 0; k < 2; k++) {
+        ev = (struct ft_event){.type = FT_EVENT_FILE_SEEN};
+        ev.file.id = (struct ft_file_id){.dev = 2049, .ino = 100 + k};
+        ev.file.path = k == 0 ? "/data/ahead.bin" : "/data/on-time.bin";
+        ev.file.size = 4096;
+        ingest(st, &ev, now);
+        ev = (struct ft_event){.type = FT_EVENT_SOCKET_STATE};
+        ev.socket.sock_id = 0x2000 + k;
+        ev.socket.pid = 1842;
+        ev.socket.proto = FT_PROTO_TCP;
+        ev.socket.state = FT_SOCK_ESTABLISHED;
+        ev.socket.remote = addr4(203, 0, 113, (uint8_t)(10 + k));
+        ingest(st, &ev, now);
+    }
+    ft_state_sweep(st, now);
+
+    for (uint64_t k = 0; k < 2; k++) {
+        ev = (struct ft_event){.type = FT_EVENT_TRANSFER};
+        ev.transfer.sock_id = 0x2000 + k;
+        ev.transfer.pid = 1842;
+        ev.transfer.method = FT_METHOD_SENDFILE;
+        ev.transfer.file = (struct ft_file_id){.dev = 2049, .ino = 100 + k};
+        ev.transfer.first_ns = now;
+        ev.transfer.bytes = 4096;
+        ev.transfer.ops = 1;
+        ingest(st, &ev, k == 0 ? now + 3600 * SEC : now + SEC);
+    }
+    ft_state_sweep(st, now + 2 * SEC);
+
+    ft_query_init(&q, FT_Q_LEADERS);
+    q.window = FT_WINDOW_5M;
+    CHECK(ft_state_query(st, &q, now + 3 * SEC, collect_state, &rows, &end, &err));
+    CHECK_U64(rows.leaders.count, 2);
+    CHECK_U64(rows.leaders.summary.bytes, 8192);
+    CHECK(row_named(&rows.leaders, "/data/ahead.bin") != nullptr);
+    CHECK(row_named(&rows.leaders, "/data/on-time.bin") != nullptr);
+
+    /* Ten minutes on, both have left the last five minutes and are within the last fifteen. */
+    rows.leaders.count = 0;
+    rows.leaders.summaries = 0;
+    CHECK(ft_state_query(st, &q, now + 600 * SEC, collect_state, &rows, &end, &err));
+    CHECK_U64(rows.leaders.count, 0);
+    CHECK_U64(rows.leaders.summary.bytes, 0);
+    q.window = FT_WINDOW_15M;
+    rows.leaders.count = 0;
+    rows.leaders.summaries = 0;
+    CHECK(ft_state_query(st, &q, now + 600 * SEC, collect_state, &rows, &end, &err));
+    CHECK_U64(rows.leaders.count, 2);
+    CHECK_U64(rows.leaders.summary.bytes, 8192);
+
+    ft_state_destroy(st);
+    free(rows.leaders.rows);
+}
+
 void test_leaders(void)
 {
     below_capacity_is_exact();
@@ -815,4 +889,5 @@ void test_leaders(void)
     counters_saturate();
     paths_stay_within_their_budget();
     through_the_state();
+    sample_from_the_future();
 }

@@ -237,6 +237,7 @@ struct ft_state {
     void *on_record_ctx;
 
     uint64_t start_ns;
+    uint64_t clock_ns; /* the server's clock at the latest sweep; 0 before the first */
     uint64_t next_transfer_id;
     uint64_t next_flow_id;
     uint64_t next_record_seq;
