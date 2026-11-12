@@ -258,6 +258,7 @@ add_library(ft_cli STATIC
     ui/top/source.c
     ui/top/top.c
     ui/tui/canvas.c
+    ui/tui/lineedit.c
     ui/tui/screen.c
     ui/tui/theme.c
     ui/watch.c
