@@ -46,9 +46,42 @@ says "watch names --json, an output option it lacks" 2 \
     "filetrace: --json does not apply to 'watch'" watch --json
 says "connections names --script" 2 "filetrace: --script does not apply to 'connections'" \
     connections --script '/srv/*'
+says "top names --since as a report option" 2 \
+    "filetrace: --since applies to a report: filetrace top processes --since ..." top --since 1h
+says "top refuses an unknown mode" 2 \
+    "filetrace: invalid value 'cpu' for --mode (expected transfers, processes, destinations, files or leaders)" \
+    top --mode cpu
+says "top refuses an unknown sort key" 2 \
+    "filetrace: invalid value 'speed' for --sort (expected rate, bytes, progress, age, pid, user, proc, script, file, size, dest, method or conf)" \
+    top --sort speed
+says "top refuses an unknown group" 2 \
+    "filetrace: invalid value 'asn' for --group (expected none, process, script, dest, dir or subnet)" \
+    top --group asn
+says "top refuses a delay below 500ms" 2 \
+    "filetrace: invalid value '100ms' for --delay (expected a duration from 500ms to 10s)" \
+    top --delay 100ms
+says "top refuses an unknown window" 2 \
+    "filetrace: invalid value '2h' for --window (expected 1m, 5m, 15m, 1h, 24h or 7d)" \
+    top --leaders --window 2h
+says "top refuses a limit of 0" 2 \
+    "filetrace: invalid value '0' for --limit (expected a number from 1 to 1000)" \
+    top --leaders --limit 0
+says "top refuses a remote that is not an address" 2 \
+    "filetrace: invalid value 'example.org' for --remote (expected an IP address or CIDR network)" \
+    top --remote example.org
+says "top asks for leaders with --window" 2 \
+    "filetrace: --window does not apply to the transfers mode (use --leaders)" top --window 5m
+says "top asks for processes with --tree" 2 \
+    "filetrace: --tree does not apply to the files mode (use --mode processes)" \
+    top --mode files --tree
+says "top refuses --leaders with another mode" 2 \
+    "filetrace: --leaders conflicts with --mode files" top --leaders --mode files
+says "top points --sort at --by in leaders" 2 \
+    "filetrace: --sort does not apply to the leaders mode (use --by)" top --leaders --sort rate
 # An option the command reads itself still reaches the agent, which is not running.
 says "events reads --limit itself" 4 "" events --limit 3
 says "top files takes --protocol" 4 "" top files --protocol tcp
+says "top files takes --limit" 4 "" top files --limit 1
 says "files takes --script" 4 "" files --script 'pool:*'
 says "processes takes --script" 4 "" processes --script=/srv/app/export.py
 says "events takes --script" 4 "" events --script 'module:*'

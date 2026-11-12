@@ -46,6 +46,8 @@ has "top says where --protocol applies" "$work/top" \
     "--protocol applies to files, destinations and connections, not to"
 has "top says what quiet prints" "$work/top" \
     "processes. --format quiet prints one process ID, file path, remote"
+has "top names --mode" "$work/top" "--mode <mode>"
+has "top names --leaders" "$work/top" "--leaders"
 has "watch says where --confidence applies" "$work/watch" \
     "--confidence to the files view; --min-bytes to the files and processes"
 has "agent run lists --event-log-size" "$work/agent" "--event-log-size <size>"
@@ -56,7 +58,8 @@ has "filetrace-agent lists exit code 8" "$work/filetrace-agent" \
     "8 the metrics page cannot listen"
 
 note="Byte counts cover a record's whole observed lifetime"
-before "top lists --limit with the other options" "$work/top" "--limit <n>" "$note"
+before "top lists --limit with the other options" "$work/top" \
+    "Number of rows (default: 10)" "$note"
 before "events lists --limit with the other options" "$work/events" "--limit <n>" "$note"
 
 printf '%d checks, %d failed\n' "$checks" "$failures"
