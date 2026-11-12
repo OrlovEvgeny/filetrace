@@ -1,6 +1,7 @@
 #include "unit/test.h"
 
 #include "ui/tui/canvas.h"
+#include "ui/tui/theme.h"
 
 static const struct ft_style TEXT = {.fg = FT_COLOR_TEXT};
 
@@ -274,6 +275,62 @@ static void test_bar_widths(void)
     ft_canvas_destroy(c);
 }
 
+static bool term_color(struct ft_term_color c, enum ft_term_color_kind kind, uint32_t value)
+{
+    return c.kind == kind && (kind == FT_TERM_DEFAULT || c.value == value);
+}
+
+static void test_theme_roles(void)
+{
+    struct ft_term_style t;
+
+    t = ft_theme_resolve(FT_DEPTH_TRUECOLOR, FT_COLOR_DIM, FT_COLOR_BG, 0);
+    CHECK(term_color(t.fg, FT_TERM_RGB, 0x7d8590));
+    CHECK(term_color(t.bg, FT_TERM_RGB, 0x0b0e14));
+    t = ft_theme_resolve(FT_DEPTH_256, FT_COLOR_DIM, FT_COLOR_BG, 0);
+    CHECK(term_color(t.fg, FT_TERM_INDEX, 244));
+    CHECK(term_color(t.bg, FT_TERM_DEFAULT, 0));
+    t = ft_theme_resolve(FT_DEPTH_16, FT_COLOR_DIM, FT_COLOR_BG, 0);
+    CHECK(term_color(t.fg, FT_TERM_INDEX, 8));
+    CHECK(term_color(t.bg, FT_TERM_DEFAULT, 0));
+    t = ft_theme_resolve(FT_DEPTH_NONE, FT_COLOR_DIM, FT_COLOR_BG, 0);
+    CHECK(term_color(t.fg, FT_TERM_DEFAULT, 0) && term_color(t.bg, FT_TERM_DEFAULT, 0));
+    CHECK_U64(t.attrs, FT_TERM_DIM);
+
+    /* Dark text on the selection bar. */
+    t = ft_theme_resolve(FT_DEPTH_256, FT_COLOR_BG, FT_COLOR_CYAN, FT_ATTR_BOLD);
+    CHECK(term_color(t.fg, FT_TERM_INDEX, 0) && term_color(t.bg, FT_TERM_INDEX, 80));
+    CHECK_U64(t.attrs, FT_ATTR_BOLD);
+    t = ft_theme_resolve(FT_DEPTH_16, FT_COLOR_BG, FT_COLOR_CYAN, 0);
+    CHECK(term_color(t.fg, FT_TERM_INDEX, 0) && term_color(t.bg, FT_TERM_INDEX, 6));
+    t = ft_theme_resolve(FT_DEPTH_NONE, FT_COLOR_BG, FT_COLOR_CYAN, 0);
+    CHECK_U64(t.attrs, FT_ATTR_REVERSE);
+
+    t = ft_theme_resolve(FT_DEPTH_16, FT_COLOR_BRIGHT, FT_COLOR_DEFAULT, 0);
+    CHECK(term_color(t.fg, FT_TERM_INDEX, 15));
+    CHECK_U64(t.attrs, FT_ATTR_BOLD);
+    t = ft_theme_resolve(FT_DEPTH_TRUECOLOR, FT_COLOR_TEXT, FT_COLOR_DEFAULT, 0);
+    CHECK(term_color(t.fg, FT_TERM_RGB, 0xc9d1d9) && term_color(t.bg, FT_TERM_DEFAULT, 0));
+}
+
+static void test_theme_detect(void)
+{
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_AUTO, "xterm-256color", "truecolor", "1") ==
+          FT_DEPTH_NONE);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_AUTO, "dumb", nullptr, nullptr) == FT_DEPTH_NONE);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_NEVER, "xterm-256color", "truecolor", nullptr) ==
+          FT_DEPTH_NONE);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_ALWAYS, "xterm-256color", nullptr, "1") == FT_DEPTH_256);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_ALWAYS, "dumb", nullptr, "1") == FT_DEPTH_16);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_AUTO, "xterm-256color", "24bit", "") ==
+          FT_DEPTH_TRUECOLOR);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_AUTO, "xterm-kitty", nullptr, nullptr) ==
+          FT_DEPTH_TRUECOLOR);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_AUTO, "tmux-256color", nullptr, nullptr) ==
+          FT_DEPTH_256);
+    CHECK(ft_color_depth_for(FT_COLOR_MODE_AUTO, "xterm", nullptr, nullptr) == FT_DEPTH_16);
+}
+
 void test_tui(void)
 {
     test_text_clipping();
@@ -285,4 +342,6 @@ void test_tui(void)
     test_path();
     test_mark();
     test_bar_widths();
+    test_theme_roles();
+    test_theme_detect();
 }
