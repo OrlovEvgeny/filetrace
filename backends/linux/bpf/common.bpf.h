@@ -184,6 +184,8 @@ struct carry {
     __u64 read_seen; /* of the file, as the thread counted it, whoever charged it before */
     __u8 held;       /* a strict file read whole, judged by what went at any size */
     __u64 asked;     /* the most one send of the window's thread was given */
+    __u32 seq_seen;  /* the socket's write_seq when the window was last seen active */
+    __u32 judged;    /* the iterator reported it, and removes it on its next visit */
 };
 
 static struct carry carry_zero;
@@ -734,12 +736,19 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     dial_charged(sk, &c->file, -(__s64)c->sent);
 }
 
-/* Closes the window on a socket and judges it. */
+/* The window on a socket, unless the iterator has judged it already. */
+static __always_inline struct carry *carry_get(__u64 sk)
+{
+    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    return c && !c->judged ? c : NULL;
+}
+
+/* Closes the window on a socket and judges it, unless the iterator got there first. */
 static __always_inline void carry_close(void *map, __u64 sk, enum carry_end end, __u64 now)
 {
     carry_settle(map, sk, now);
-    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
-    if (!c)
+    struct carry *c = carry_get(sk);
+    if (!c || __sync_val_compare_and_swap(&c->judged, 0, 1))
         return;
     carry_judge(map, sk, c, end);
     bpf_map_delete_elem(&carries, &sk);
@@ -747,7 +756,9 @@ static __always_inline void carry_close(void *map, __u64 sk, enum carry_end end,
 
 /*
  * Judges a reply that nothing touched for the correlation window as it stands. The agent runs it
- * over the windows once a second. A first flight waits for its peer, however slow.
+ * over the windows once a second. A first flight waits for its peer, however slow. A judged
+ * window stays, judged, until the next visit, so that a probe that found it just before cannot
+ * write into an element given to another socket.
  */
 SEC("iter/bpf_map_elem")
 int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
@@ -757,13 +768,25 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
     void *map = agg_map_now();
     if (!key || !c || !map)
         return 0;
-    __u64 now = bpf_ktime_get_boot_ns();
-    if (c->kind != CARRY_EPISODE || now - c->last_ns <= cfg.corr_window_ns)
-        return 0;
     __u64 sk = *key;
+    if (c->judged) {
+        bpf_map_delete_elem(&carries, &sk);
+        return 0;
+    }
+    __u64 now = bpf_ktime_get_boot_ns();
+    if (c->kind != CARRY_EPISODE || !c->last_ns || now - c->last_ns <= cfg.corr_window_ns)
+        return 0;
+    /* A send the socket is still taking keeps the window open. */
+    __u32 seq = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
+    if (seq != c->seq_seen) {
+        c->seq_seen = seq;
+        c->last_ns = now;
+        return 0;
+    }
     carry_settle(map, sk, now);
+    if (__sync_val_compare_and_swap(&c->judged, 0, 1))
+        return 0;
     carry_judge(map, sk, c, CARRY_AGED);
-    bpf_map_delete_elem(&carries, &sk);
     return 0;
 }
 
@@ -863,7 +886,7 @@ static __always_inline void carry_send_starts(void *map, __u64 sk, __u64 bytes, 
             d->sent_ns = now;
         d->last_ns = now;
     }
-    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    struct carry *c = carry_get(sk);
     if (!c || c->kind != CARRY_FLIGHT)
         return;
     if (sock_heard(sk)) {
@@ -883,7 +906,7 @@ static __always_inline void carry_send_starts(void *map, __u64 sk, __u64 bytes, 
 /* Counts what a send took, and what it was given, into its thread's window on the socket. */
 static __always_inline void carry_send_counted(__u64 sk, __u64 bytes, __u64 asked, __u64 now)
 {
-    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    struct carry *c = carry_get(sk);
     /* Another thread's bytes on the socket are its own. */
     if (!c || c->tid != (__u32)bpf_get_current_pid_tgid())
         return;
@@ -891,6 +914,7 @@ static __always_inline void carry_send_counted(__u64 sk, __u64 bytes, __u64 aske
     if (asked > c->asked)
         c->asked = asked;
     c->last_ns = now;
+    c->seq_seen = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
 }
 
 static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 asked, __u64 now)
@@ -902,7 +926,7 @@ static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 a
 /* Counts what the socket took into its windows, as the socket is settled; tid sent it. */
 static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid)
 {
-    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    struct carry *c = carry_get(sk);
     if (c && c->tid == tid)
         __sync_fetch_and_add(&c->wire, bytes);
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
@@ -919,7 +943,7 @@ static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid)
  */
 static __always_inline void carry_received(void *map, __u64 sk, __u64 now)
 {
-    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    struct carry *c = carry_get(sk);
     if (c && c->kind == CARRY_EPISODE && c->tid != (__u32)bpf_get_current_pid_tgid())
         carry_close(map, sk, CARRY_NEXT, now);
 
@@ -943,7 +967,7 @@ static __always_inline void carry_episode_end(struct thread_state *ts, __u64 now
                                               enum carry_end end)
 {
     __u64 sk = ts->episode_sock;
-    struct carry *c = sk ? bpf_map_lookup_elem(&carries, &sk) : NULL;
+    struct carry *c = sk ? carry_get(sk) : NULL;
     void *map = agg_map_now();
     ts->episode_sock = 0;
     if (c && map && c->kind == CARRY_EPISODE && c->tid == (__u32)bpf_get_current_pid_tgid())
@@ -1103,6 +1127,10 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     if (!sk || !map)
         return NULL;
     struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    if (c && c->judged) {
+        bpf_map_delete_elem(&carries, &sk);
+        c = NULL;
+    }
     /* Another thread's window on the socket leaves this thread's sends to the base rule. */
     if (c && c->tid != tid)
         return NULL;
@@ -1140,18 +1168,20 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         *skip = true;
         return NULL;
     }
+    /* The iterator skips a window until its time is set, so that comes first. */
+    c->first_ns = now;
+    c->last_ns = now;
+    c->seq_seen = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
     c->cookie = cookie;
     c->tgid = tgid;
     c->tid = tid;
-    c->kind = kind;
     if (foreground) {
         c->file = ts->file;
         c->size = ts->file_size;
         c->held = thread_held(ts);
     }
-    c->first_ns = now;
-    c->last_ns = now;
     c->asked = asked;
+    c->kind = kind;
     if (kind == CARRY_EPISODE)
         ts->episode_sock = sk;
     return c;

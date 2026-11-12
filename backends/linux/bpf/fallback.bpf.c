@@ -180,7 +180,7 @@ static __always_inline void claim_charge(void *map, struct sock *sk, struct sock
 {
     if (t->claim_carried) {
         __u64 sock = (__u64)sk;
-        struct carry *c = t->carrying ? bpf_map_lookup_elem(&carries, &sock) : NULL;
+        struct carry *c = t->carrying ? carry_get(sock) : NULL;
         if (c && c->tid == t->claim_tid)
             carry_add(c, take, t->claim_read, t->claim_fresh, t->claim_script, now);
         if (t->carrying)
