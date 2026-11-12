@@ -1575,11 +1575,11 @@ static void scenario_slow_flight(const char *path, size_t size, size_t request, 
 }
 
 /*
- * cutreply <path> <bytes>: over a connection to a peer that stops reading, reads the file and
- * sends it without blocking, so that the socket takes only part of it, then hears from another
- * peer and keeps the first connection open.
+ * cutreply <path> <bytes> <body bytes>: over a connection to a peer that stops reading, reads the
+ * file and sends a body without blocking, so that the socket takes only part of it, then hears
+ * from another peer and keeps the first connection open. A body of the file's size is the file.
  */
-static void scenario_cut_reply(const char *path, size_t size)
+static void scenario_cut_reply(const char *path, size_t size, size_t body)
 {
     struct sink stalled = start_sink(SOCK_STREAM, false, SINK_STALL);
     struct sink other = start_sink(SOCK_STREAM, false, SINK_GREET);
@@ -1589,9 +1589,14 @@ static void scenario_cut_reply(const char *path, size_t size)
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
     fcntl(sock, F_SETFL, fcntl(sock, F_GETFL) | O_NONBLOCK);
     char *contents = read_whole_file(path, size);
-    ssize_t n = send(sock, contents, size, 0);
-    if (n <= 0 || (size_t)n >= size)
+    char *out = body == size ? contents : calloc(1, body);
+    if (!out)
+        die("malloc");
+    ssize_t n = send(sock, out, body, 0);
+    if (n <= 0 || (size_t)n >= body)
         die("send was not cut");
+    if (out != contents)
+        free(out);
     int side = connect_sink(&other);
     hear(side);
     report("cutreply", path, (size_t)n, stalled.port);
@@ -2377,8 +2382,8 @@ int main(int argc, char **argv)
         scenario_read_beside(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "slowflight") == 0 && argc == 6)
         scenario_slow_flight(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
-    else if (strcmp(name, "cutreply") == 0 && argc == 4)
-        scenario_cut_reply(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "cutreply") == 0 && argc == 5)
+        scenario_cut_reply(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "holdopen") == 0 && argc == 6)
         scenario_hold_open(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "twosenders") == 0 && argc == 6)

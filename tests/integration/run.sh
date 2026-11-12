@@ -662,8 +662,10 @@ held_page=$!
 held_cfg=$!
 "$workload" slowflight "$data/slow-token.txt" 1500 1600 10 >/dev/null &
 slow_flight=$!
-"$workload" cutreply "$data/cut-reply.bin" 60000 >"$work/cut-reply.out" &
+"$workload" cutreply "$data/cut-reply.bin" 60000 60000 >"$work/cut-reply.out" &
 cut_reply=$!
+"$workload" cutreply "$data/cut-other.cfg" 50000 40000 >/dev/null &
+cut_other=$!
 "$workload" twosenders "$data/token.txt" 2000 150 2100 >/dev/null
 "$workload" latebody "$data/client.conf" 5000 200 4 5000 >/dev/null
 sleep 2
@@ -678,11 +680,13 @@ expect "first flight to a slow peer not reported while it waits" \
 expect "reply cut short, then another peer heard: bytes that went" \
     "$(ft files --path "$data/cut-reply.bin" --format csv | column transfer.bytes_sent)" \
     "$(field "$(cat "$work/cut-reply.out")" bytes)"
+expect "reply cut short, given less than the file read before it: not reported" \
+    "$(ft files --path "$data/cut-other.cfg" --format csv | rows)" 0
 expect "reply with another thread's bytes on the connection not reported" \
     "$(ft files --path "$data/token.txt" --format csv | rows)" 0
 expect "body long after a small file's read not reported" \
     "$(ft files --path "$data/client.conf" --format csv | rows)" 0
-wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply"
+wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply" "$cut_other"
 
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.
