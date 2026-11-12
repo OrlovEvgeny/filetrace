@@ -1306,6 +1306,124 @@ static void scenario_send_beside(const char *path, size_t size, const char *stri
 }
 
 /*
+ * servestrict <data> <data bytes> <script> <script bytes>: over a connection that has heard from
+ * its peer, reads two pages of a large data file, then the script whole, and sends a response
+ * head and the script, as a server answers with its own static code.
+ */
+static void scenario_serve_strict(const char *data, size_t data_size, const char *script,
+                                  size_t script_size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    make_file(data, data_size);
+    char page[4096];
+    int sock = connect_sink(&sink);
+    hear(sock);
+    int db = open_file(data);
+    for (int i = 0; i < 2; i++) {
+        if (pread(db, page, sizeof(page), (off_t)(i * 65536)) != (ssize_t)sizeof(page))
+            die("pread");
+    }
+    close(db);
+    char *response = calloc(1, 300 + script_size);
+    if (!response)
+        die("malloc");
+    char *contents = read_whole_file(script, script_size);
+    memcpy(response + 300, contents, script_size);
+    send_all(sock, response, 300 + script_size);
+    close(sock);
+    free(contents);
+    free(response);
+    report("servestrict", script, script_size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * streamafter <kept> <kept bytes> <path> <bytes>: over a connection that has heard from its
+ * peer, reads a large file it keeps, sends a request head, then reads and sends the other file in
+ * pieces of 16 KB.
+ */
+static void scenario_stream_after(const char *kept, size_t kept_size, const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    make_file(path, size);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    free(read_whole_file(kept, kept_size));
+    char head[200];
+    memset(head, 'H', sizeof(head));
+    send_all(sock, head, sizeof(head));
+    int file = open_file(path);
+    read_send(sock, file, 16384);
+    close(file);
+    close(sock);
+    report("streamafter", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * metricfirst <path> <bytes>: over a connection that has heard from its peer, reads the file,
+ * sends a datagram to a metrics daemon, then a response head and the file, and hears the answer.
+ */
+static void scenario_metric_first(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    struct sink metrics = start_sink(SOCK_DGRAM, false, SINK_DISCARD);
+    int udp = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udp < 0)
+        die("socket");
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    char *response = calloc(1, 300 + size);
+    if (!response)
+        die("malloc");
+    char *contents = read_whole_file(path, size);
+    memcpy(response + 300, contents, size);
+    char metric[60];
+    memset(metric, 'm', sizeof(metric));
+    if (sendto(udp, metric, sizeof(metric), 0, (struct sockaddr *)&metrics.addr,
+               metrics.addr_len) != (ssize_t)sizeof(metric))
+        die("sendto");
+    send_all(sock, response, 300 + size);
+    hear(sock);
+    close(sock);
+    close(udp);
+    free(contents);
+    free(response);
+    report("metricfirst", path, size, sink.port);
+    usleep(100 * 1000);
+    stop_sink(&metrics);
+    stop_sink(&sink);
+}
+
+/*
+ * resend <path> <bytes> <rounds>: over a connection that has heard from its peer and never hears
+ * again, reads the file and sends it, round after round, as a status file is shipped.
+ */
+static void scenario_resend(const char *path, size_t size, size_t rounds)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    make_file(path, size);
+    char *contents = malloc(size);
+    if (!contents)
+        die("malloc");
+    int sock = connect_sink(&sink);
+    hear(sock);
+    int file = open_file(path);
+    for (size_t i = 0; i < rounds; i++) {
+        if (pread(file, contents, size, 0) != (ssize_t)size)
+            die("pread");
+        send_all(sock, contents, size);
+        usleep(50 * 1000);
+    }
+    close(file);
+    close(sock);
+    free(contents);
+    report("resend", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
  */
@@ -1986,6 +2104,14 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "servestrict") == 0 && argc == 6)
+        scenario_serve_strict(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "streamafter") == 0 && argc == 6)
+        scenario_stream_after(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "metricfirst") == 0 && argc == 4)
+        scenario_metric_first(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "resend") == 0 && argc == 5)
+        scenario_resend(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "sendbeside") == 0 && argc == 7)
         scenario_send_beside(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
                              arg_size(argv[6]));

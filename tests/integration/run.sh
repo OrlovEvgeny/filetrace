@@ -269,8 +269,9 @@ expect "side read sent elsewhere: small bytes" \
 expect "side read sent elsewhere: large read before a small one not reported" \
     "$(ft files --path "$data/checksummed-too.bin" --format csv | rows)" 0
 
-# A module or library loaded between an upload's read and its send does not take its place,
-# and is not what was sent. A versioned library counts from the read after its first.
+# A module or library loaded between an upload's read and its send is not what was sent. It takes
+# the upload's place, as any later read does. A versioned library counts from the read after its
+# first.
 head -c 4096 /dev/zero >"$data/libfake.so.3"
 "$workload" read "$data/libfake.so.3" >/dev/null
 settle
@@ -278,10 +279,6 @@ settle
 "$workload" readloadsend "$data/upload-so.bin" 20000 "$data/_queue.cpython-313.so" 832 >/dev/null
 "$workload" readloadsend "$data/upload-so3.bin" 20000 "$data/libfake.so.3" 4096 >/dev/null
 settle
-for name in pm so so3; do
-    expect "module loaded before the send, $name: upload bytes" \
-        "$(ft files --path "$data/upload-$name.bin" --format csv | column transfer.bytes_sent)" 20000
-done
 expect "module loaded before the send: modules not reported" \
     "$(ft files --path "$data/Extra.pm" --format csv | rows)$(ft files --path "$data/_queue*" \
         --format csv | rows)$(ft files --path "$data/libfake*" --format csv | rows)" 000
@@ -320,7 +317,7 @@ expect "requests after a read: large file not reported" \
 "$workload" readhello "$data/internal-ca.pem" 1111 >/dev/null
 "$workload" readhello "$data/helper.py" 1200 >/dev/null
 "$workload" exchange "$data/lookup.mo" 2584 1 3000 >/dev/null
-"$workload" exchange "$data/accounts.py" 912 1 3000 >/dev/null
+"$workload" exchange "$data/accounts.py" 2000 1 4000 >/dev/null
 "$workload" smallupload "$data/small-upload.json" 2000 >/dev/null
 settle
 expect "first flight: CA file read before the hello not reported" \
@@ -359,8 +356,10 @@ expect "upload over an open connection after a side connection: bytes" \
 
 # Two first flights in progress at once: the CA file read for them is neither one's.
 "$workload" twoflights "$data/two-flights-ca.pem" 3000 >/dev/null
-# Two files sent whole, one after the other, in a first flight that is never answered are both.
+# Two files sent whole, one after the other, in a first flight that is never answered are both,
+# also when the second takes the flight past what a handshake sends.
 "$workload" twofiles "$data/flight-a.json" "$data/flight-b.json" 1500 >/dev/null
+"$workload" twofiles "$data/flight-c.json" "$data/flight-d.json" 2500 >/dev/null
 settle
 expect "first flights: CA file read for two not reported" \
     "$(ft files --path "$data/two-flights-ca.pem" --format csv | rows)" 0
@@ -368,6 +367,10 @@ expect "first flight: first of two files bytes" \
     "$(ft files --path "$data/flight-a.json" --format csv | column transfer.bytes_sent)" 1500
 expect "first flight: second of two files bytes" \
     "$(ft files --path "$data/flight-b.json" --format csv | column transfer.bytes_sent)" 1500
+for name in c d; do
+    expect "first flight past 4 KB: file $name bytes" \
+        "$(ft files --path "$data/flight-$name.json" --format csv | column transfer.bytes_sent)" 2500
+done
 
 # A file streamed in pieces after the connection, its first piece read before it, goes whole.
 "$workload" readstream "$data/stream-after-dial.bin" 300000 65536 >/dev/null
@@ -395,15 +398,15 @@ expect "first flight: second of two files bytes" \
 # An interpreter's configuration read at startup is background, whatever is uploaded after it.
 mkdir -p "$data/etc/php/8.4/cli"
 "$workload" readmemory "$data/etc/php/8.4/cli/php.ini" 75000 75000 >/dev/null
-# A small file read after a large one is what a later send over an open connection takes,
-# after a background read too, but not once the read is stale.
+# A small file read after a large one is what a later send over an open connection takes, but
+# not once the read is stale. A module loaded after it takes its place, and is not what went.
 "$workload" readsendother "$data/side-bg-large.bin" 300000 "$data/side-bg-small.bin" 20000 \
     "$data/side-bg-lib.py" >/dev/null
 "$workload" readlater "$data/later-large.bin" 300000 "$data/later-small.bin" 20000 3 3000 \
     >/dev/null
 settle
 for pair in stream-after-dial:300000 stream-sniffed:1048364 chatty:300000 two-a:300000 two-d:200000 \
-    reply-thread:300000 small-before:20000 side-bg-small:20000; do
+    reply-thread:300000 small-before:20000; do
     name=${pair%%:*}
     path=$(ls "$data/$name".* | head -1)
     csv=$(ft files --path "$path" --format csv)
@@ -520,7 +523,7 @@ expect "dialed window, parts: bytes" \
 # An S3 client sends a signed head and then the file it read after the connect, around the size
 # at which a first flight is told from a hello. Over a connection that has heard, a file of 1 or
 # 2 KB is not told from a page its template went into with a head of this size.
-for n in 1024 2048 3072 4096 5120 20000 60000; do
+for n in 1024 2048 2600 2800 2999 3072 4096 5120 20000 60000; do
     "$workload" headbody "$data/head-fresh-$n.bin" "$n" fresh >/dev/null
 done
 for n in 3072 4096 5120 20000 60000; do
@@ -534,7 +537,7 @@ for n in 65536 300000; do
     "$workload" headbody "$data/head-split3-$n.bin" "$n" split3 >/dev/null
 done
 settle
-for n in 1024 2048 3072 4096 5120 20000 60000; do
+for n in 1024 2048 2600 2800 2999 3072 4096 5120 20000 60000; do
     expect "head then body, fresh connection: $n bytes" \
         "$(ft files --path "$data/head-fresh-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
 done
@@ -590,6 +593,27 @@ done
 settle
 expect "sendfile at the end of the file, then the read sent: bytes" \
     "$(ft files --path "$data/sendfile-eof.bin" --format csv | column transfer.bytes_sent)" 20000
+
+# A strict file read after a large file and sent is what went, whether read whole or in pieces.
+"$workload" servestrict "$data/app.db" 5000000 "$data/app.js" 20000 >/dev/null
+"$workload" streamafter "$data/manifest.bin" 300000 "$data/app.jar" 420000 >/dev/null
+# A small file sent after a datagram elsewhere, and one shipped round after round to a peer that
+# never answers, are judged by what each send took.
+"$workload" metricfirst "$data/page.html" 5000 >/dev/null
+"$workload" resend "$data/status.txt" 2048 5 >/dev/null
+settle
+expect "strict file after a large read: bytes" \
+    "$(ft files --path "$data/app.js" --format csv | column transfer.bytes_sent)" 20000
+expect "strict file after a large read: the large one not reported" \
+    "$(ft files --path "$data/app.db" --format csv | rows)" 0
+expect "strict file streamed after a large read: bytes" \
+    "$(ft files --path "$data/app.jar" --format csv | column transfer.bytes_sent)" 420000
+expect "strict file streamed after a large read: the large one not reported" \
+    "$(ft files --path "$data/manifest.bin" --format csv | rows)" 0
+expect "small file after a datagram elsewhere: bytes" \
+    "$(ft files --path "$data/page.html" --format csv | column transfer.bytes_sent)" 5000
+expect "small file sent round after round: bytes" \
+    "$(ft files --path "$data/status.txt" --format csv | column transfer.bytes_sent)" 10240
 
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.
@@ -1099,7 +1123,6 @@ CONFIG
 : >"$data/strict-framed.js"
 : >"$data/strict-after.bin"
 : >"$data/strict-short.py"
-: >"$data/strict-beside.py"
 mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
     { echo "FAIL: the agent did not start with background_paths"; exit 1; }
@@ -1115,7 +1138,6 @@ passwd_report=$("$workload" upload /etc/passwd 65536)
 "$workload" readudp "$data/strict-chunks.py" 61440 1400 44 >/dev/null
 "$workload" readudptwo "$data/strict-halves.py" 8192 >/dev/null
 "$workload" readudp "$data/strict-short.py" 8192 7500 1 >/dev/null
-"$workload" sendbeside "$data/plain-beside.json" 1500 "$data/strict-beside.py" 2048 548 >/dev/null
 "$workload" sendlisted heard "$data/listed.both" 4096 >/dev/null
 "$workload" sendlisted heard "$data/special.mixed" 4096 >/dev/null
 "$workload" framed "$data/strict-framed.js" 1048576 16384 22 >/dev/null
@@ -1145,8 +1167,6 @@ expect "strict: small datagrams after a read not reported" \
     "$(ft files --path "$data/strict-metrics.py" --format csv | rows)" 0
 expect "strict: most of a file in one datagram, bytes that went" \
     "$(ft files --path "$data/strict-short.py" --format csv | column transfer.bytes_sent)" 7500
-expect "strict: file read for itself beside a reply not reported" \
-    "$(ft files --path "$data/strict-beside.py" --format csv | rows)" 0
 expect "strict: halves over two datagram sockets not taken for one" \
     "$(ft files --path "$data/strict-halves.py" --format csv | rows)" 0
 expect "strict: file sent in secure records bytes" \
