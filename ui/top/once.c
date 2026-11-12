@@ -91,7 +91,6 @@ constexpr int DEFAULT_COLUMNS = 174;
 constexpr uint64_t FIRST_FRAME_NS = 10 * FT_NS_PER_SEC;
 constexpr uint64_t POLL_NS = 100 * FT_NS_PER_MS;
 constexpr uint64_t NAMES_NS = 3 * FT_NS_PER_SEC;
-constexpr size_t PRESET_SIZE = 1024;
 
 static volatile sig_atomic_t interrupted;
 
@@ -126,35 +125,6 @@ static void signals_restore(const struct signals *saved)
     sigaction(SIGINT, &saved->interrupt, nullptr);
     sigaction(SIGTERM, &saved->terminate, nullptr);
     sigaction(SIGPIPE, &saved->pipe, nullptr);
-}
-
-/* The filter with a leading @name replaced by what the preset holds; nullptr when it has none. */
-static int expand_preset(const char *filter, char **expanded)
-{
-    struct ft_error err = {0};
-    char expression[PRESET_SIZE];
-    char name[128];
-
-    *expanded = nullptr;
-    if (!filter || filter[0] != '@')
-        return FT_EXIT_OK;
-    size_t len = strcspn(filter + 1, " \t");
-    if (len == 0 || len >= sizeof(name))
-        return ft_usage_error("top", "filter: a preset name must follow '@'");
-    memcpy(name, filter + 1, len);
-    name[len] = '\0';
-    if (!ft_top_presets_find(name, expression, sizeof(expression), &err))
-        return ft_usage_error("top", "filter: %s", err.msg);
-
-    const char *rest = filter + 1 + len + strspn(filter + 1 + len, " \t");
-    size_t size = strlen(expression) + strlen(rest) + 2;
-    *expanded = malloc(size);
-    if (!*expanded) {
-        fprintf(stderr, "filetrace: out of memory\n");
-        return FT_EXIT_ERROR;
-    }
-    snprintf(*expanded, size, "%s%s%s", expression, rest[0] ? " " : "", rest);
-    return FT_EXIT_OK;
 }
 
 static enum ft_top_sort ranking_sort(enum ft_sort by)
@@ -202,22 +172,18 @@ static int set_sort(struct ft_top_model *m, const struct ft_top_options *opt)
 static int configure(struct ft_top_model *m, const struct ft_top_options *opt)
 {
     struct ft_error err = {0};
-    char *expanded;
-    int code = expand_preset(opt->filter, &expanded);
+    char *filter = ft_top_presets_expand(opt->filter ? opt->filter : "", &err);
 
-    if (code != FT_EXIT_OK)
-        return code;
     ft_top_set_mode(m, opt->mode);
-    bool accepted = ft_top_set_filter(m, opt->mode,
-                                      expanded ? expanded : (opt->filter ? opt->filter : ""), &err);
-    free(expanded);
+    bool accepted = filter && ft_top_set_filter(m, opt->mode, filter, &err);
+    free(filter);
     if (!accepted) {
         if (err.code == FT_EXIT_USAGE)
             return ft_usage_error("top", "filter: %s", err.msg);
         fprintf(stderr, "filetrace: %s\n", err.msg);
         return err.code;
     }
-    code = set_sort(m, opt);
+    int code = set_sort(m, opt);
     if (code != FT_EXIT_OK)
         return code;
     ft_top_set_group(m, opt->mode, opt->group);

@@ -10,6 +10,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+constexpr size_t EXPRESSION_MAX = 4096; /* a preset longer than this is refused when used */
+
 static bool too_long(struct ft_error *err)
 {
     ft_error_set(err, FT_EXIT_ERROR, "The path of the filter presets is too long");
@@ -193,8 +195,8 @@ bool ft_top_presets_save(const char *name, const char *expression, struct ft_err
     char path[FT_PATH_MAX];
     char temp[FT_PATH_MAX];
 
-    if (!name[0] || strpbrk(name, "\t\r\n")) {
-        ft_error_set(err, FT_EXIT_USAGE, "A preset name cannot be empty or hold a tab");
+    if (!name[0] || strpbrk(name, " \t\r\n")) {
+        ft_error_set(err, FT_EXIT_USAGE, "A preset name cannot be empty or hold a space or a tab");
         return false;
     }
     if (strpbrk(expression, "\r\n")) {
@@ -279,4 +281,37 @@ bool ft_top_presets_find(const char *name, char *expression, size_t size, struct
         ft_error_set(err, FT_EXIT_USAGE, "unknown filter preset '%s' (saved: %s)", name, names);
     ft_top_presets_free(&p);
     return false;
+}
+
+char *ft_top_presets_expand(const char *filter, struct ft_error *err)
+{
+    if (filter[0] != '@') {
+        char *copy = strdup(filter);
+        if (!copy)
+            ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+        return copy;
+    }
+    size_t len = strcspn(filter + 1, " \t");
+    if (len == 0) {
+        ft_error_set(err, FT_EXIT_USAGE, "a preset name must follow '@'");
+        return nullptr;
+    }
+
+    const char *rest = filter + 1 + len + strspn(filter + 1 + len, " \t");
+    char *name = strndup(filter + 1, len);
+    char *expression = malloc(EXPRESSION_MAX);
+    char *out = nullptr;
+    if (!name || !expression) {
+        ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+    } else if (ft_top_presets_find(name, expression, EXPRESSION_MAX, err)) {
+        size_t size = strlen(expression) + strlen(rest) + 2;
+        out = malloc(size);
+        if (out)
+            snprintf(out, size, "%s%s%s", expression, rest[0] ? " " : "", rest);
+        else
+            ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
+    }
+    free(name);
+    free(expression);
+    return out;
 }

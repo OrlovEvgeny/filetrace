@@ -636,6 +636,26 @@ static void presets(void)
     CHECK_U64(err.code, FT_EXIT_USAGE);
     CHECK(strstr(err.msg, "invoices, mine") != nullptr);
     CHECK(!ft_top_presets_save("a\tb", "pid:1", &err));
+    CHECK(!ft_top_presets_save("my logs", "file:*.log", &err));
+    CHECK_U64(err.code, FT_EXIT_USAGE);
+    CHECK(strstr(err.msg, "space") != nullptr);
+
+    /* "@name" ends at a space or a tab; the terms after it follow the preset's own. */
+    static const char *const expansions[][2] = {
+        {"@mine", "user:evgenii"},
+        {"@mine dest:public", "user:evgenii dest:public"},
+        {"@mine\tdest:public", "user:evgenii dest:public"},
+        {"pid:1 @mine", "pid:1 @mine"},
+    };
+    for (size_t i = 0; i < FT_ARRAY_LEN(expansions); i++) {
+        char *expanded = ft_top_presets_expand(expansions[i][0], &err);
+        CHECK_STR(expanded ? expanded : "(failed)", expansions[i][1]);
+        free(expanded);
+    }
+    CHECK(!ft_top_presets_expand("@", &err));
+    CHECK_U64(err.code, FT_EXIT_USAGE);
+    CHECK(!ft_top_presets_expand("@my logs", &err));
+    CHECK(strstr(err.msg, "'my'") != nullptr);
 
     /* Ctrl-S in the filter prompt saves; the arrows bring presets and earlier filters back. */
     struct rig r;
@@ -660,6 +680,13 @@ static void presets(void)
     press(&r, FT_KEY_DOWN);
     press(&r, FT_KEY_DOWN);
     CHECK_STR(r.c->ui.edit.text, "pid:7");
+
+    /* A name the filter could not call up is refused, and its prompt stays open. */
+    press(&r, FT_KEY_CTRL_S);
+    type(&r, "my logs");
+    press(&r, FT_KEY_ENTER);
+    CHECK_U64(r.c->ui.prompt, FT_TOP_PROMPT_PRESET);
+    CHECK(strstr(r.c->ui.message, "space") != nullptr);
     rig_close(&r);
 
     unlink(path);

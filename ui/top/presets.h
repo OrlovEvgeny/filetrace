@@ -29,4 +29,10 @@ bool ft_top_presets_save(const char *name, const char *expression, struct ft_err
 /* Fails with FT_EXIT_USAGE, listing the names there are, when no preset has the name. */
 bool ft_top_presets_find(const char *name, char *expression, size_t size, struct ft_error *err);
 
+/*
+ * A copy of filter whose leading "@name", the name ending at the first space or tab, becomes the
+ * preset's expression with the terms after the name appended; nullptr when that fails.
+ */
+char *ft_top_presets_expand(const char *filter, struct ft_error *err);
+
 #endif

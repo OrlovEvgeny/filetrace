@@ -12,7 +12,6 @@
 
 /* The shortest time between two presents. */
 constexpr uint64_t FRAME_NS = 16 * FT_NS_PER_MS;
-constexpr size_t PRESET_MAX = 4096;
 
 struct run {
     struct ft_screen *screen;
@@ -23,34 +22,6 @@ struct run {
     struct ft_host_info host;
     enum ft_color_depth depth;
 };
-
-/* "@name" stands for a saved preset; terms after the name are added to the preset's. */
-static char *resolve_filter(const char *filter, struct ft_error *err)
-{
-    if (!filter)
-        return nullptr;
-    if (filter[0] != '@')
-        return strdup(filter);
-
-    size_t len = strcspn(filter + 1, " ");
-    const char *rest = filter + 1 + len;
-    char *name = strndup(filter + 1, len);
-    char *expression = malloc(PRESET_MAX + strlen(rest) + 1);
-    if (!name || !expression) {
-        free(name);
-        free(expression);
-        ft_error_set(err, FT_EXIT_ERROR, "Out of memory");
-        return nullptr;
-    }
-    bool found = ft_top_presets_find(name, expression, PRESET_MAX, err);
-    free(name);
-    if (!found) {
-        free(expression);
-        return nullptr;
-    }
-    strcat(expression, rest);
-    return expression;
-}
 
 static void send_request(struct run *r)
 {
@@ -197,8 +168,8 @@ int ft_top_run(struct ft_session *s, const struct ft_cli *cli, const struct ft_t
 
     ft_top_frame_init(&r.frame);
     ft_sysinfo_host(&r.host);
-    filter = resolve_filter(opt->filter, &err);
-    if (opt->filter && !filter)
+    filter = ft_top_presets_expand(opt->filter ? opt->filter : "", &err);
+    if (!filter)
         code = err.code;
     if (code == FT_EXIT_OK) {
         model = ft_top_model_create();
