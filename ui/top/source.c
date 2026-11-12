@@ -397,7 +397,7 @@ static void publish(struct ft_top_source *src)
         work->has_totals = true;
     }
     /* The events are fetched once per request, so they too outlive the frame that brought them. */
-    if (src->ready_valid && ready->has_events && !work->has_events) {
+    if (src->ready_valid && ready->has_events && !work->has_events && work->code == FT_EXIT_OK) {
         struct ft_rows events = work->events;
         work->events = ready->events;
         ready->events = events;

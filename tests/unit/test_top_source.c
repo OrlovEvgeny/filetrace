@@ -666,6 +666,32 @@ static void check_events_once_per_request(void)
     rig_stop(&rig);
 }
 
+static void check_events_stay_out_of_a_failed_frame(void)
+{
+    struct rig rig;
+    struct ft_top_request req;
+
+    rig_request(&req);
+    req.events = true;
+    req.events_pid = 111;
+    CHECK(rig_start(&rig, &req));
+    CHECK(readable(ft_top_source_fd(rig.source), 2000));
+
+    /* The refresh for another process fails and replaces the unread frame with its events. */
+    atomic_store(&rig.fake.drop, true);
+    req.events_pid = 222;
+    uint64_t serial = ft_top_source_request(rig.source, &req);
+    CHECK(fake_reached(&rig.fake, 4 + 1, 2000));
+    usleep(100 * 1000);
+
+    CHECK(ft_top_source_take(rig.source, &rig.frame));
+    CHECK_U64(rig.frame.request_serial, serial);
+    CHECK(rig.frame.code != FT_EXIT_OK);
+    CHECK(!rig.frame.has_events);
+    CHECK_U64(rig.frame.events.count, 0);
+    rig_stop(&rig);
+}
+
 static void check_lost_agent(void)
 {
     struct rig rig;
@@ -750,6 +776,7 @@ void test_top_source(void)
     check_request_refreshes_at_once();
     check_agent_without_leaders();
     check_events_once_per_request();
+    check_events_stay_out_of_a_failed_frame();
     check_lost_agent();
     check_protocol_mismatch();
     check_stop_during_a_wait();

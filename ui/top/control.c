@@ -2181,13 +2181,13 @@ unsigned ft_top_control_frame(struct ft_top_controller *c, struct ft_top_frame *
         c->await_serial = 0;
         ui->waiting = false;
     }
+    if (frame->code != FT_EXIT_OK)
+        return finish(c, FT_TOP_DO_REDRAW, true);
     if (frame->has_events && c->events_serial && frame->request_serial >= c->events_serial &&
         ui->overlay == FT_TOP_OVERLAY_EVENTS) {
         c->events_serial = 0;
         show_events(c, frame);
     }
-    if (frame->code != FT_EXIT_OK)
-        return finish(c, FT_TOP_DO_REDRAW, true);
     if (c->sent.leaders && frame->request_serial >= c->leaders_from)
         ui->leaders_unsupported = !frame->has_leaders;
 
