@@ -1,5 +1,6 @@
 #include "backends/linux/linux.h"
 
+#include "filetrace/base.h"
 #include "filetrace/format.h"
 
 #include <bpf/bpf.h>
@@ -191,13 +192,23 @@ static void load_names(int names_fd, int suffixes_fd, const char *const *pattern
 {
     for (size_t i = 0; i < count; i++) {
         const char *p = patterns[i];
-        if (strncmp(p, "*/", 2) == 0 && plain(p + 2) && strlen(p + 2) < FT_BPF_BACKGROUND_NAME) {
+        bool named = strncmp(p, "*/", 2) == 0 && plain(p + 2);
+        bool suffixed = p[0] == '*' && p[1] == '.' && plain(p + 1);
+        if ((named && strlen(p + 2) >= FT_BPF_BACKGROUND_NAME) ||
+            (suffixed &&
+             (strlen(p + 1) > FT_BPF_BACKGROUND_SUFFIX || *suffixes >= FT_BPF_BACKGROUND_SUFFIXES)))
+            ft_log(
+                FT_LOG_WARN,
+                "[correlation] \"%s\" names a file from its second read only: the kernel matches "
+                "%d suffixes of up to %d characters and names of up to %d",
+                p, FT_BPF_BACKGROUND_SUFFIXES, FT_BPF_BACKGROUND_SUFFIX,
+                FT_BPF_BACKGROUND_NAME - 1);
+        if (named && strlen(p + 2) < FT_BPF_BACKGROUND_NAME) {
             char name[FT_BPF_BACKGROUND_NAME] = {0};
             memcpy(name, p + 2, strlen(p + 2));
             if (bpf_map_update_elem(names_fd, name, &kind, BPF_NOEXIST) == 0)
                 (*held)++;
-        } else if (p[0] == '*' && p[1] == '.' && plain(p + 1) &&
-                   strlen(p + 1) <= FT_BPF_BACKGROUND_SUFFIX &&
+        } else if (suffixed && strlen(p + 1) <= FT_BPF_BACKGROUND_SUFFIX &&
                    *suffixes < FT_BPF_BACKGROUND_SUFFIXES) {
             struct ft_bpf_background_suffix suffix = {.len = (uint32_t)strlen(p + 1), .kind = kind};
             memcpy(suffix.text, p + 1, suffix.len);
