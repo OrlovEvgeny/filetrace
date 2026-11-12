@@ -217,7 +217,6 @@ constexpr size_t ROW_PIECES = 12;
 constexpr size_t ROW_TEXTS = 6;
 constexpr size_t ROW_TEXT_BYTES = 256;
 
-/* What the cells of one row share while it is drawn. */
 struct row_draw {
     struct ft_top_draw *d;
     int y;
@@ -656,7 +655,6 @@ static void fold_cells(struct row_draw *rd, const struct columns *cols, const st
     }
 }
 
-/* A transfer under its process in the tree: the path and where it goes. */
 static void tree_transfer_cells(struct row_draw *rd, const struct columns *cols,
                                 const struct ft_top_row *r)
 {
@@ -984,7 +982,6 @@ static void draw_row(struct ft_top_draw *d, enum ft_top_mode mode, const struct 
                         (uint32_t)index);
 }
 
-/* The header's text of a column: its label, with the sort direction when it is the sort key. */
 static void header_label(const struct ft_top_draw *d, const struct column *c, bool sorted,
                          bool descending, char *buf, size_t size)
 {

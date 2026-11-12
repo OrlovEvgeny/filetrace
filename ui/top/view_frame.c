@@ -53,7 +53,7 @@ void ft_top_layout(const struct ft_top_ui *ui, int cols, int rows, struct ft_top
     bool overlay = ui->overlay != FT_TOP_OVERLAY_NONE;
     bool panel = !leaders && !overlay && ui->panel != FT_TOP_PANEL_NONE;
     int top = 0;
-    int bottom = rows - 1; /* the first row below the blocks placed from the top */
+    int bottom = rows - 1; /* the topmost row taken by the blocks placed from the bottom up */
 
     if (!panel) {
         out->head = (struct ft_rect){0, 0, cols, head_rows(ui->mode) + (roomy ? 1 : 0)};
@@ -1088,7 +1088,7 @@ static void draw_too_small(struct ft_top_draw *d)
 }
 
 /* Draws one block with the canvas clipped to its rectangle. */
-#define IN(rect, call)                                                                             \
+#define CLIPPED(rect, call)                                                                        \
     do {                                                                                           \
         if ((rect).w > 0 && (rect).h > 0) {                                                        \
             struct ft_rect previous_clip = ft_canvas_clip(d->canvas, rect);                        \
@@ -1120,10 +1120,10 @@ void ft_top_draw(struct ft_top_draw *d)
     }
 
     if (leaders)
-        IN(l.head, ft_top_draw_leaders_cards(d, l.head));
+        CLIPPED(l.head, ft_top_draw_leaders_cards(d, l.head));
     else
-        IN(l.head, draw_head(d, l.head));
-    IN(l.tabs, {
+        CLIPPED(l.head, draw_head(d, l.head));
+    CLIPPED(l.tabs, {
         int x = draw_tabs(d, l.tabs);
         if (leaders)
             ft_top_draw_leaders_bar(d, l.tabs, x);
@@ -1132,30 +1132,30 @@ void ft_top_draw(struct ft_top_draw *d)
     });
 
     if (ui->overlay != FT_TOP_OVERLAY_NONE) {
-        IN(l.overlay, ft_top_draw_overlay(d, l.overlay));
+        CLIPPED(l.overlay, ft_top_draw_overlay(d, l.overlay));
     } else {
         struct ft_rect table = {l.header.x, l.header.y, l.header.w, l.header.h + l.table.h};
         if (leaders) {
-            IN(table, ft_top_draw_leaders_table(d, l.header, l.table, ui->scroll[ui->mode]));
-            IN(l.side, ft_top_draw_leaders_side(d, l.side));
+            CLIPPED(table, ft_top_draw_leaders_table(d, l.header, l.table, ui->scroll[ui->mode]));
+            CLIPPED(l.side, ft_top_draw_leaders_side(d, l.side));
         } else {
-            IN(table, ft_top_draw_table(d, ui->mode, l.header, l.table, ui->scroll[ui->mode]));
+            CLIPPED(table, ft_top_draw_table(d, ui->mode, l.header, l.table, ui->scroll[ui->mode]));
         }
         if (l.panel.h > 0) {
-            IN(l.panel, ft_top_draw_panel(d, l.panel));
+            CLIPPED(l.panel, ft_top_draw_panel(d, l.panel));
             ft_canvas_fill(c, (struct ft_rect){l.panel.x + l.panel.w, l.panel.y, 1, l.panel.h},
                            U'│', fg(FT_COLOR_RULE, false));
         }
         ft_canvas_repeat(c, l.rule.x, l.rule.y, l.rule.h > 0 ? l.rule.w : 0, U'─',
                          fg(FT_COLOR_RULE, false));
         if (leaders) {
-            IN(l.context, ft_top_draw_leaders_legend(d, l.context));
+            CLIPPED(l.context, ft_top_draw_leaders_legend(d, l.context));
         } else {
-            IN(l.context, draw_context(d, l.context));
-            IN(l.status, draw_status(d, l.status));
+            CLIPPED(l.context, draw_context(d, l.context));
+            CLIPPED(l.status, draw_status(d, l.status));
         }
-        IN(l.inspect, ft_top_draw_inspect(d, l.inspect));
+        CLIPPED(l.inspect, ft_top_draw_inspect(d, l.inspect));
     }
-    IN(l.prompt, draw_prompt(d, l.prompt));
-    IN(l.keys, draw_keys(d, l.keys));
+    CLIPPED(l.prompt, draw_prompt(d, l.prompt));
+    CLIPPED(l.keys, draw_keys(d, l.keys));
 }
