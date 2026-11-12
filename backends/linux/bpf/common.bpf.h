@@ -795,8 +795,9 @@ static __always_inline void dial_judge(void *map, const struct dial *d)
     runs_keep(runs, d->burst);
     if (!k->fresh || (runs[0] + runs[1] + runs[2]) * 10 < whole * 9 || k->charged * 10 >= whole * 9)
         return;
+    /* Beside the base rule's charges, only what they left out is added. */
     transfer_report(map, d->cookie, d->tgid, &k->file, d->first_ns, d->last_ns, whole - k->charged,
-                    k->charged ? 0 : k->read, d->sends, 0, d->script);
+                    whole - k->charged, k->charged ? 0 : d->sends, 0, d->script);
 
     /* A file that went is no candidate for the thread's next connection. */
     if (d->tid != (__u32)bpf_get_current_pid_tgid())
