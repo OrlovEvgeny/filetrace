@@ -242,6 +242,7 @@ static void write_view(struct writer *w, const struct ft_top_model *m, enum ft_t
 struct view {
     bool grouped;
     bool tree;
+    enum ft_leader_key key; /* what a row of Leaders stands for */
 };
 
 static struct view view_of(const struct ft_top_model *m, enum ft_top_mode mode)
@@ -249,6 +250,7 @@ static struct view view_of(const struct ft_top_model *m, enum ft_top_mode mode)
     return (struct view){
         .grouped = grouping(m, mode) != FT_TOP_GROUP_NONE,
         .tree = in_tree(m, mode),
+        .key = mode == FT_TOP_LEADERS ? ft_top_leaders(m)->key : FT_LEADER_FILE,
     };
 }
 
@@ -412,6 +414,61 @@ static void tree_row(struct writer *w, const struct ft_top_row *r)
     }
 }
 
+static const char *const key_names[FT_LEADER_KEY_COUNT] = {
+    [FT_LEADER_FILE] = "file",
+    [FT_LEADER_DIRECTORY] = "directory",
+    [FT_LEADER_EXTENSION] = "extension",
+    [FT_LEADER_DESTINATION] = "destination",
+};
+
+/* The ranking's own text is named after what it ranks; a destination has its address and host. */
+static void leader_members(struct writer *w, const struct ft_top_leader *l, enum ft_leader_key key)
+{
+    const struct ft_row_leader *row = l->row;
+
+    put_uint(w, "rank", row->rank);
+    put_known(w, "previous_rank", row->previous_rank, row->previous_rank != 0);
+    if (key == FT_LEADER_DESTINATION) {
+        put_text(w, "address", l->remote_text);
+        put_text(w, "host", l->host_state == FT_TOP_HOST_NAMED ? l->host : nullptr);
+    } else {
+        put_text(w, key_names[key], row->text);
+    }
+    if (key == FT_LEADER_FILE) {
+        bool file_known = row->dev != 0 || row->ino != 0;
+
+        put_known(w, "device", row->dev, file_known);
+        put_known(w, "inode", row->ino, file_known);
+        put_known(w, "size", row->file_size, row->file_size != 0);
+    }
+    put_uint(w, "bytes", row->bytes);
+    put_number(w, "share", l->share);
+    put_uint(w, "bytes_error", row->bytes_error);
+    put_uint(w, "bytes_exact", row->bytes_exact);
+    put_uint(w, "transfers", row->transfers);
+    put_uint(w, "transfers_error", row->transfers_error);
+    put_uint(w, "destinations", row->destinations);
+    if (key != FT_LEADER_FILE)
+        put_uint(w, "files", row->files);
+    open_container(w, "senders", '[');
+    for (size_t i = 0; i < FT_LEADER_SENDERS && row->senders[i].name[0]; i++) {
+        open_container(w, nullptr, '{');
+        put_text(w, "name", row->senders[i].name);
+        put_uint(w, "bytes", row->senders[i].bytes);
+        put_uint(w, "transfers", row->senders[i].transfers);
+        close_container(w, '}');
+    }
+    close_container(w, ']');
+    put_bool(w, "more_senders", (row->flags & FT_LEADER_MORE_SENDERS) != 0);
+    put_text(w, "method", method_text(row->method));
+    put_text(w, "confidence", ft_confidence_name((enum ft_confidence)row->confidence));
+    put_time(w, "first_sent", row->first_wall_ns);
+    put_time(w, "last_sent", row->last_wall_ns);
+    put_uints(w, "trend", row->trend, FT_LEADER_SLOTS);
+    if (key == FT_LEADER_FILE)
+        put_bool(w, "deleted", (row->flags & FT_LEADER_DELETED) != 0);
+}
+
 static void write_row(struct writer *w, const struct view *view, const struct ft_top_row *r,
                       const char *group)
 {
@@ -434,20 +491,24 @@ static void write_row(struct writer *w, const struct view *view, const struct ft
     case FT_TOP_ROW_FILE:
         file_members(w, r->file);
         break;
+    case FT_TOP_ROW_LEADER:
+        leader_members(w, r->leader, view->key);
+        break;
     default:
         break;
     }
 }
 
-/* The rows as an array named after the mode; group headings go into the rows they head. */
-static size_t write_rows(struct writer *w, const struct ft_top_model *m, enum ft_top_mode mode)
+/* The rows as an array; group headings go into the rows they head. */
+static size_t write_rows(struct writer *w, const struct ft_top_model *m, enum ft_top_mode mode,
+                         const char *name)
 {
     struct view view = view_of(m, mode);
     size_t count = ft_top_row_count(m, mode);
     const char *group = nullptr;
     size_t written = 0;
 
-    open_container(w, ft_top_mode_name(mode), '[');
+    open_container(w, name, '[');
     for (size_t i = 0; i < count; i++) {
         const struct ft_top_row *r = ft_top_row_at(m, mode, i);
 
@@ -466,22 +527,103 @@ static size_t write_rows(struct writer *w, const struct ft_top_model *m, enum ft
     return written;
 }
 
+static size_t write_live(struct writer *w, const struct ft_top_model *m, enum ft_top_mode mode,
+                         const char *host)
+{
+    const struct ft_top_totals *totals = ft_top_totals(m);
+
+    put_time(w, "time", totals->now_wall_ns);
+    put_text(w, "host", host);
+    write_totals(w, totals);
+    write_view(w, m, mode);
+    return write_rows(w, m, mode, ft_top_mode_name(mode));
+}
+
+static void write_summary(struct writer *w, const struct ft_top_leaders *leaders)
+{
+    const struct ft_row_leader_summary *s = &leaders->summary;
+
+    open_container(w, "summary", '{');
+    put_uint(w, "window_ns", s->window_ns);
+    put_uint(w, "slot_ns", s->slot_ns);
+    put_uint(w, "bytes", s->bytes);
+    put_uint(w, "bytes_exact", s->bytes_exact);
+    put_number(w, "exact_share", leaders->exact_share);
+    put_uint(w, "top_bytes", s->top_bytes);
+    put_number(w, "concentration", leaders->concentration);
+    put_uint(w, "transfers", s->transfers);
+    put_uint(w, "files", s->files);
+    put_uint(w, "processes", s->processes);
+    put_uint(w, "scripts", s->scripts);
+    put_uint(w, "destinations_public", s->destinations_public);
+    put_uint(w, "destinations_private", s->destinations_private);
+    put_bool(w, "short_history", (s->flags & FT_LEADERS_SHORT_HISTORY) != 0);
+    put_bool(w, "capped", (s->flags & FT_LEADERS_CAPPED) != 0);
+    close_container(w, '}');
+}
+
+static void write_side(struct writer *w, const char *name, const struct ft_top_leader *rows,
+                       size_t count, enum ft_leader_key key)
+{
+    open_container(w, name, '[');
+    for (size_t i = 0; i < count; i++) {
+        open_container(w, nullptr, '{');
+        leader_members(w, &rows[i], key);
+        close_container(w, '}');
+    }
+    close_container(w, ']');
+}
+
+/*
+ * The ranking is named after what it ranks. The top directories and top destinations come with it,
+ * unless the ranking is that list.
+ */
+static size_t write_leaders(struct writer *w, const struct ft_top_model *m, const char *host)
+{
+    static const char *const ranking_names[FT_LEADER_KEY_COUNT] = {
+        [FT_LEADER_FILE] = "files",
+        [FT_LEADER_DIRECTORY] = "directories",
+        [FT_LEADER_EXTENSION] = "extensions",
+        [FT_LEADER_DESTINATION] = "destinations",
+    };
+    const struct ft_top_leaders *leaders = ft_top_leaders(m);
+    const struct ft_row_leader_summary *s = &leaders->summary;
+    size_t rows;
+
+    put_time(w, "time", s->to_wall_ns);
+    put_text(w, "host", host);
+    put_text(w, "window", ft_leader_window_name(leaders->window));
+    put_text(w, "by", ft_top_sort_name(leaders->by));
+    put_text(w, "key", key_names[leaders->key]);
+    put_time(w, "from", s->from_wall_ns);
+    put_time(w, "to", s->to_wall_ns);
+    put_time(w, "previous_from", s->previous_from_wall_ns);
+    write_summary(w, leaders);
+    write_view(w, m, FT_TOP_LEADERS);
+    rows = write_rows(w, m, FT_TOP_LEADERS, ranking_names[leaders->key]);
+    if (leaders->key != FT_LEADER_DIRECTORY)
+        write_side(w, "directories", leaders->directories, leaders->ndirectories,
+                   FT_LEADER_DIRECTORY);
+    if (leaders->key != FT_LEADER_DESTINATION)
+        write_side(w, "destinations", leaders->destinations, leaders->ndestinations,
+                   FT_LEADER_DESTINATION);
+    return rows;
+}
+
 size_t ft_top_write_document(const struct ft_top_model *m, enum ft_top_mode mode, bool indent,
                              FILE *out)
 {
     struct writer w = {.out = out, .indent = indent};
-    const struct ft_top_totals *totals = ft_top_totals(m);
     struct ft_host_info host;
     size_t rows;
 
     ft_sysinfo_host(&host);
     open_container(&w, nullptr, '{');
     put_text(&w, "mode", ft_top_mode_name(mode));
-    put_time(&w, "time", totals->now_wall_ns);
-    put_text(&w, "host", host.hostname);
-    write_totals(&w, totals);
-    write_view(&w, m, mode);
-    rows = write_rows(&w, m, mode);
+    if (mode == FT_TOP_LEADERS)
+        rows = write_leaders(&w, m, host.hostname);
+    else
+        rows = write_live(&w, m, mode, host.hostname);
     close_container(&w, '}');
     fputc('\n', out);
     free(w.clean);
