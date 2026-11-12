@@ -290,6 +290,28 @@ static void rate_meter(struct ft_top_draw *d, int x, int y, const struct ft_top_
     meter(d, x, y, "TX", segs, 2, scale_of(&t->rate), caption);
 }
 
+/* How much of everything the machine sends is files; most traffic is not. */
+static void outbound_meter(struct ft_top_draw *d, int x, int y, const struct ft_top_totals *t)
+{
+    char rate[32];
+    char caption[48];
+
+    if (!t->stats)
+        return;
+    uint64_t all = t->stats->tx_rate;
+    /* The two rates are taken over slightly different spans, so files can seem to exceed all. */
+    uint64_t files = t->rate.value < all ? t->rate.value : all;
+    struct segment seg = {(double)files, FT_COLOR_TEXT};
+
+    ft_top_format_rate(all, rate, sizeof(rate));
+    if (all)
+        snprintf(caption, sizeof(caption), "files %.0f%% of %s out",
+                 (double)files * 100 / (double)all, rate);
+    else
+        ft_strlcpy(caption, "nothing is sent", sizeof(caption));
+    meter(d, x, y, "NET", &seg, 1, all ? (double)all : 1, caption);
+}
+
 static void share_meter(struct ft_top_draw *d, int x, int y, const char *label, uint64_t part,
                         uint64_t whole, enum ft_color color)
 {
@@ -334,7 +356,9 @@ static void meters(struct ft_top_draw *d, struct ft_rect r, const struct ft_top_
         int pub = t->rate.value ? (int)(t->public_share * 100 + 0.5) : 0;
         snprintf(caption, sizeof(caption), "pub %d%% priv %d%%", pub,
                  t->rate.value ? 100 - pub : 0);
-        meter(d, x, y, "EGRESS", egress, 2, 0, caption);
+        meter(d, x, y++, "EGRESS", egress, 2, 0, caption);
+        if (y < r.y + r.h)
+            outbound_meter(d, x, y, t);
         break;
     }
     case FT_TOP_PROCESSES:

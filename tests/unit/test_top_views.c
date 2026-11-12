@@ -574,6 +574,42 @@ static void data_source(void)
     ft_top_model_destroy(empty);
 }
 
+/* The share of all outbound bytes that files account for, never above the whole. */
+static void outbound_share(void)
+{
+    struct fixture f;
+    struct ft_top_ui ui = {.mode = FT_TOP_TRANSFERS, .delay_ns = SECOND};
+    struct ft_canvas *c = ft_canvas_create(174, 44);
+    struct ft_top_layout l;
+    char whole[32];
+    char expected[64];
+
+    fixture_init(&f);
+    ft_top_layout(&ui, 174, 44, &l);
+    for (int pass = 0; pass < 2; pass++) {
+        f.stats.tx_rate =
+            pass == 0 ? 2 * ft_top_totals(f.m)->rate.value : ft_top_totals(f.m)->rate.value / 2;
+        struct ft_top_sample s = {
+            .mono_ns = (uint64_t)(2 + pass) * SECOND,
+            .stats = &f.stats,
+            .transfers = &f.transfers,
+            .processes = &f.processes,
+        };
+        CHECK(ft_top_model_sample(f.m, &s));
+        struct ft_top_draw d = drawer(c, &f, &ui);
+        ft_top_draw(&d);
+        ft_top_format_rate(f.stats.tx_rate, whole, sizeof(whole));
+        snprintf(expected, sizeof(expected), "files %s of %s out", pass == 0 ? "50%" : "100%",
+                 whole);
+        bool shown = false;
+        for (int y = 0; y < l.table.y; y++)
+            shown |= row_has(c, y, expected);
+        CHECK(shown);
+    }
+    ft_canvas_destroy(c);
+    fixture_free(&f);
+}
+
 void test_top_views(void)
 {
     live_modes();
@@ -581,4 +617,5 @@ void test_top_views(void)
     layout();
     tree_guides();
     data_source();
+    outbound_share();
 }
