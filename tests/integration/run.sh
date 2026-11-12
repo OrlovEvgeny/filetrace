@@ -601,6 +601,7 @@ expect "sendfile at the end of the file, then the read sent: bytes" \
 # never answers, are judged by what each send took.
 "$workload" metricfirst "$data/page.html" 5000 >/dev/null
 "$workload" resend "$data/status.txt" 2048 5 >/dev/null
+"$workload" tail "$data/tailed.log" 10240 500 20 >/dev/null
 settle
 expect "strict file after a large read: bytes" \
     "$(ft files --path "$data/app.js" --format csv | column transfer.bytes_sent)" 20000
@@ -614,6 +615,8 @@ expect "small file after a datagram elsewhere: bytes" \
     "$(ft files --path "$data/page.html" --format csv | column transfer.bytes_sent)" 5000
 expect "small file sent round after round: bytes" \
     "$(ft files --path "$data/status.txt" --format csv | column transfer.bytes_sent)" 10240
+expect "file tailed to a peer that never answers: bytes" \
+    "$(ft files --path "$data/tailed.log" --format csv | column transfer.bytes_sent)" 10000
 
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.

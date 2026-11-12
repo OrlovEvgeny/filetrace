@@ -1424,6 +1424,42 @@ static void scenario_resend(const char *path, size_t size, size_t rounds)
 }
 
 /*
+ * tail <path> <bytes> <append bytes> <rounds>: over a connection that has heard from its peer and
+ * never hears again, appends to the file and sends what was appended, round after round, as a
+ * log shipper follows a log.
+ */
+static void scenario_tail(const char *path, size_t size, size_t append, size_t rounds)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    make_file(path, size);
+    char *buf = malloc(append);
+    if (!buf)
+        die("malloc");
+    memset(buf, 'l', append);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    int file = open_file(path);
+    if (lseek(file, (off_t)size, SEEK_SET) < 0)
+        die("lseek");
+    for (size_t i = 0; i < rounds; i++) {
+        int out = open(path, O_WRONLY | O_APPEND);
+        if (out < 0 || write(out, buf, append) != (ssize_t)append)
+            die("append");
+        close(out);
+        ssize_t n = read(file, buf, append);
+        if (n != (ssize_t)append)
+            die("read");
+        send_all(sock, buf, append);
+        usleep(20 * 1000);
+    }
+    close(file);
+    close(sock);
+    free(buf);
+    report("tail", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
  */
@@ -2110,6 +2146,8 @@ int main(int argc, char **argv)
         scenario_stream_after(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "metricfirst") == 0 && argc == 4)
         scenario_metric_first(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "tail") == 0 && argc == 6)
+        scenario_tail(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "resend") == 0 && argc == 5)
         scenario_resend(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "sendbeside") == 0 && argc == 7)
