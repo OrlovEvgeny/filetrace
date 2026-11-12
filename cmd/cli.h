@@ -29,6 +29,7 @@ struct ft_cli {
     bool socket_given;              /* by --socket or $FILETRACE_SOCKET, not by the file */
     const char *config_path;        /* --config; nullptr for the default file */
     const struct ft_config *config; /* nullptr for the commands that run without one */
+    const char *command;            /* the command as typed: "top", "watch" */
 };
 
 /* Reports an unusable configuration file itself and returns FT_EXIT_CONFIG. */
@@ -183,6 +184,8 @@ struct ft_session {
 
 /* With allow_foreground, starts a collector for the session when no agent is reachable. */
 int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_session *s);
+/* Reports why a session's collector could not run, in the words a user acts on; returns code. */
+int ft_session_failed(const struct ft_cli *cli, int code, const char *msg);
 void ft_session_close(struct ft_session *s);
 
 enum ft_agent_state : uint8_t {

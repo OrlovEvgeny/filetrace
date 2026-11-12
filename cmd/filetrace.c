@@ -763,6 +763,7 @@ int main(int argc, char **argv)
     }
     if (!cli.socket_path)
         cli.socket_path = ft_default_socket_path();
+    cli.command = command->name;
 
     int code = command->run(&cli, &args);
     ft_cli_free_config(&cli);

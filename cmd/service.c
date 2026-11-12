@@ -11,6 +11,43 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* "filetrace top": what to type again with sudo. */
+static void command_text(const struct ft_cli *cli, char *buf, size_t size)
+{
+    snprintf(buf, size, "filetrace%s%s", cli->command ? " " : "", cli->command ? cli->command : "");
+}
+
+int ft_session_failed(const struct ft_cli *cli, int code, const char *msg)
+{
+    char command[64];
+
+    if (code != FT_EXIT_PERMISSION) {
+        fprintf(stderr, "%s\n", msg);
+        return code;
+    }
+    command_text(cli, command, sizeof(command));
+    fprintf(stderr,
+            "Permission denied.\n\n"
+            "%s reads file and network activity from the kernel, which needs\n"
+            "root. No service has to be installed or running:\n\n"
+            "  sudo %s\n",
+            command, command);
+    return code;
+}
+
+static int socket_denied(const struct ft_cli *cli)
+{
+    char command[64];
+
+    command_text(cli, command, sizeof(command));
+    fprintf(stderr,
+            "Permission denied.\n\n"
+            "The agent's socket %s is not open to this user:\n\n"
+            "  sudo %s\n",
+            cli->socket_path, command);
+    return FT_EXIT_PERMISSION;
+}
+
 /* The collector serves only this process and stops when the session closes. */
 static int start_collector(const struct ft_cli *cli, struct ft_session *s)
 {
@@ -49,8 +86,8 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s)
     }
 
     close(pair[1]);
-    s->client = ft_client_adopt(pair[0]);
     s->collector = pid;
+    s->client = ft_client_adopt(pair[0]);
     if (!s->client) {
         fprintf(stderr, "filetrace: out of memory\n");
         ft_session_close(s);
@@ -59,33 +96,52 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s)
     return FT_EXIT_OK;
 }
 
+/* The first answer tells whether the collector could attach at all. */
+static int first_answer(const struct ft_cli *cli, struct ft_session *s)
+{
+    struct ft_error err = {0};
+    struct ft_query q;
+
+    ft_query_init(&q, FT_Q_STATS);
+    int code = ft_client_query(s->client, &q, nullptr, nullptr, nullptr, &err);
+    if (code != FT_EXIT_OK) {
+        ft_session_close(s);
+        return ft_session_failed(cli, code, err.msg);
+    }
+    return FT_EXIT_OK;
+}
+
+/* Returns FT_EXIT_NO_AGENT, with nothing reported yet, when no agent listens. */
+static int connect_agent(const struct ft_cli *cli, struct ft_session *s, struct ft_error *err)
+{
+    *s = (struct ft_session){0};
+    s->client = ft_client_connect(cli->socket_path, err);
+    if (s->client)
+        return FT_EXIT_OK;
+    if (err->code == FT_EXIT_PERMISSION)
+        return socket_denied(cli);
+    if (err->code != FT_EXIT_NO_AGENT)
+        fprintf(stderr, "%s\n", err->msg);
+    return err->code;
+}
+
 int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_session *s)
 {
     struct ft_error err = {0};
 
-    s->collector = 0;
-    s->client = ft_client_connect(cli->socket_path, &err);
-    if (s->client)
-        return FT_EXIT_OK;
-
-    if (err.code != FT_EXIT_NO_AGENT || !allow_foreground) {
+    int code = connect_agent(cli, s, &err);
+    if (code != FT_EXIT_NO_AGENT)
+        return code;
+    if (!allow_foreground) {
         fprintf(stderr, "%s\n", err.msg);
-        return err.code;
+        return code;
     }
 
-    int code = start_collector(cli, s);
+    code = start_collector(cli, s);
+    if (code == FT_EXIT_OK)
+        code = first_answer(cli, s);
     if (code != FT_EXIT_OK)
         return code;
-
-    /* The first reply tells whether the collector could attach at all. */
-    struct ft_query q;
-    ft_query_init(&q, FT_Q_STATS);
-    code = ft_client_query(s->client, &q, nullptr, nullptr, nullptr, &err);
-    if (code != FT_EXIT_OK) {
-        fprintf(stderr, "%s\n", err.msg);
-        ft_session_close(s);
-        return code;
-    }
     fprintf(stderr, "The Filetrace agent is not running; monitoring in the foreground for this\n"
                     "session. Only activity from now on is shown.\n");
     return FT_EXIT_OK;
