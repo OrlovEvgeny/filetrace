@@ -193,6 +193,8 @@ int ft_session_start(const struct ft_cli *cli, struct ft_session *s);
 /* Reports why a session's collector could not run, in the words a user acts on; returns code. */
 int ft_session_failed(const struct ft_cli *cli, int code, const char *msg);
 void ft_session_close(struct ft_session *s);
+/* Closes the session without waiting for its collector, which detaches and stops behind it. */
+void ft_session_release(struct ft_session *s);
 
 enum ft_agent_state : uint8_t {
     FT_AGENT_RUNNING,

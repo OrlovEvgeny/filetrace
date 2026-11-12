@@ -203,6 +203,16 @@ void ft_session_close(struct ft_session *s)
     s->answered = false;
 }
 
+void ft_session_release(struct ft_session *s)
+{
+    ft_client_close(s->client);
+    s->client = nullptr;
+    if (s->collector > 0 && !s->answered)
+        kill(s->collector, SIGTERM);
+    s->collector = 0;
+    s->answered = false;
+}
+
 static void stats_collect(void *ctx, uint16_t type, const void *payload, size_t size)
 {
     struct ft_row_stats *row = ctx;

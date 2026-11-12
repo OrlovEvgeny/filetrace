@@ -356,7 +356,11 @@ int ft_cmd_top(const struct ft_cli *cli, struct ft_args *a)
         code = ft_session_start(cli, &session);
     if (code == FT_EXIT_OK) {
         code = ft_top_run(&session, cli, &t.opt);
-        ft_session_close(&session);
+        /* A screen returns to the prompt at once; a snapshot waits until nothing is attached. */
+        if (t.opt.once || t.opt.json)
+            ft_session_close(&session);
+        else
+            ft_session_release(&session);
     }
     free(filter);
     return code;
