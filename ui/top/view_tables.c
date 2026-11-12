@@ -204,7 +204,7 @@ static void fit_columns(const struct table_spec *t, const struct ft_top_ui *ui, 
     }
 }
 
-/* What the cells of one row share while it is drawn, and where its search marks go. */
+/* Text drawn in a row, marked for the search and filter once the selection bar is on. */
 struct piece {
     int x;
     int width;
@@ -217,6 +217,7 @@ constexpr size_t ROW_PIECES = 12;
 constexpr size_t ROW_TEXTS = 6;
 constexpr size_t ROW_TEXT_BYTES = 256;
 
+/* What the cells of one row share while it is drawn. */
 struct row_draw {
     struct ft_top_draw *d;
     int y;
@@ -1064,14 +1065,19 @@ void ft_top_draw_table(struct ft_top_draw *d, enum ft_top_mode mode, struct ft_r
 {
     struct columns cols;
 
-    if (mode >= FT_TOP_LEADERS || header.w <= 0)
+    if (mode >= FT_TOP_LEADERS)
         return;
-    struct ft_rect area = {header.x, header.y, header.w, header.h + rows.h};
+    /* The header, when there is one, sits directly above the rows and as wide. */
+    struct ft_rect area = rows;
+    if (header.h > 0)
+        area = (struct ft_rect){header.x, header.y, header.w, header.h + rows.h};
+    if (area.w <= 0 || area.h <= 0)
+        return;
     struct ft_rect previous = ft_canvas_clip(d->canvas, area);
 
-    fit_columns(&tables[mode], d->ui, header.w, &cols);
+    fit_columns(&tables[mode], d->ui, area.w, &cols);
     for (size_t i = 0; i < cols.count; i++)
-        cols.list[i].x += header.x;
+        cols.list[i].x += area.x;
     if (header.h > 0)
         draw_header(d, mode, &cols, header);
 
