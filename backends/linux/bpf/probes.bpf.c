@@ -217,6 +217,8 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
     file_again(ts, &fk, now);
     thread_set_file(ts, file, inode, &fk, magic);
     ts->file_strict = listed == FT_BPF_LISTED_STRICT;
+    if (!ts->pending)
+        ts->file_read = 0;
     ts->pending += (__u64)ret;
     ts->unreported += (__u64)ret;
     ts->file_read += (__u64)ret;

@@ -104,6 +104,8 @@ static __always_inline void read_sync(struct thread_state *ts)
     ts->rchar_mark = rchar;
     if (!delta)
         return;
+    if (!ts->pending)
+        ts->file_read = 0;
     ts->pending += delta;
     ts->unreported += delta;
     ts->file_read += delta;

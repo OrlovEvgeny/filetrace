@@ -132,7 +132,7 @@ struct thread_state {
     __u64 carry_sock;   /* the socket of the window of the connection the thread dialed last */
     __u64 episode_sock; /* the socket of the thread's window of a reply on a heard connection */
     struct candidate cands[CARRY_CANDIDATES];
-    __u64 file_read;     /* of the file since the thread turned to it or last heard */
+    __u64 file_read;     /* of the file since what the thread read before was all taken */
     __u64 datagrams;     /* what datagrams took of a held strict file */
     __u64 datagram_sock; /* the cookie of the socket that took them */
 };
