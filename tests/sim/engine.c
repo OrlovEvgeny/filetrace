@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-constexpr size_t CLIENT_POOL = 320;
+/* Clients that come back, and now and then one that has not been seen. */
+constexpr size_t CLIENT_POOL = 150;
+constexpr uint64_t NEW_CLIENT_PERCENT = 10;
 constexpr uint64_t JITTER_MAX_NS = 30 * FT_NS_PER_MS;
 constexpr uint64_t MIN_SEGMENT_NS = 1000;
 constexpr size_t NO_PATH = SIZE_MAX;
@@ -431,22 +433,19 @@ static void random_public(struct ft_sim_engine *e, struct ft_endpoint *ep)
     }
 }
 
-static void make_client_pool(struct ft_sim_engine *e)
+static void random_client(struct ft_sim_engine *e, struct ft_endpoint *ep)
 {
-    for (size_t i = 0; i < CLIENT_POOL; i++) {
-        struct ft_endpoint *ep = &e->clients[i];
-        uint64_t kind = rng_below(&e->rng, 100);
+    uint64_t kind = rng_below(&e->rng, 100);
 
-        if (kind < 4) {
-            random_v6(e, ep);
-        } else if (kind < 10) {
-            const uint8_t *d = documentation_prefixes[rng_below(&e->rng, 3)];
-            endpoint_v4(ep, d[0], d[1], d[2], (uint8_t)rng_range(&e->rng, 11, 254), 0);
-        } else {
-            const uint8_t *p = client_prefixes[rng_below(&e->rng, FT_ARRAY_LEN(client_prefixes))];
-            endpoint_v4(ep, p[0], p[1], (uint8_t)rng_range(&e->rng, 1, 254),
-                        (uint8_t)rng_range(&e->rng, 1, 254), 0);
-        }
+    if (kind < 4) {
+        random_v6(e, ep);
+    } else if (kind < 10) {
+        const uint8_t *d = documentation_prefixes[rng_below(&e->rng, 3)];
+        endpoint_v4(ep, d[0], d[1], d[2], (uint8_t)rng_range(&e->rng, 11, 254), 0);
+    } else {
+        const uint8_t *p = client_prefixes[rng_below(&e->rng, FT_ARRAY_LEN(client_prefixes))];
+        endpoint_v4(ep, p[0], p[1], (uint8_t)rng_range(&e->rng, 1, 254),
+                    (uint8_t)rng_range(&e->rng, 1, 254), 0);
     }
 }
 
@@ -688,7 +687,11 @@ static void pick_destination(struct ft_sim_engine *e, const struct ft_sim_genera
     case FT_SIM_DEST_PUBLIC: {
         double u = rng_unit(&e->rng);
         size_t index = (size_t)((double)CLIENT_POOL * u * u);
-        *remote = e->clients[index < CLIENT_POOL ? index : CLIENT_POOL - 1];
+
+        if (rng_below(&e->rng, 100) < NEW_CLIENT_PERCENT)
+            random_client(e, remote);
+        else
+            *remote = e->clients[index < CLIENT_POOL ? index : CLIENT_POOL - 1];
         break;
     }
     case FT_SIM_DEST_PUBLIC_RANDOM:
@@ -1222,7 +1225,8 @@ struct ft_sim_engine *ft_sim_engine_create(const struct ft_sim_scenario *sc, uin
     bool ok = true;
     for (size_t i = 0; i < FT_ARRAY_LEN(e->hosts); i++)
         ok = ok && ft_addr_parse(host_addrs[i], &e->hosts[i]);
-    make_client_pool(e);
+    for (size_t i = 0; i < CLIENT_POOL; i++)
+        random_client(e, &e->clients[i]);
     start_processes(e, start_ns);
     ok = ok && !e->failed && start_generators(e, start_ns);
     if (!ok) {
