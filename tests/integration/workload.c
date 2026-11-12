@@ -1222,6 +1222,55 @@ static void scenario_read_udp(const char *path, size_t size, size_t datagram, si
 }
 
 /*
+ * readudptwo <path> <bytes>: connects two datagram sockets, reads the file and sends half of it
+ * over each.
+ */
+static void scenario_read_udp_two(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_DGRAM, false, SINK_DISCARD);
+    int socks[2];
+    for (int i = 0; i < 2; i++) {
+        socks[i] = socket(AF_INET, SOCK_DGRAM, 0);
+        if (socks[i] < 0)
+            die("socket");
+        if (connect(socks[i], (struct sockaddr *)&sink.addr, sink.addr_len) != 0)
+            die("connect");
+    }
+    char *contents = read_whole_file(path, size);
+    size_t half = size / 2;
+    if (send(socks[0], contents, half, 0) != (ssize_t)half ||
+        send(socks[1], contents + half, size - half, 0) != (ssize_t)(size - half))
+        die("send");
+    close(socks[0]);
+    close(socks[1]);
+    free(contents);
+    report("readudptwo", path, size, sink.port);
+    usleep(100 * 1000);
+    stop_sink(&sink);
+}
+
+/*
+ * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
+ * which moves nothing, then sends what it read.
+ */
+static void scenario_sendfile_eof(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char *contents = read_whole_file(path, size);
+    int file = open_file(path);
+    int sock = connect_sink(&sink);
+    off_t end = (off_t)size;
+    if (sendfile(sock, file, &end, size) != 0)
+        die("sendfile");
+    send_all(sock, contents, size);
+    close(sock);
+    close(file);
+    free(contents);
+    report("sendfileeof", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * readmemory <path> <file bytes> <body bytes>: reads the file, then connects, sends a hello the
  * size of a TLS ClientHello with a post-quantum key share, hears one back and sends the body
  * from memory, as a client that loads a module, a service model or a bundle before it uploads.
@@ -1879,6 +1928,10 @@ int main(int argc, char **argv)
         scenario_two_files(argv[2], argv[3], arg_size(argv[4]));
     else if (strcmp(name, "sendfilethen") == 0 && argc == 5)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
+    else if (strcmp(name, "readudptwo") == 0 && argc == 4)
+        scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "sendfileeof") == 0 && argc == 4)
+        scenario_sendfile_eof(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readudp") == 0 && argc == 6)
         scenario_read_udp(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "headbody") == 0 && argc == 5)
