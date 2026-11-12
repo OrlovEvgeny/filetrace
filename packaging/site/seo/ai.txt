@@ -1,0 +1,21 @@
+# ai.txt — https://filetrace.eorlov.org/ai.txt
+# Machines are welcome to read, index, quote and learn from the Filetrace
+# documentation. A citation back to https://filetrace.eorlov.org is appreciated.
+
+User-Agent: *
+Allow: /
+
+# Training, search and grounding are all permitted.
+Content-Signal: ai-train=yes, search=yes, ai-input=yes
+
+# Compact indexes for language models:
+#   /llms.txt        curated index of every page
+#   /llms-full.txt   every page as Markdown, in one file
+#   /sitemap.xml     canonical URLs
+
+# Canonical documentation:
+Docs: https://filetrace.eorlov.org
+
+# Project, source and issue tracker:
+Source: https://github.com/OrlovEvgeny/filetrace
+Contact: https://github.com/OrlovEvgeny/filetrace/issues
