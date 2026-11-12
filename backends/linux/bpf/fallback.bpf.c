@@ -183,8 +183,8 @@ static __always_inline void claim_charge(void *map, struct sock *sk, struct sock
 {
     if (t->claim_carried) {
         __u64 sock = (__u64)sk;
-        struct carry *c = t->carrying ? carry_get(sock) : NULL;
-        if (c && c->tid == t->claim_tid)
+        struct carry *c = t->carrying ? carry_get(sock, t->claim_tid) : NULL;
+        if (c)
             carry_add(c, take, t->claim_read, t->claim_fresh, t->claim_script, now);
         if (t->carrying)
             dial_charged((__u64)sk, &t->claim_file, (__s64)take);
@@ -467,22 +467,14 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         break;
     case TCP_FIN_WAIT1:
     case TCP_LAST_ACK:
-        /* The FIN that follows takes a sequence number of its own. */
-        if (!t->tx_tgid && !t->rx_tgid)
-            t->tx_tgid = tgid;
-        tcp_settle_tx(map, sk, t, now);
-        if (t->carrying && cfg.file_corr) {
-            carry_close(map, (__u64)sk, carry_closing((__u64)sk, oldstate, newstate), now);
-            dial_close(map, (__u64)sk, now);
-            t->carrying = 0;
-        }
-        t->tx_live = 0;
-        break;
     case TCP_CLOSE:
+        /* The FIN that follows takes a sequence number of its own. */
+        if (newstate != TCP_CLOSE && !t->tx_tgid && !t->rx_tgid)
+            t->tx_tgid = tgid;
         /* A disconnect rewrites both positions right after this. */
         tcp_settle_tx(map, sk, t, now);
         if (t->carrying && cfg.file_corr) {
-            carry_close(map, (__u64)sk, carry_closing((__u64)sk, oldstate, newstate), now);
+            carry_close_all(map, (__u64)sk, carry_closing((__u64)sk, oldstate, newstate), now);
             dial_close(map, (__u64)sk, now);
             t->carrying = 0;
         }
@@ -521,7 +513,7 @@ int BPF_KPROBE(ft_sock_destruct, struct sock *sk)
 {
     __u64 key = (__u64)sk;
     bpf_map_delete_elem(&socks, &key);
-    bpf_map_delete_elem(&carries, &key);
+    carry_forget(key);
     return 0;
 }
 
