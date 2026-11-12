@@ -14,8 +14,11 @@ RUN apt-get update \
         libnghttp2-dev \
         libprotobuf-c-dev \
         linux-libc-dev \
+        libfcgi-bin \
         llvm \
         ninja-build \
+        php-cli \
+        php-fpm \
         pkgconf \
         procps \
         python3 \

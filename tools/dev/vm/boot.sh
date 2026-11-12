@@ -25,6 +25,18 @@ done | sort -u | while read -r lib; do
     mkdir -p "$root$(dirname "$lib")"
     cp -L "$lib" "$root$lib"
 done
+# A PHP-FPM pool and a FastCGI client, for the checks of PHP request scripts.
+for binary in /usr/sbin/php-fpm* /usr/bin/cgi-fcgi; do
+    [ -e "$binary" ] || continue
+    mkdir -p "$root$(dirname "$binary")"
+    cp -L "$binary" "$root$binary"
+    ldd "$binary" | awk '$3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }'
+done | sort -u | while read -r lib; do
+    [ -e "$root$lib" ] && continue
+    mkdir -p "$root$(dirname "$lib")"
+    cp -L "$lib" "$root$lib"
+done
+[ -e "$root/usr/bin/cgi-fcgi" ] && ln -sf /usr/bin/cgi-fcgi "$root/bin/cgi-fcgi"
 cp -r /src/tests/integration "$root/ft/tests/"
 cp /src/benchmarks/run.sh "$root/ft/bin/bench.sh"
 

@@ -6,8 +6,10 @@ RUN apt-get update \
         ca-certificates \
         cpio \
         libbpf1 \
+        libfcgi-bin \
         libnghttp2-14 \
         libprotobuf-c1 \
+        php-fpm \
         qemu-system-arm \
  && echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list \
  && apt-get update \
