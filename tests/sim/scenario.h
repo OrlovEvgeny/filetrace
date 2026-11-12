@@ -79,6 +79,7 @@ struct ft_sim_generator {
     uint16_t local_port; /* the service port of accepted connections */
     uint32_t chunk;      /* bytes per read or send call */
     bool rotates;        /* each file of a flavor is a different file under the same path */
+    bool steady;         /* dips of the rate are shallow, so a fast stream stays fast */
     const struct ft_sim_flavor *flavors;
 };
 

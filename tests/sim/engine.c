@@ -906,7 +906,9 @@ static double wobble(struct ft_sim_engine *e, struct slot *s)
         s->dip_steps--;
     } else if (rng_unit(&e->rng) < 0.0016) {
         s->dip_steps = (uint32_t)rng_range(&e->rng, 10, 35);
-        s->dip_factor = 0.3 + 0.4 * rng_unit(&e->rng);
+        double depth = e->gens[s->gen].def->steady ? 0.03 + 0.07 * rng_unit(&e->rng)
+                                                   : 0.3 + 0.4 * rng_unit(&e->rng);
+        s->dip_factor = 1.0 - depth;
     }
     return s->level * (s->dip_steps ? s->dip_factor : 1.0);
 }
