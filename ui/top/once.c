@@ -106,7 +106,7 @@ struct signals {
     struct sigaction pipe;
 };
 
-/* A closed pipe ends the output with an error from write, not with a signal. */
+/* Interrupts end the wait, and a closed pipe fails the write instead of killing the process. */
 static void signals_catch(struct signals *saved)
 {
     struct sigaction catch = {.sa_handler = on_signal};
@@ -127,7 +127,7 @@ static void signals_restore(const struct signals *saved)
     sigaction(SIGPIPE, &saved->pipe, nullptr);
 }
 
-/* The expression a saved name stands for; the saved filters belong to the screen. */
+/* The expression saved under a name. */
 static bool preset_find(const char *name, char *expression, size_t size, struct ft_error *err)
 {
     (void)name;
@@ -434,7 +434,7 @@ static int first_sample(struct ft_top_source *src, struct ft_top_model *m,
         return FT_EXIT_ERROR;
     }
     if (opt->resolve) {
-        /* Setting the switch again asks the resolver, which has had its moment, for the names. */
+        /* Switching the names on again has the model ask the resolver, whose lookups are done. */
         ft_resolver_wait(NAMES_NS);
         ft_top_set_resolve(m, false);
         ft_top_set_resolve(m, true);
@@ -472,7 +472,7 @@ static int stream(struct ft_top_source *src, struct ft_top_model *m,
                 return FT_EXIT_OK;
             if (frame->code == FT_EXIT_OK)
                 break;
-            /* The source keeps asking; the agent's trouble is told once per kind. */
+            /* The source retries by itself; each message is reported once. */
             if (strcmp(reported, frame->error) != 0) {
                 fprintf(stderr, "%s\n", frame->error);
                 ft_strlcpy(reported, frame->error, sizeof(reported));

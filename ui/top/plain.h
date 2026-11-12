@@ -6,8 +6,8 @@
 #include <stdio.h>
 
 /*
- * Writes the canvas as lines of text without their trailing blanks. Below FT_DEPTH_NONE the cells
- * keep their colors as escape sequences, reset at the end of each line.
+ * Writes the canvas as lines of text without their trailing blanks. Unless the depth is
+ * FT_DEPTH_NONE, the cells keep their colors as escape sequences, reset at the end of each line.
  */
 void ft_top_print_canvas(const struct ft_canvas *canvas, enum ft_color_depth depth, FILE *out);
 

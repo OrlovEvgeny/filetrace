@@ -124,7 +124,7 @@ static void time_text(uint64_t wall_ns, uint64_t window_ns, char *buf, size_t si
         ft_format_clock_local(wall_ns, buf, size);
 }
 
-/* What the span a ranking covers is, in the lines that precede its table. */
+/* The lines before a ranking: its span, what it sent and what it counted. */
 static void print_leaders_summary(const struct ft_top_leaders *leaders, FILE *out)
 {
     static const char *const before[FT_WINDOW_COUNT] = {

@@ -338,7 +338,7 @@ static enum ft_top_group grouping(const struct ft_top_model *m, enum ft_top_mode
     return ft_top_group_of(m, mode);
 }
 
-/* What the filter, the sort and the grouping left of the mode's items. */
+/* How the mode is sorted, grouped and filtered, and how many of its items that leaves. */
 static void write_view(struct writer *w, const struct ft_top_model *m, enum ft_top_mode mode)
 {
     const struct ft_top_view *view = ft_top_view_of(m, mode);
@@ -813,10 +813,7 @@ static void write_side(struct writer *w, const char *name, const struct ft_top_l
     close_container(w, ']');
 }
 
-/*
- * The ranking is named after what it ranks. The top directories and top destinations come with it,
- * unless the ranking is that list.
- */
+/* The ranking is named after its key; the side lists are left out when it is one of them. */
 static size_t write_leaders(struct writer *w, const struct ft_top_model *m, const char *host)
 {
     static const char *const ranking_names[FT_LEADER_KEY_COUNT] = {
