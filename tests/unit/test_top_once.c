@@ -353,7 +353,50 @@ static void documents(void)
     fixture_free(&f);
 }
 
+static void grouped_and_tree(void)
+{
+    struct fixture f;
+
+    fixture_init(&f);
+    process(&f, 100, 1, "nginx", "nginx: master process /usr/sbin/nginx", "", 0);
+    for (uint32_t pid = 101; pid <= 104; pid++)
+        process(&f, pid, 100, "nginx", "nginx: worker process", "", 1000);
+    process(&f, 200, 1, "php-fpm8.3", "php-fpm: pool www", "/srv/download.php", 7);
+    for (uint32_t pid = 101; pid <= 104; pid++)
+        transfer(&f, (struct xfer){.id = pid, .pid = pid, .rate = 100 * (105 - pid)});
+    transfer(&f, (struct xfer){.id = 201, .pid = 200, .rate = 50, .script = "/srv/download.php"});
+    sample(&f, 0);
+
+    /* Group headings are not rows: each row names its group instead. */
+    ft_top_set_group(f.m, FT_TOP_TRANSFERS, FT_TOP_GROUP_SCRIPT);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 7);
+    FILE *null = fopen("/dev/null", "w");
+    CHECK_U64(ft_top_write_document(f.m, FT_TOP_TRANSFERS, false, null), 5);
+    fclose(null);
+    char *text = document(f.m, FT_TOP_TRANSFERS, false);
+    CHECK(json_ok(text));
+    CHECK(has(text, "\"group\":\"script\""));
+    CHECK(has(text, "\"transfers\":[{\"group\":null,\"id\":\"tr_65\""));
+    CHECK(has(text, "{\"group\":\"/srv/download.php\",\"id\":\"tr_c9\""));
+    free(text);
+
+    /* A tree row has its depth, and holds a process, a fold of its siblings or a transfer. */
+    ft_top_set_tree(f.m, true);
+    ft_top_toggle_expanded(f.m, FT_TOP_PROCESSES, 1);
+    text = document(f.m, FT_TOP_PROCESSES, true);
+    CHECK(json_ok(text));
+    CHECK(has(text, "\"tree\": true"));
+    CHECK(has(text, "\"group\": null"));
+    CHECK(has(text, "\"depth\": 0,\n      \"pid\": 100,\n      \"ppid\": 1,"));
+    CHECK(has(text, "\"depth\": 2,\n      \"transfer\": {\n        \"id\": \"tr_65\","));
+    CHECK(has(text, "\"fold\": {\n        \"process\": \"nginx: worker process\",\n"
+                    "        \"count\": 3,\n        \"pids\": [102, 103, 104],"));
+    free(text);
+    fixture_free(&f);
+}
+
 void test_top_once(void)
 {
     documents();
+    grouped_and_tree();
 }
