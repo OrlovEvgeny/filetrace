@@ -4,6 +4,13 @@ Filetrace shows which files a machine sends over the network, which process
 sends them, and where they go. It reads this from the kernel with eBPF, so no
 application has to be changed.
 
+![filetrace top switching between the transfers in progress, the process tree, the destinations, the files and the ranking of the files sent most, then filtering the transfers to public destinations](.github/assets/filetrace-top.gif)
+
+`sudo filetrace top` is the live view above, recorded on simulated traffic:
+the transfers in progress, the same traffic by process, destination and file,
+and the files sent most over a window of time. The other commands print
+lists:
+
 ```text
 $ sudo filetrace files
 FILE                PROCESS  DESTINATION     BYTES  METHOD      CONFIDENCE  SCRIPT
@@ -65,6 +72,8 @@ sudo filetrace doctor
 The agent runs as root, so the commands that query it need `sudo`.
 
 ```sh
+sudo filetrace top                             # live screen: transfers, processes, destinations, files
+sudo filetrace top --leaders --window 24h      # the files sent most over the last day
 sudo filetrace watch                           # live view of the transfers in progress
 sudo filetrace files                           # files sent over the network
 sudo filetrace files --remote 203.0.113.25     # files sent to one address
