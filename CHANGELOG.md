@@ -2,6 +2,12 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.6.5 (2026-11-12)
+
+### New Feature
+
+- Name the script of each PHP request from probes on PHP ([6f12780](https://github.com/OrlovEvgeny/filetrace/commit/6f12780ad3497ecefbda3be8c270136ba79f4b83))
+
 ## 26.11.5.6 (2026-11-11)
 
 ### New Feature
