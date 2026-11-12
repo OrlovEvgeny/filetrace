@@ -812,7 +812,7 @@ static void senders_text(const struct ft_row_leader *row, char *buf, size_t size
     while (listed < FT_LEADER_SENDERS && row->senders[listed].name[0])
         listed++;
     ft_strlcpy(names, listed ? row->senders[0].name : "-", sizeof(names));
-    if (listed > 1 || (row->flags & FT_LEADER_MORE_SENDERS)) {
+    if (listed > 1 || (listed && (row->flags & FT_LEADER_MORE_SENDERS))) {
         size_t len = strlen(names);
         snprintf(names + len, sizeof(names) - len, " +%zu%s", listed - 1,
                  row->flags & FT_LEADER_MORE_SENDERS ? "+" : "");
