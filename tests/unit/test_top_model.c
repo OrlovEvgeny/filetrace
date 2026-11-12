@@ -493,6 +493,70 @@ static void aggregates(void)
     fixture_free(&f);
 }
 
+static void groups(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    process(&f, 10, 1, "php-fpm8.3", "php-fpm: pool www", "", 0);
+    process(&f, 11, 1, "php-fpm8.3", "php-fpm: pool www", "", 0);
+    transfer(&f, (struct xfer){.id = 1,
+                               .pid = 10,
+                               .rate = 300,
+                               .script = "/srv/download.php",
+                               .remote = "198.51.100.1"});
+    transfer(&f, (struct xfer){.id = 2,
+                               .pid = 11,
+                               .rate = 200,
+                               .script = "/srv/download.php",
+                               .remote = "198.51.100.2"});
+    transfer(&f, (struct xfer){.id = 3,
+                               .pid = 10,
+                               .rate = 900,
+                               .script = "/srv/export.php",
+                               .remote = "198.51.100.3"});
+    sample(&f, 0);
+    ft_top_set_group(f.m, FT_TOP_TRANSFERS, FT_TOP_GROUP_SCRIPT);
+
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 5);
+    const struct ft_top_row *r = row_at(&f, FT_TOP_TRANSFERS, 0);
+    CHECK_U64(r->kind, FT_TOP_ROW_SECTION);
+    CHECK_STR(r->section->title, "/srv/export.php");
+    CHECK_U64(r->section->rate, 900);
+    r = row_at(&f, FT_TOP_TRANSFERS, 2);
+    CHECK_U64(r->kind, FT_TOP_ROW_SECTION);
+    CHECK_STR(r->section->title, "/srv/download.php");
+    CHECK_U64(r->section->rows, 2);
+    CHECK_U64(r->section->processes, 2);
+    CHECK_U64(r->section->files, 2);
+    CHECK_U64(r->section->destinations, 2);
+    CHECK_U64(r->section->rate, 500);
+    CHECK_U64(r->node, FT_TOP_NODE_EXPANDED);
+    CHECK_U64(id_at(&f, 3), 1);
+    CHECK_U64(id_at(&f, 4), 2);
+
+    /* A collapsed group keeps its heading and subtotals. */
+    ft_top_select_at(f.m, FT_TOP_TRANSFERS, 4);
+    ft_top_toggle_expanded(f.m, FT_TOP_TRANSFERS, 2);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 3);
+    CHECK_U64(row_at(&f, FT_TOP_TRANSFERS, 2)->node, FT_TOP_NODE_COLLAPSED);
+    CHECK_U64(row_at(&f, FT_TOP_TRANSFERS, 2)->section->rows, 2);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 2);
+    ft_top_expand_all(f.m, FT_TOP_TRANSFERS);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 5);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 4);
+
+    /* Processes grouped the same way: rows, processes and the summed rate. */
+    ft_top_set_group(f.m, FT_TOP_PROCESSES, FT_TOP_GROUP_PROCESS);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_PROCESSES), 3);
+    r = row_at(&f, FT_TOP_PROCESSES, 0);
+    CHECK_STR(r->section->title, "php-fpm: pool www");
+    CHECK_U64(r->section->rows, 2);
+    CHECK_U64(r->section->processes, 2);
+    CHECK_U64(r->section->rate, 1400);
+    fixture_free(&f);
+}
+
 static void search(void)
 {
     struct fixture f;
@@ -552,6 +616,7 @@ void test_top_model(void)
     selection();
     tags();
     aggregates();
+    groups();
     search();
     churn();
 }

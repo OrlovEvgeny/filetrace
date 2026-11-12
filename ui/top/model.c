@@ -1438,6 +1438,19 @@ bool ft_top_search_step(struct ft_top_model *m, enum ft_top_mode mode, int direc
     return false;
 }
 
+void ft_top_set_group(struct ft_top_model *m, enum ft_top_mode mode, enum ft_top_group group)
+{
+    if (group >= FT_TOP_GROUP_COUNT || m->modes[mode].group == group)
+        return;
+    m->modes[mode].group = group;
+    rebuild(m, mode, true);
+}
+
+enum ft_top_group ft_top_group_of(const struct ft_top_model *m, enum ft_top_mode mode)
+{
+    return m->modes[mode].group;
+}
+
 void ft_top_set_resolve(struct ft_top_model *m, bool on)
 {
     size_t budget = LOOKUPS_PER_SAMPLE;

@@ -6,6 +6,7 @@
 
 constexpr double HOLD_SHARE = 0.05; /* rows closer than this keep their order */
 constexpr uint32_t POSITION_MASK = 0xffffffu;
+constexpr uint32_t EXPLICIT_COLLAPSED = 1;
 
 enum key_type : uint8_t {
     BY_VALUE,
@@ -255,6 +256,11 @@ static struct order mode_order(const struct ft_top_mode_state *ms)
         .descending = ms->descending,
         .hysteresis = !ms->reorder && drifts(ms->sort),
     };
+}
+
+static struct order rate_order(const struct ft_top_mode_state *ms)
+{
+    return (struct order){.type = BY_VALUE, .descending = true, .hysteresis = !ms->reorder};
 }
 
 static void transfer_item(struct ft_top_item *it, const struct ft_top_transfer_entry *e,
@@ -601,8 +607,201 @@ static void count_view(struct ft_top_model *m, struct ft_top_mode_state *ms)
     }
 }
 
-static bool emit_flat(struct ft_top_mode_state *ms, size_t n)
+static const struct ft_top_transfer *representative(const struct ft_top_item *it)
 {
+    switch (it->kind) {
+    case FT_TOP_ROW_PROCESS: {
+        const struct ft_top_process *p = it->entity;
+        return p->ntransfers ? p->transfers[0] : nullptr;
+    }
+    case FT_TOP_ROW_DESTINATION:
+        return ((const struct ft_top_destination *)it->entity)->top;
+    case FT_TOP_ROW_FILE:
+        return ((const struct ft_top_file *)it->entity)->top;
+    default:
+        return it->entity;
+    }
+}
+
+/* The transfers behind an item; one holds a transfer item's own. */
+static size_t item_transfers(const struct ft_top_item *it, const struct ft_top_transfer **one,
+                             const struct ft_top_transfer *const **list)
+{
+    switch (it->kind) {
+    case FT_TOP_ROW_PROCESS: {
+        const struct ft_top_process *p = it->entity;
+        *list = p->transfers;
+        return p->ntransfers;
+    }
+    case FT_TOP_ROW_DESTINATION: {
+        const struct ft_top_destination *d = it->entity;
+        *list = d->transfers;
+        return d->ntransfers;
+    }
+    case FT_TOP_ROW_FILE: {
+        const struct ft_top_file *f = it->entity;
+        *list = f->transfers;
+        return f->ntransfers;
+    }
+    default:
+        *one = it->entity;
+        *list = one;
+        return 1;
+    }
+}
+
+/* The text a transfer is grouped under; buf holds it when it is not one of t's strings. */
+static const char *group_text(const struct ft_top_transfer *t, enum ft_top_group group, char *buf,
+                              size_t size, size_t *len)
+{
+    const char *text = "";
+    *len = 0;
+    if (!t)
+        return text;
+    switch (group) {
+    case FT_TOP_GROUP_PROCESS:
+        text = t->process->title;
+        break;
+    case FT_TOP_GROUP_SCRIPT:
+        text = t->script;
+        break;
+    case FT_TOP_GROUP_DESTINATION:
+        text = t->destination->text;
+        break;
+    case FT_TOP_GROUP_DIRECTORY:
+        text = t->path;
+        *len = t->path_known ? t->name_offset : 0;
+        return text;
+    case FT_TOP_GROUP_SUBNET: {
+        struct ft_endpoint net = t->destination->address;
+        unsigned bits = net.family == 6 ? 64 : 24;
+        char address[48];
+        memset(net.addr + bits / 8, 0, sizeof(net.addr) - bits / 8);
+        ft_addr_format(&net, address, sizeof(address));
+        if (net.family)
+            snprintf(buf, size, "%s/%u", address, bits);
+        else
+            buf[0] = '\0';
+        text = buf;
+        break;
+    }
+    default:
+        break;
+    }
+    *len = strlen(text);
+    return text;
+}
+
+static enum ft_top_node section_node(const struct ft_top_mode_state *ms, struct ft_top_key key)
+{
+    uint32_t *state = ft_top_map_find(&ms->expansion, key);
+    if (state)
+        return *state == EXPLICIT_COLLAPSED ? FT_TOP_NODE_COLLAPSED : FT_TOP_NODE_EXPANDED;
+    return FT_TOP_NODE_EXPANDED;
+}
+
+/* Puts each item under the section of its group, sections ordered by rate, then emits them. */
+static bool emit_sections(struct ft_top_model *m, struct ft_top_mode_state *ms, size_t n)
+{
+    struct ft_top_item *items = ms->items;
+    size_t nsections = 0;
+    char buf[64];
+
+    ft_top_map_clear(&ms->scratch);
+    if (!ft_top_reserve(&ms->sections, &ms->sections_cap, n, sizeof(*ms->sections)) ||
+        !reserve_items(ms, 2 * n + 1))
+        return false;
+    items = ms->items;
+
+    for (size_t i = 0; i < n; i++) {
+        size_t len;
+        const char *text = group_text(representative(&items[i]), ms->group, buf, sizeof(buf), &len);
+        struct ft_top_key key = {ft_top_hash(text, len, ms->group),
+                                 ft_top_hash(text, len, ms->group + 100), FT_TOP_KEY_SECTION};
+        uint32_t *found = ft_top_map_find(&ms->scratch, key);
+        uint32_t s;
+        if (found) {
+            s = *found;
+        } else {
+            s = (uint32_t)nsections++;
+            ms->sections[s] = (struct ft_top_section){
+                .by = ms->group,
+                .title = ft_top_pool_text(&ms->pool, text, len),
+            };
+            if (!ft_top_map_put(&ms->scratch, key, s))
+                return false;
+            items[n + s] = (struct ft_top_item){
+                .entity = &ms->sections[s],
+                .key = key,
+                .kind = FT_TOP_ROW_SECTION,
+            };
+        }
+        items[i].index = s;
+        ms->sections[s].rows++;
+        ms->sections[s].rate += (uint64_t)items[i].rate;
+    }
+
+    /* Items by section, keeping their order; then each section's distinct counts. */
+    struct ft_top_item *grouped = ms->spare;
+    uint32_t *first = ms->indices;
+    for (size_t s = 0; s <= nsections; s++)
+        first[s] = 0;
+    for (size_t i = 0; i < n; i++)
+        first[items[i].index + 1]++;
+    for (size_t s = 0; s < nsections; s++)
+        first[s + 1] += first[s];
+    for (size_t i = 0; i < n; i++)
+        grouped[first[items[i].index]++] = items[i];
+    for (size_t s = nsections; s > 0; s--)
+        first[s] = first[s - 1];
+    first[0] = 0;
+    memcpy(items, grouped, n * sizeof(*items));
+
+    for (size_t s = 0; s < nsections; s++) {
+        struct ft_top_section *sec = &ms->sections[s];
+        uint32_t mark = ft_top_next_mark(m);
+        for (size_t i = first[s]; i < first[s] + sec->rows; i++) {
+            const struct ft_top_transfer *one;
+            const struct ft_top_transfer *const *list;
+            struct summary sum;
+            size_t count = item_transfers(&items[i], &one, &list);
+            summarize(list, count, mark, &sum);
+            sec->processes += sum.processes;
+            sec->files += sum.files;
+            sec->destinations += sum.destinations;
+        }
+        items[n + s].rate = (double)sec->rate;
+        items[n + s].value = (double)sec->rate;
+        items[n + s].index = first[s];
+    }
+
+    struct ft_top_item *heads = items + n;
+    struct order by_rate_order = rate_order(ms);
+    order_items(ms, heads, nsections, &by_rate_order);
+    struct order o = mode_order(ms);
+    for (size_t h = 0; h < nsections; h++) {
+        const struct ft_top_section *sec = heads[h].entity;
+        size_t at = heads[h].index;
+        enum ft_top_node node = section_node(ms, heads[h].key);
+        size_t row = ms->nrows;
+        if (!emit(ms, &heads[h], 0, 0, node, false))
+            return false;
+        order_items(ms, items + at, sec->rows, &o);
+        for (size_t i = at; i < at + sec->rows; i++) {
+            bool ok = node == FT_TOP_NODE_COLLAPSED
+                          ? remember(ms, items[i].key, row, next_due(&items[i]))
+                          : emit(ms, &items[i], 0, 0, FT_TOP_NODE_LEAF, false);
+            if (!ok)
+                return false;
+        }
+    }
+    return true;
+}
+
+static bool emit_flat(struct ft_top_model *m, struct ft_top_mode_state *ms, size_t n)
+{
+    if (ms->group != FT_TOP_GROUP_NONE)
+        return emit_sections(m, ms, n);
     struct order o = mode_order(ms);
     order_items(ms, ms->items, n, &o);
     for (size_t i = 0; i < n; i++) {
@@ -620,7 +819,7 @@ static bool build_transfers(struct ft_top_model *m, struct ft_top_mode_state *ms
         transfer_item(&ms->items[i], ms->passed[i], ms->sort);
     ms->view.shown = ms->view.transfers;
     ms->view.total = m->totals.transfers;
-    return emit_flat(ms, ms->npassed);
+    return emit_flat(m, ms, ms->npassed);
 }
 
 /* Slices of the passed transfers per entity, by rate, at lists[0]; returns how many there are. */
@@ -722,7 +921,7 @@ static bool build_processes(struct ft_top_model *m, struct ft_top_mode_state *ms
     }
     ms->view.shown = shown;
     ms->view.total = m->totals.processes.value;
-    return emit_flat(ms, shown);
+    return emit_flat(m, ms, shown);
 }
 
 static void destination_label(struct ft_top_destination *d, uint16_t port)
@@ -797,7 +996,7 @@ static bool build_destinations(struct ft_top_model *m, struct ft_top_mode_state 
     }
     ms->view.shown = shown;
     ms->view.total = m->totals.destinations;
-    return emit_flat(ms, shown);
+    return emit_flat(m, ms, shown);
 }
 
 static int by_sender_rate(const void *a, const void *b)
@@ -913,7 +1112,7 @@ static bool build_files(struct ft_top_model *m, struct ft_top_mode_state *ms)
     }
     ms->view.shown = shown;
     ms->view.total = m->totals.files.value;
-    return emit_flat(ms, shown);
+    return emit_flat(m, ms, shown);
 }
 
 static bool row_matches(const struct ft_top_row *r, const char *needle, size_t n)
