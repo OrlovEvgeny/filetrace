@@ -4,6 +4,7 @@
 #include "filetrace/event.h"
 #include "filetrace/leaders.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 
 constexpr uint64_t SEC = FT_NS_PER_SEC;
@@ -625,6 +626,66 @@ static void counters_saturate(void)
     ft_leaders_destroy(l);
 }
 
+/* Fills every slot of every window with files of their own; returns the largest memory seen. */
+static size_t fill_every_window(struct ft_leaders *l, size_t path_len, uint64_t *now)
+{
+    static const uint64_t steps[] = {50400, 7200, 300, 75, 25, 5};
+    static char path[FT_PATH_MAX];
+    uint64_t ino = 0;
+    size_t peak = 0;
+
+    *now = T0;
+    for (size_t r = 0; r < FT_ARRAY_LEN(steps); r++) {
+        for (unsigned step = 0; step < 48; step++, *now += steps[r] * SEC) {
+            for (unsigned k = 0; k < 96; k++) {
+                memset(path, 'd', path_len);
+                path[snprintf(path, sizeof(path), "/%" PRIu64 "/", ++ino)] = 'd';
+                path[path_len] = '\0';
+                struct ft_leader_sample x = sample(*now, ino, 1000 + ino % 89, true);
+                x.path = path;
+                x.remote = addr4(10, (uint8_t)(ino >> 16), (uint8_t)(ino >> 8), (uint8_t)ino);
+                ft_leaders_add(l, &x);
+            }
+            if (ft_leaders_memory(l) > peak)
+                peak = ft_leaders_memory(l);
+        }
+    }
+    return peak;
+}
+
+static void paths_stay_within_their_budget(void)
+{
+    constexpr size_t ENTRIES = 16;
+    constexpr size_t PATH_BUDGET = ENTRIES * 8 * 1024;
+    struct answer a = {.rows = calloc(ROWS, sizeof(struct ft_row_leader))};
+    uint64_t now;
+
+    struct ft_leaders *l = store(ENTRIES);
+    size_t short_peak = fill_every_window(l, 24, &now);
+    ft_leaders_destroy(l);
+
+    l = store(ENTRIES);
+    size_t long_peak = fill_every_window(l, FT_PATH_MAX - 1, &now);
+    CHECK(long_peak <= short_peak + PATH_BUDGET);
+    CHECK(long_peak <= 2 * 1024 * 1024);
+
+    ask(l, &a, FT_WINDOW_LIFETIME, FT_LEADER_FILE, FT_SORT_BYTES, now);
+    size_t with_path = 0;
+    size_t without_path = 0;
+    for (size_t i = 0; i < a.count; i++) {
+        if (a.rows[i].text[0] == '/')
+            with_path++;
+        else if (strncmp(a.rows[i].text, "(device 2049 inode ", 19) == 0)
+            without_path++;
+    }
+    CHECK(a.count > 0);
+    CHECK(without_path > 0);
+    CHECK_U64(with_path + without_path, a.count);
+
+    free(a.rows);
+    ft_leaders_destroy(l);
+}
+
 struct state_rows {
     struct answer leaders;
     struct ft_row_process process;
@@ -752,5 +813,6 @@ void test_leaders(void)
     destinations_count();
     directories_and_extensions();
     counters_saturate();
+    paths_stay_within_their_budget();
     through_the_state();
 }

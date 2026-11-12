@@ -26,6 +26,8 @@ constexpr uint32_t MAX_ENTRIES = 1u << 20;
 constexpr uint32_t DEFAULT_LIMIT = 50;
 constexpr uint32_t PREVIOUS_RANKS = 50;
 constexpr size_t TOP_FILES = 10;
+/* Path bytes the store keeps for each configured entry; a file past the budget has no path. */
+constexpr size_t PATH_BYTES_PER_ENTRY = 8 * 1024;
 
 static const uint64_t slot_lengths[RINGS] = {
     5 * FT_NS_PER_SEC,   25 * FT_NS_PER_SEC,   75 * FT_NS_PER_SEC,
@@ -341,6 +343,8 @@ struct ft_leaders {
     uint32_t *scratch; /* entries of the tip waiting for a place in a table */
     uint32_t scratch_cap;
     size_t memory;
+    size_t path_bytes;
+    size_t path_budget;
 };
 
 static void *mem_resize(struct ft_leaders *l, void *p, size_t old_size, size_t new_size)
@@ -357,6 +361,16 @@ static void mem_free(struct ft_leaders *l, void *p, size_t size)
         return;
     free(p);
     l->memory -= size;
+}
+
+static void path_free(struct ft_leaders *l, struct file_record *f)
+{
+    if (!f->path)
+        return;
+    size_t size = strlen(f->path) + 1;
+    mem_free(l, f->path, size);
+    l->path_bytes -= size;
+    f->path = nullptr;
 }
 
 static struct record *rec_at(const struct registry *g, uint32_t i)
@@ -461,12 +475,8 @@ static void reg_release(struct ft_leaders *l, struct registry *g, uint32_t i)
     while (*link != i)
         link = &rec_at(g, *link)->next;
     *link = r->next;
-    if (g->paths) {
-        struct file_record *f = (struct file_record *)r;
-        if (f->path)
-            mem_free(l, f->path, strlen(f->path) + 1);
-        f->path = nullptr;
-    }
+    if (g->paths)
+        path_free(l, (struct file_record *)r);
     r->next = g->free_head;
     g->free_head = i;
 }
@@ -475,8 +485,8 @@ static void reg_destroy(struct ft_leaders *l, struct registry *g)
 {
     for (uint32_t i = 0; g->paths && i < g->used; i++) {
         struct file_record *f = (struct file_record *)rec_at(g, i);
-        if (f->r.refs && f->path)
-            mem_free(l, f->path, strlen(f->path) + 1);
+        if (f->r.refs)
+            path_free(l, f);
     }
     mem_free(l, g->recs, g->cap * g->rec_size);
     mem_free(l, g->buckets, g->nbuckets * sizeof(uint32_t));
@@ -1104,6 +1114,7 @@ struct ft_leaders *ft_leaders_create(const struct ft_leaders_config *cfg)
 
     uint32_t entries = cfg->entries < MAX_ENTRIES ? (uint32_t)cfg->entries : MAX_ENTRIES;
     l->memory = sizeof(*l);
+    l->path_budget = entries * PATH_BYTES_PER_ENTRY;
     reg_init(&l->files, sizeof(struct file_record), sizeof(struct ft_file_id), true);
     reg_init(&l->addrs, sizeof(struct addr_record), sizeof(struct ft_endpoint), false);
     reg_init(&l->names, sizeof(struct name_record), FT_COMM_MAX, false);
@@ -1155,9 +1166,13 @@ static void file_describe(struct ft_leaders *l, uint32_t i, const struct ft_lead
     f->deleted = s->deleted;
     if (!f->path && s->path && s->path[0]) {
         size_t size = strnlen(s->path, FT_PATH_MAX - 1) + 1;
+        if (size > l->path_budget - l->path_bytes)
+            return;
         f->path = mem_resize(l, nullptr, 0, size);
-        if (f->path)
+        if (f->path) {
             ft_strlcpy(f->path, s->path, size);
+            l->path_bytes += size;
+        }
     }
 }
 
