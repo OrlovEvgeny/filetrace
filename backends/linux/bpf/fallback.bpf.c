@@ -14,6 +14,7 @@ struct sock_track {
     __u32 rx_seq; /* copied_seq, without a consumed FIN, up to which received bytes are */
     __u32 tx_tgid;
     __u32 rx_tgid;
+    __u32 tx_tid; /* the thread whose bytes write_seq has grown by since tx_seq */
     __u8 tx_live; /* tx_seq is a baseline that write_seq still advances from */
     __u8 rx_live;
     __u8 claim_kind; /* enum ft_bpf_agg_kind, or 0 */
@@ -250,7 +251,7 @@ static __always_inline void tcp_settle_tx(void *map, struct sock *sk, struct soc
     if (spliced && (__u32)bpf_get_current_pid_tgid() == t->claim_tid)
         sendfile_read(thread_now(false), t->claim_file.ino, t->claim_file.dev);
     if (t->carrying)
-        carry_wire((__u64)sk, delta - spliced);
+        carry_wire((__u64)sk, delta - spliced, t->tx_tid);
     claim_settle(map, sk, t, delta, now);
 }
 
@@ -328,6 +329,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     tcp_adopt(sk, t);
     tcp_settle_tx(map, sk, t, now);
     t->tx_tgid = (__u32)(ids >> 32);
+    t->tx_tid = (__u32)ids;
 
     /* Pages spliced in by sendfile belong to the claim that sendfile made. */
     if (!cfg.file_corr || (BPF_CORE_READ(msg, msg_flags) & MSG_SPLICE_PAGES))

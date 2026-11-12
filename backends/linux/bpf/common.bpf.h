@@ -822,14 +822,18 @@ static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 n
         }
         c->kind = CARRY_EPISODE;
     }
+    /* Another thread's bytes on the socket are its own. */
+    if (c->tid != (__u32)bpf_get_current_pid_tgid())
+        return;
     __sync_fetch_and_add(&c->wire, bytes);
+    c->last_ns = now;
 }
 
-/* Counts what the socket took into its windows, as the socket is settled. */
-static __always_inline void carry_wire(__u64 sk, __u64 bytes)
+/* Counts what the socket took into its windows, as the socket is settled; tid sent it. */
+static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid)
 {
     struct carry *c = bpf_map_lookup_elem(&carries, &sk);
-    if (c)
+    if (c && c->tid == tid)
         __sync_fetch_and_add(&c->wire, bytes);
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (d) {
@@ -1012,10 +1016,9 @@ static __always_inline bool carry_dial(struct sock *sk, __u64 cookie, __u64 now)
 /*
  * The window a send goes into: the one open on the socket, or one opened when the socket has
  * heard nothing yet, or when the file the thread was sending is small enough to be judged by
- * the reply it went into, or when there is only a strict file to judge. NULL with *skip set:
- * nowhere, as another thread's window holds the socket; NULL otherwise: charged as it is. wire:
- * what the send took, when it is counted here. foreground: the send uses the read of the
- * thread's file.
+ * the reply it went into, or when it is a strict file read whole. NULL with *skip set:
+ * nowhere, as no window could be made; NULL otherwise: charged as it is. wire: what the send
+ * took, when it is counted here. foreground: the send uses the read of the thread's file.
  */
 static __always_inline struct carry *carry_window(struct thread_state *ts, __u64 sk, __u64 cookie,
                                                   __u32 tgid, __u64 wire, __u64 now,
@@ -1028,10 +1031,9 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     if (!sk || !map)
         return NULL;
     struct carry *c = bpf_map_lookup_elem(&carries, &sk);
-    if (c && c->tid != tid) {
-        *skip = true;
+    /* Another thread's window on the socket leaves this thread's sends to the base rule. */
+    if (c && c->tid != tid)
         return NULL;
-    }
     if (c && (!foreground || !c->sends || same_file(&c->file, &ts->file))) {
         if (foreground && !c->sends) {
             c->file = ts->file;
