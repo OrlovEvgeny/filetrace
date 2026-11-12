@@ -97,6 +97,13 @@ size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t 
  * Adds a file the kernel reported to the background map when its path matches the patterns:
  * a file the agent cannot see, such as one inside a container, or one made after the last scan.
  */
+/*
+ * Loads the patterns that name files wherever they are, "*" "/" name and "*" ".ext", for the
+ * kernel to match the first time a thread reads such a file. Returns how many it holds.
+ */
+size_t ft_linux_background_names(int names_fd, int suffixes_fd, const char *const *patterns,
+                                 size_t count);
+
 void ft_linux_background_learn(int map_fd, const char *const *patterns, size_t count, uint64_t ino,
                                uint32_t dev, const char *path);
 

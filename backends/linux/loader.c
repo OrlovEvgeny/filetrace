@@ -909,6 +909,11 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     b->background_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_files"));
     if (b->background_fd >= 0)
         background_scan(b, b->last_flush_ns);
+    int names_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_names"));
+    int suffixes_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_suffixes"));
+    if (names_fd >= 0 && suffixes_fd >= 0)
+        ft_linux_background_names(names_fd, suffixes_fd, b->cfg.background_paths,
+                                  b->cfg.background_path_count);
     if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
         b->php = ft_linux_php_open(obj);
         if (b->php)

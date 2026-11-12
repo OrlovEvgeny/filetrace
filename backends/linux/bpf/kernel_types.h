@@ -72,6 +72,7 @@ struct user_pt_regs {
 
 enum bpf_map_type {
     BPF_MAP_TYPE_HASH = 1,
+    BPF_MAP_TYPE_ARRAY = 2,
     BPF_MAP_TYPE_PERCPU_ARRAY = 6,
     BPF_MAP_TYPE_LRU_HASH = 9,
     BPF_MAP_TYPE_ARRAY_OF_MAPS = 12,

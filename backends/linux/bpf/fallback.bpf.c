@@ -157,7 +157,7 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
         .gen = BPF_CORE_READ(inode, i_generation),
     };
     struct task_struct *task = (void *)bpf_get_current_task();
-    if (is_background(&fk)) {
+    if (background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk)) {
         thread_set_background(ts, file, inode, &fk, magic);
         ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
         ts->bg_read_ns = bpf_ktime_get_boot_ns();
@@ -386,7 +386,7 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
             bool claimed = t->claim_kind == FT_BPF_AGG_READ_SEND && !t->claim_background &&
                            t->claim_tid == (__u32)bpf_get_current_pid_tgid() &&
                            t->claim_received == ts->received;
-            if ((ts->pending || claimed) && handshake_socket(ts, sk, now)) {
+            if ((ts->pending || claimed) && !ts->displaced && handshake_socket(ts, sk, now)) {
                 background_reset(ts);
             } else {
                 thread_reset(ts);

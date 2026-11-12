@@ -17,7 +17,8 @@ const char *ft_config_default_path(void)
 }
 
 /* Files that programs read on their way to a connection: trust stores, resolver and account
- * databases, time zones. */
+ * databases, time zones, and the bundles and compiled modules that libraries load wherever
+ * they are installed. */
 static const char *const default_background_paths[] = {
     "/etc/ssl/certs/*",
     "/etc/ssl/cert.pem",
@@ -37,6 +38,15 @@ static const char *const default_background_paths[] = {
     "/etc/group",
     "/usr/share/zoneinfo/*",
     "/etc/localtime",
+    "*/cacert.pem",
+    "*/cacerts",
+    "*/ca-bundle.crt",
+    "*/ca-certificates.crt",
+    "*.pyc",
+    "*.py",
+    "*.rb",
+    "*.js",
+    "*.jar",
 };
 
 static_assert(FT_ARRAY_LEN(default_background_paths) <= FT_CONFIG_MAX_PATTERNS);

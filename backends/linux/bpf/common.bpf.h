@@ -118,6 +118,7 @@ struct thread_state {
     __u64 dialed_ns;
     __u64 last_sent; /* the TCP socket the thread sent on last */
     __u64 last_sent_ns;
+    __u8 displaced; /* the file was read while another's bytes were still unsent */
     struct file_ref bg_file;
     __u32 bg_gen;
     __u32 bg_forgotten;
@@ -154,6 +155,20 @@ struct {
     __type(key, __u64); /* hash of the path */
     __type(value, __u32);
 } known_scripts SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, FT_BPF_BACKGROUND_NAMES);
+    __type(key, char[FT_BPF_BACKGROUND_NAME]);
+    __type(value, __u8);
+} background_names SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, FT_BPF_BACKGROUND_SUFFIXES);
+    __type(key, __u32);
+    __type(value, struct ft_bpf_background_suffix);
+} background_suffixes SEC(".maps");
 
 static __u32 last_file_instance;
 static __u32 forgotten_files;
@@ -352,13 +367,77 @@ static __always_inline bool handshake_socket(const struct thread_state *ts, cons
 static __always_inline bool handshake_receive(const struct thread_state *ts, const struct sock *sk,
                                               __u64 now)
 {
-    return ts->pending && handshake_socket(ts, sk, now);
+    return ts->pending && !ts->displaced && handshake_socket(ts, sk, now);
 }
 
 static __always_inline bool is_background(const struct file_key *fk)
 {
     struct ft_bpf_background_key key = {.ino = fk->ino, .dev = fk->dev};
     return bpf_map_lookup_elem(&background_files, &key) != NULL;
+}
+
+struct suffix_match {
+    const char *name;
+    __u32 len;
+    bool found;
+};
+
+static long suffix_step(__u32 index, void *arg)
+{
+    struct suffix_match *m = arg;
+    struct ft_bpf_background_suffix *s = bpf_map_lookup_elem(&background_suffixes, &index);
+    if (!s || !s->len)
+        return 1;
+    if (s->len > m->len || s->len > FT_BPF_BACKGROUND_SUFFIX)
+        return 0;
+    __u32 from = m->len - s->len;
+    for (__u32 i = 0; i < FT_BPF_BACKGROUND_SUFFIX; i++) {
+        if (i >= s->len) {
+            m->found = true;
+            return 1;
+        }
+        if (m->name[(from + i) & (FT_BPF_BACKGROUND_NAME - 1)] != s->text[i])
+            return 0;
+    }
+    m->found = true;
+    return 1;
+}
+
+/*
+ * Whether a file the thread starts reading is background by its name, as a CA bundle that a
+ * library keeps in its own directory is: then from this read on, for every thread.
+ */
+static __always_inline bool background_by_name(const unsigned char *dname,
+                                               const struct file_key *fk)
+{
+    char name[FT_BPF_BACKGROUND_NAME] = {};
+    long n = bpf_probe_read_kernel_str(name, sizeof(name), dname);
+    if (n <= 1)
+        return false;
+    bool found = bpf_map_lookup_elem(&background_names, name) != NULL;
+    if (!found) {
+        struct suffix_match m = {.name = name, .len = (__u32)n - 1};
+        bpf_loop(FT_BPF_BACKGROUND_SUFFIXES, suffix_step, &m, 0);
+        found = m.found;
+    }
+    if (found) {
+        struct ft_bpf_background_key key = {.ino = fk->ino, .dev = fk->dev};
+        __u8 learned = FT_BPF_BACKGROUND_LEARNED;
+        bpf_map_update_elem(&background_files, &key, &learned, BPF_NOEXIST);
+    }
+    return found;
+}
+
+/* Background by inode, or by name for a file other than the ones the thread is reading. */
+static __always_inline bool background_read(const struct thread_state *ts,
+                                            const unsigned char *dname, const struct file_key *fk)
+{
+    if (is_background(fk))
+        return true;
+    if ((ts->file.ino == fk->ino && ts->file.dev == fk->dev && ts->gen == fk->gen) ||
+        (ts->bg_file.ino == fk->ino && ts->bg_file.dev == fk->dev && ts->bg_gen == fk->gen))
+        return false;
+    return background_by_name(dname, fk);
 }
 
 /* Adds a send of up to *pending bytes of the file to the counters, and takes it off *pending. */
@@ -654,11 +733,15 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
                                             __u64 fs_magic)
 {
     if (ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen) {
+        /* What a loader reads of a library, its first 832 bytes, is no candidate to displace. */
+        ts->displaced = ts->pending >= 1024;
         ts->file.ino = fk->ino;
         ts->file.dev = fk->dev;
         ts->file.instance = 0;
         ts->gen = fk->gen;
         thread_reset(ts);
+    } else if (!ts->pending) {
+        ts->displaced = 0;
     }
     /* A deleted file's inode number may have been given to this one since. */
     if (ts->forgotten != forgotten_files) {

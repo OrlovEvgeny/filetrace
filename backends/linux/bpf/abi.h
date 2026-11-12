@@ -9,6 +9,10 @@
 #define FT_BPF_ARGS_MAX 4096
 #define FT_BPF_SCRIPT_MAX 1024
 #define FT_BPF_BACKGROUND_MAX 16384
+#define FT_BPF_BACKGROUND_NAME 64 /* longest file name, with its NUL, that a pattern can name */
+#define FT_BPF_BACKGROUND_NAMES 64
+#define FT_BPF_BACKGROUND_SUFFIXES 8
+#define FT_BPF_BACKGROUND_SUFFIX 16
 
 enum ft_bpf_event_kind {
     FT_BPF_EV_EXEC = 1,
@@ -170,6 +174,15 @@ enum ft_bpf_counter {
 enum ft_bpf_background_source {
     FT_BPF_BACKGROUND_SCANNED = 1, /* a pattern resolved in the agent's own file system view */
     FT_BPF_BACKGROUND_LEARNED = 2, /* a path the kernel reported, such as one in a container */
+};
+
+/*
+ * A background pattern that names files wherever they are, by name ("*" "/" name) or by ending
+ * ("*" ".ext"): the kernel can tell such a file the first time a thread reads it.
+ */
+struct ft_bpf_background_suffix {
+    __u32 len;
+    char text[FT_BPF_BACKGROUND_SUFFIX];
 };
 
 /* A file the agent names as background: reading it does not change what a thread sends. */

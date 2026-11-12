@@ -154,3 +154,36 @@ size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t 
     free(set.keys);
     return held;
 }
+
+static bool plain(const char *text)
+{
+    return text[0] && !strpbrk(text, "*?/");
+}
+
+size_t ft_linux_background_names(int names_fd, int suffixes_fd, const char *const *patterns,
+                                 size_t count)
+{
+    size_t held = 0;
+    uint32_t suffixes = 0;
+    uint8_t one = 1;
+
+    for (size_t i = 0; i < count; i++) {
+        const char *p = patterns[i];
+        if (strncmp(p, "*/", 2) == 0 && plain(p + 2) && strlen(p + 2) < FT_BPF_BACKGROUND_NAME) {
+            char name[FT_BPF_BACKGROUND_NAME] = {0};
+            memcpy(name, p + 2, strlen(p + 2));
+            if (bpf_map_update_elem(names_fd, name, &one, BPF_ANY) == 0)
+                held++;
+        } else if (p[0] == '*' && p[1] == '.' && plain(p + 1) &&
+                   strlen(p + 1) <= FT_BPF_BACKGROUND_SUFFIX &&
+                   suffixes < FT_BPF_BACKGROUND_SUFFIXES) {
+            struct ft_bpf_background_suffix suffix = {.len = (uint32_t)strlen(p + 1)};
+            memcpy(suffix.text, p + 1, suffix.len);
+            if (bpf_map_update_elem(suffixes_fd, &suffixes, &suffix, BPF_ANY) == 0) {
+                suffixes++;
+                held++;
+            }
+        }
+    }
+    return held;
+}
