@@ -202,9 +202,17 @@ static void write_totals(struct writer *w, const struct ft_top_totals *t)
     close_container(w, '}');
 }
 
+static bool in_tree(const struct ft_top_model *m, enum ft_top_mode mode)
+{
+    return mode == FT_TOP_PROCESSES && ft_top_tree_of(m);
+}
+
+/* Leaders and the tree show no groups, whatever was asked for. */
 static enum ft_top_group grouping(const struct ft_top_model *m, enum ft_top_mode mode)
 {
-    return mode == FT_TOP_LEADERS ? FT_TOP_GROUP_NONE : ft_top_group_of(m, mode);
+    if (mode == FT_TOP_LEADERS || in_tree(m, mode))
+        return FT_TOP_GROUP_NONE;
+    return ft_top_group_of(m, mode);
 }
 
 /* What the filter, the sort and the grouping left of the mode's items. */
@@ -222,11 +230,26 @@ static void write_view(struct writer *w, const struct ft_top_model *m, enum ft_t
         put_text(w, "sort", ft_top_sort_name(sort));
         put_bool(w, "descending", descending);
         put_text(w, "group", group == FT_TOP_GROUP_NONE ? nullptr : ft_top_group_name(group));
+        if (mode == FT_TOP_PROCESSES)
+            put_bool(w, "tree", in_tree(m, mode));
     }
     put_text(w, "filter", ft_top_filter_of(m, mode));
     put_uint(w, "shown", view->shown);
     put_uint(w, "total", view->total);
     close_container(w, '}');
+}
+
+struct view {
+    bool grouped;
+    bool tree;
+};
+
+static struct view view_of(const struct ft_top_model *m, enum ft_top_mode mode)
+{
+    return (struct view){
+        .grouped = grouping(m, mode) != FT_TOP_GROUP_NONE,
+        .tree = in_tree(m, mode),
+    };
 }
 
 static const struct ft_top_process *process_of(const struct ft_top_transfer *t)
@@ -307,6 +330,22 @@ static void process_members(struct writer *w, const struct ft_top_process *p)
     put_text(w, "method", method_text(p->method));
 }
 
+static void fold_members(struct writer *w, const struct ft_top_fold *f)
+{
+    put_text(w, "process", f->title);
+    put_uint(w, "count", f->count);
+    element(w, "pids");
+    fputc('[', w->out);
+    for (size_t i = 0; i < f->count; i++)
+        fprintf(w->out, "%s%" PRIu32, i ? (w->indent ? ", " : ",") : "", f->members[i]->pid);
+    fputc(']', w->out);
+    put_uint(w, "rate", f->rate);
+    put_uint(w, "total", f->total);
+    put_uint(w, "files", f->files);
+    put_uint(w, "destinations", f->destinations);
+    put_text(w, "method", method_text(f->method));
+}
+
 static void destination_members(struct writer *w, const struct ft_top_destination *d)
 {
     put_text(w, "address", d->text);
@@ -350,9 +389,37 @@ static void file_members(struct writer *w, const struct ft_top_file *f)
     put_bool(w, "deleted", f->deleted);
 }
 
-static void write_row(struct writer *w, const struct ft_top_row *r, const char *group, bool grouped)
+/* A tree row carries its depth and is a process, a fold of siblings or a transfer. */
+static void tree_row(struct writer *w, const struct ft_top_row *r)
 {
-    if (grouped)
+    put_uint(w, "depth", r->depth);
+    switch (r->kind) {
+    case FT_TOP_ROW_PROCESS:
+        process_members(w, r->process);
+        break;
+    case FT_TOP_ROW_FOLD:
+        open_container(w, "fold", '{');
+        fold_members(w, r->fold);
+        close_container(w, '}');
+        break;
+    case FT_TOP_ROW_TRANSFER:
+        open_container(w, "transfer", '{');
+        transfer_members(w, r->transfer);
+        close_container(w, '}');
+        break;
+    default:
+        break;
+    }
+}
+
+static void write_row(struct writer *w, const struct view *view, const struct ft_top_row *r,
+                      const char *group)
+{
+    if (view->tree) {
+        tree_row(w, r);
+        return;
+    }
+    if (view->grouped)
         put_text(w, "group", group);
     switch (r->kind) {
     case FT_TOP_ROW_TRANSFER:
@@ -375,7 +442,7 @@ static void write_row(struct writer *w, const struct ft_top_row *r, const char *
 /* The rows as an array named after the mode; group headings go into the rows they head. */
 static size_t write_rows(struct writer *w, const struct ft_top_model *m, enum ft_top_mode mode)
 {
-    bool grouped = grouping(m, mode) != FT_TOP_GROUP_NONE;
+    struct view view = view_of(m, mode);
     size_t count = ft_top_row_count(m, mode);
     const char *group = nullptr;
     size_t written = 0;
@@ -391,7 +458,7 @@ static size_t write_rows(struct writer *w, const struct ft_top_model *m, enum ft
             continue;
         }
         open_container(w, nullptr, '{');
-        write_row(w, r, group, grouped);
+        write_row(w, &view, r, group);
         close_container(w, '}');
         written++;
     }
