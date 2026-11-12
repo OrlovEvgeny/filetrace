@@ -117,8 +117,10 @@ void ft_linux_background_learn(int map_fd, const struct ft_backend_config *cfg, 
             value = FT_BPF_BACKGROUND_LEARNED | FT_BPF_BACKGROUND_STRICT;
     }
     if (value) {
+        /* A background path overrides a strict name the kernel matched on the first read. */
         struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
-        bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST);
+        bpf_map_update_elem(map_fd, &key, &value,
+                            value & FT_BPF_BACKGROUND_STRICT ? BPF_NOEXIST : BPF_ANY);
     }
 }
 
@@ -192,7 +194,7 @@ static void load_names(int names_fd, int suffixes_fd, const char *const *pattern
         if (strncmp(p, "*/", 2) == 0 && plain(p + 2) && strlen(p + 2) < FT_BPF_BACKGROUND_NAME) {
             char name[FT_BPF_BACKGROUND_NAME] = {0};
             memcpy(name, p + 2, strlen(p + 2));
-            if (bpf_map_update_elem(names_fd, name, &kind, BPF_ANY) == 0)
+            if (bpf_map_update_elem(names_fd, name, &kind, BPF_NOEXIST) == 0)
                 (*held)++;
         } else if (p[0] == '*' && p[1] == '.' && plain(p + 1) &&
                    strlen(p + 1) <= FT_BPF_BACKGROUND_SUFFIX &&
@@ -212,10 +214,10 @@ size_t ft_linux_background_names(int names_fd, int suffixes_fd, const struct ft_
     size_t held = 0;
     uint32_t suffixes = 0;
 
-    /* Background goes last, so that a name both lists name is background. */
-    load_names(names_fd, suffixes_fd, cfg->strict_paths, cfg->strict_path_count,
-               FT_BPF_LISTED_STRICT, &suffixes, &held);
+    /* Background goes first: suffixes match in order, and a name already held stays. */
     load_names(names_fd, suffixes_fd, cfg->background_paths, cfg->background_path_count,
                FT_BPF_LISTED_BACKGROUND, &suffixes, &held);
+    load_names(names_fd, suffixes_fd, cfg->strict_paths, cfg->strict_path_count,
+               FT_BPF_LISTED_STRICT, &suffixes, &held);
     return held;
 }
