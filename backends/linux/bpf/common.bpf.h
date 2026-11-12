@@ -440,11 +440,10 @@ static __always_inline void foreground_reset(struct thread_state *ts)
     ts->fresh = 0;
 }
 
-/* A thread that sends a file with sendfile read it for something else, as for a checksum. */
-static __always_inline void sendfile_read(struct thread_state *ts, const struct file_key *fk)
+/* A thread that sent a file with sendfile read it for something else, as for a checksum. */
+static __always_inline void sendfile_read(struct thread_state *ts, __u64 ino, __u32 dev)
 {
-    if (ts && ts->pending && ts->file.ino == fk->ino && ts->file.dev == fk->dev &&
-        ts->gen == fk->gen)
+    if (ts && ts->pending && ts->file.ino == ino && ts->file.dev == dev)
         foreground_reset(ts);
 }
 
