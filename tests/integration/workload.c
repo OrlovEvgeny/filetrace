@@ -1065,6 +1065,113 @@ static void scenario_dial_idle(const char *path, size_t size, size_t seconds)
 }
 
 /*
+ * headbody <path> <bytes> <fresh|heard|continue|early|split>: connects, hearing from the peer
+ * first with heard, then reads the file and sends a signed request head and the file as its
+ * body, as an S3 client does, and closes. With continue, the peer answers the head before the
+ * body is sent and answers the body, as with Expect: 100-continue; early is continue with the
+ * file read before the connection is opened; split is early with the body sent in two halves
+ * and an answer heard between them, as a TLS 1.3 client reads a session ticket.
+ */
+static void scenario_head_body(const char *path, size_t size, const char *shape)
+{
+    bool heard = strcmp(shape, "heard") == 0;
+    bool split = strcmp(shape, "split") == 0;
+    bool early = split || strcmp(shape, "early") == 0;
+    bool answered = early || strcmp(shape, "continue") == 0;
+    struct sink sink = start_sink(SOCK_STREAM, false,
+                                  heard      ? SINK_GREET
+                                  : answered ? SINK_ANSWER
+                                             : SINK_DISCARD);
+    char head[1500];
+    memset(head, 'H', sizeof(head));
+    char *contents = early ? read_whole_file(path, size) : nullptr;
+    int sock = connect_sink(&sink);
+    if (heard)
+        hear(sock);
+    if (!early)
+        contents = read_whole_file(path, size);
+    send_all(sock, head, sizeof(head));
+    if (answered)
+        hear(sock);
+    size_t first = split ? size / 2 : size;
+    send_all(sock, contents, first);
+    if (split) {
+        hear(sock);
+        send_all(sock, contents + first, size - first);
+    }
+    if (answered)
+        hear(sock);
+    close(sock);
+    free(contents);
+    report("headbody", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/* The size of the request head the PUT scenarios send before the file. */
+enum {
+    PUT_HEAD = 200
+};
+
+/*
+ * twoputs <path> <bytes>: over one connection, twice reads the file and sends it after a request
+ * head, hearing the answer each time, as curl -T f url1 -T f url2 does.
+ */
+static void scenario_two_puts(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    make_file(path, size);
+    char *request = malloc(PUT_HEAD + size);
+    if (!request)
+        die("malloc");
+    memset(request, 'H', PUT_HEAD);
+    int file = open_file(path);
+    int sock = connect_sink(&sink);
+    for (int i = 0; i < 2; i++) {
+        if (pread(file, request + PUT_HEAD, size, 0) != (ssize_t)size)
+            die("pread");
+        send_all(sock, request, PUT_HEAD + size);
+        hear(sock);
+    }
+    close(sock);
+    close(file);
+    free(request);
+    report("twoputs", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * uploadchat <path> <bytes> <exchanges>: reads the file, connects, sends it after a request head
+ * and hears the answer, then makes small requests over the same connection, each answered, as a
+ * keep-alive client goes on after a PUT.
+ */
+static void scenario_upload_chat(const char *path, size_t size, size_t exchanges)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char request[340];
+    memset(request, 'q', sizeof(request));
+    make_file(path, size);
+    char *put = malloc(PUT_HEAD + size);
+    if (!put)
+        die("malloc");
+    memset(put, 'H', PUT_HEAD);
+    int file = open_file(path);
+    if (read(file, put + PUT_HEAD, size) != (ssize_t)size)
+        die("read");
+    close(file);
+    int sock = connect_sink(&sink);
+    send_all(sock, put, PUT_HEAD + size);
+    hear(sock);
+    for (size_t i = 0; i < exchanges; i++) {
+        send_all(sock, request, sizeof(request));
+        hear(sock);
+    }
+    close(sock);
+    free(put);
+    report("uploadchat", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * readmemory <path> <file bytes> <body bytes>: reads the file, then connects, sends a hello the
  * size of a TLS ClientHello with a post-quantum key share, hears one back and sends the body
  * from memory, as a client that loads a module, a service model or a bundle before it uploads.
@@ -1720,6 +1827,12 @@ int main(int argc, char **argv)
         scenario_read_side_handshake(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "twofiles") == 0 && argc == 5)
         scenario_two_files(argv[2], argv[3], arg_size(argv[4]));
+    else if (strcmp(name, "headbody") == 0 && argc == 5)
+        scenario_head_body(argv[2], arg_size(argv[3]), argv[4]);
+    else if (strcmp(name, "twoputs") == 0 && argc == 4)
+        scenario_two_puts(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "uploadchat") == 0 && argc == 5)
+        scenario_upload_chat(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readkeepalive") == 0 && argc == 5)
         scenario_read_keepalive(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readstream") == 0 && argc == 5)
