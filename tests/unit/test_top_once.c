@@ -3,6 +3,7 @@
 #include "ui/top/document.h"
 #include "ui/top/model.h"
 #include "ui/top/once.h"
+#include "ui/top/plain.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -698,6 +699,50 @@ static void leaders(void)
     ft_top_model_destroy(m);
 }
 
+static char *printed(const struct ft_canvas *canvas, enum ft_color_depth depth)
+{
+    char *text = nullptr;
+    size_t size = 0;
+    FILE *out = open_memstream(&text, &size);
+
+    CHECK(out != nullptr);
+    if (!out)
+        return strdup("");
+    ft_top_print_canvas(canvas, depth, out);
+    fclose(out);
+    return text;
+}
+
+static void canvas_lines(void)
+{
+    struct ft_canvas *c = ft_canvas_create(12, 4);
+    struct ft_style bright = {FT_COLOR_BRIGHT, FT_COLOR_DEFAULT, FT_ATTR_BOLD};
+    struct ft_style dim = {FT_COLOR_DIM, FT_COLOR_DEFAULT, 0};
+    struct ft_style bar = {FT_COLOR_BG, FT_COLOR_GREEN, 0};
+
+    CHECK(c != nullptr);
+    ft_canvas_text(c, 0, 0, 12, bright, "ab");
+    ft_canvas_text(c, 2, 0, 10, dim, "cd  ");
+    /* A wide character takes two cells and is written once. */
+    ft_canvas_text(c, 0, 1, 12, dim, "\xe6\x97\xa5\xe6\x9c\xac x");
+    ft_canvas_fill(c, (struct ft_rect){0, 2, 12, 1}, ' ', bar);
+    ft_canvas_text(c, 0, 2, 12, bar, "HEAD");
+
+    /* Without color the lines end at their last character. */
+    char *text = printed(c, FT_DEPTH_NONE);
+    CHECK_STR(text, "abcd\n\xe6\x97\xa5\xe6\x9c\xac x\nHEAD\n\n");
+    free(text);
+
+    /* A sequence is written where the style changes; a bar keeps its blanks; each line is reset. */
+    text = printed(c, FT_DEPTH_TRUECOLOR);
+    CHECK(starts(text, "\033[0;1;38;2;240;246;252mab\033[0;38;2;125;133;144mcd\033[0m\n"));
+    CHECK(has(text, "\n\033[0;38;2;125;133;144m\xe6\x97\xa5\xe6\x9c\xac x\033[0m\n"));
+    CHECK(has(text, "\n\033[0;38;2;11;14;20;48;2;63;185;80mHEAD        \033[0m\n\n"));
+    CHECK_U64(count(text, '\033'), 7);
+    free(text);
+    ft_canvas_destroy(c);
+}
+
 void test_top_once(void)
 {
     documents();
@@ -706,4 +751,5 @@ void test_top_once(void)
     single_rows();
     tables();
     lists();
+    canvas_lines();
 }
