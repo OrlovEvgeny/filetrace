@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 constexpr uint64_t SECOND = FT_NS_PER_SEC;
 constexpr uint64_t WALL = 1'790'000'000 * FT_NS_PER_SEC;
@@ -743,6 +744,113 @@ static void canvas_lines(void)
     ft_canvas_destroy(c);
 }
 
+static char *table(const struct ft_top_model *m, enum ft_top_mode mode)
+{
+    struct ft_top_ui ui = {.mode = mode, .full_paths = true};
+    char *text = nullptr;
+    size_t size = 0;
+    FILE *out = open_memstream(&text, &size);
+
+    CHECK(out != nullptr);
+    if (!out)
+        return strdup("");
+    CHECK(ft_top_print_table(m, &ui, 174, FT_DEPTH_NONE, out));
+    fclose(out);
+    return text;
+}
+
+static void table_height(void)
+{
+    struct fixture f;
+
+    fixture_init(&f);
+    /* The empty table has its header and one line to say so; otherwise one line per row. */
+    char *text = table(f.m, FT_TOP_TRANSFERS);
+    CHECK_U64(count(text, '\n'), 2);
+    free(text);
+    fill(&f);
+    text = table(f.m, FT_TOP_TRANSFERS);
+    CHECK_U64(count(text, '\n'), 4);
+    free(text);
+    ft_top_set_group(f.m, FT_TOP_TRANSFERS, FT_TOP_GROUP_SCRIPT);
+    text = table(f.m, FT_TOP_TRANSFERS);
+    CHECK_U64(count(text, '\n'), 6);
+    free(text);
+    fixture_free(&f);
+}
+
+static void leaders_lines(void)
+{
+    constexpr uint64_t TO = 1'789'995'544 * SECOND;
+    struct ft_top_model *m = ft_top_model_create();
+    struct ft_rows ranking;
+    struct ft_row_leader_summary summary = {
+        .window_ns = 3600 * SECOND,
+        .from_wall_ns = TO - 3604 * SECOND,
+        .to_wall_ns = TO,
+        .previous_from_wall_ns = TO - 7204 * SECOND,
+        .bytes = 2'023'000'000'000,
+        .bytes_exact = 1'375'640'000'000,
+        .transfers = 48'211,
+        .files = 12'408,
+        .processes = 23,
+        .scripts = 9,
+        .destinations_public = 41'231,
+        .destinations_private = 157,
+    };
+    struct ft_top_leaders_sample sample = {
+        .window = FT_WINDOW_1H,
+        .key = FT_LEADER_FILE,
+        .by = FT_TOP_SORT_BYTES,
+        .summary = &summary,
+    };
+    const char *zone = getenv("TZ");
+    char *saved = zone ? strdup(zone) : nullptr;
+
+    setenv("TZ", "UTC", 1);
+    tzset();
+    ft_rows_init(&ranking, FT_MSG_ROW_LEADER);
+    sample.ranking = &ranking;
+    ft_top_set_leaders_request(m, FT_WINDOW_1H, FT_LEADER_FILE);
+    CHECK(ft_top_model_leaders(m, &sample));
+
+    char *text = table(m, FT_TOP_LEADERS);
+    CHECK(starts(text, "Window 1h, 11:59:00 to 12:59:04, ranked by bytes. "
+                       "Compared with the hour before.\n"
+                       "Sent 1.84 TB in 48,211 transfers: 68% sendfile, 32% read-write.\n"
+                       "12,408 files from 23 processes and 9 scripts to 41,388 destinations "
+                       "(41,231 public).\n"));
+    CHECK(!has(text, "not full"));
+    free(text);
+
+    /* A history shorter than the window is said so; no span before it means no comparison. */
+    summary.flags = FT_LEADERS_SHORT_HISTORY;
+    summary.previous_from_wall_ns = 0;
+    summary.bytes = 0;
+    summary.transfers = 1;
+    summary.files = 1;
+    summary.processes = 1;
+    summary.scripts = 0;
+    summary.destinations_public = 0;
+    summary.destinations_private = 1;
+    CHECK(ft_top_model_leaders(m, &sample));
+    text = table(m, FT_TOP_LEADERS);
+    CHECK(starts(text, "Window 1h, 11:59:00 to 12:59:04, ranked by bytes.\n"
+                       "Sent 0 B in 1 transfer.\n"
+                       "1 file from 1 process and 0 scripts to 1 destination (0 public).\n"
+                       "The agent has been running since 11:59:00; the window is not full.\n"));
+    free(text);
+
+    if (saved)
+        setenv("TZ", saved, 1);
+    else
+        unsetenv("TZ");
+    tzset();
+    free(saved);
+    ft_rows_free(&ranking);
+    ft_top_model_destroy(m);
+}
+
 void test_top_once(void)
 {
     documents();
@@ -752,4 +860,6 @@ void test_top_once(void)
     tables();
     lists();
     canvas_lines();
+    table_height();
+    leaders_lines();
 }
