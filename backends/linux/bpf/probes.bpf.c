@@ -285,6 +285,10 @@ int BPF_PROG(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out, 
             v->transfer.script = ts->script;
         v->last_ns = now;
     }
+    /* A connection's window takes what sendfile sent of a file as already reported. */
+    struct file_ref sent = {.ino = fk.ino, .dev = fk.dev};
+    dial_charged((__u64)sk, &sent, ret);
+    sendfile_read(bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0), &fk);
     return 0;
 }
 
