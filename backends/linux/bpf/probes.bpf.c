@@ -155,9 +155,8 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
         carry_received(map, (__u64)sk, now);
     struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
     if (ts) {
-        carry_episode_end(ts, now, tcp && ts->episode_sock == (__u64)sk ? CARRY_REPLY : CARRY_NEXT);
-        if (ts->pending)
-            thread_reset(ts);
+        carry_heard_elsewhere(ts, tcp ? (__u64)sk : 0, now);
+        thread_reset(ts);
     }
     return 0;
 }

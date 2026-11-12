@@ -691,6 +691,13 @@ static __always_inline bool held_matches(__u64 wire, __u64 whole)
     return volume_within(wire, whole, head + whole / 128);
 }
 
+/* What the window must take of its file: what the thread read of it, up to its size. */
+static __always_inline __u64 carry_whole(const struct carry *c)
+{
+    __u64 read = c->read > c->read_seen ? c->read : c->read_seen;
+    return c->size && c->size < read ? c->size : read;
+}
+
 /*
  * Reports the file a first flight or a reply carried, or drops it. A first flight is taken by
  * its charges, unless it holds a strict file read whole; a reply is taken by what went.
@@ -699,8 +706,7 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
                                         enum carry_end end)
 {
     bool flight = c->kind == CARRY_FLIGHT;
-    __u64 read = c->read > c->read_seen ? c->read : c->read_seen;
-    __u64 whole = c->size && c->size < read ? c->size : read;
+    __u64 whole = carry_whole(c);
     /*
      * A small first flight the connection went on from was a hello or a first request, and one
      * that took far more than a small or strict file in it did not carry that file.
@@ -774,7 +780,7 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
         return 0;
     }
     __u64 now = bpf_ktime_get_boot_ns();
-    if (c->kind != CARRY_EPISODE || !c->last_ns || now - c->last_ns <= cfg.corr_window_ns)
+    if (!c->last_ns || now - c->last_ns <= cfg.corr_window_ns)
         return 0;
     /* A send the socket is still taking keeps the window open. */
     __u32 seq = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
@@ -939,13 +945,13 @@ static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid)
 /*
  * A receive on a dialed connection ends its window once the connection has had the correlation
  * window to set itself up, or has taken its largest candidate whole; until then a receive is a
- * handshake's. A reply's window ends when a thread other than its own hears on its connection.
+ * handshake's. A reply's window ends when its own thread hears on its connection.
  */
 static __always_inline void carry_received(void *map, __u64 sk, __u64 now)
 {
     struct carry *c = carry_get(sk);
-    if (c && c->kind == CARRY_EPISODE && c->tid != (__u32)bpf_get_current_pid_tgid())
-        carry_close(map, sk, CARRY_NEXT, now);
+    if (c && c->kind == CARRY_EPISODE && c->tid == (__u32)bpf_get_current_pid_tgid())
+        carry_close(map, sk, CARRY_REPLY, now);
 
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (!d)
@@ -972,6 +978,26 @@ static __always_inline void carry_episode_end(struct thread_state *ts, __u64 now
     ts->episode_sock = 0;
     if (c && map && c->kind == CARRY_EPISODE && c->tid == (__u32)bpf_get_current_pid_tgid())
         carry_close(map, sk, end, now);
+}
+
+/*
+ * When the thread hears on another socket, its reply is judged unless it is still short of its
+ * file: the rest may follow once that socket is served, or the iterator judges it.
+ */
+static __always_inline void carry_heard_elsewhere(struct thread_state *ts, __u64 heard, __u64 now)
+{
+    __u64 sk = ts->episode_sock;
+    void *map = agg_map_now();
+    if (!sk || sk == heard || !map)
+        return;
+    struct carry *c = carry_get(sk);
+    if (!c || c->kind != CARRY_EPISODE || c->tid != (__u32)bpf_get_current_pid_tgid())
+        return;
+    carry_settle(map, sk, now);
+    if (c->wire * 10 < carry_whole(c) * 9)
+        return;
+    ts->episode_sock = 0;
+    carry_close(map, sk, CARRY_NEXT, now);
 }
 
 /* Brings the dialed window's copy of a candidate up to date, or adds it in a free place. */
