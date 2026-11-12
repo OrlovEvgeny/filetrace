@@ -8,6 +8,7 @@ struct ft_sim_options {
     uint64_t seed;
     uint64_t history_ns; /* past activity generated before the agent serves */
     uint32_t transfers;  /* concurrent transfers of the storm scenario */
+    bool lossless;       /* no events are lost, so the agent never reports itself degraded */
 };
 
 /* Takes effect when the backend is opened. */

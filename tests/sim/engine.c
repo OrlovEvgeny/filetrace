@@ -1218,6 +1218,11 @@ struct ft_sim_engine *ft_sim_engine_create(const struct ft_sim_scenario *sc, uin
     return e;
 }
 
+void ft_sim_engine_lose_nothing(struct ft_sim_engine *e)
+{
+    e->next_loss_ns = UINT64_MAX;
+}
+
 void ft_sim_engine_destroy(struct ft_sim_engine *e)
 {
     if (!e)

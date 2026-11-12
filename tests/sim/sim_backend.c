@@ -149,6 +149,8 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         return nullptr;
     }
 
+    if (options.lossless)
+        ft_sim_engine_lose_nothing(b->engine);
     make_history(b, now);
     catch_up(b);
     b->queued_seen = ft_sim_engine_queued_events(b->engine);

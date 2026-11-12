@@ -34,6 +34,8 @@ static void usage(FILE *out, const char *program)
             "  --history <time>     Past activity to generate before serving, such as\n"
             "                       10m or 2h (default: 0)\n"
             "  --transfers <n>      Concurrent transfers of storm (default: 10000)\n"
+            "  --no-loss            Lose no events; without it a few are lost every\n"
+            "                       minute or two, as on a loaded host\n"
             "  --log-level <level>  error, warn, info or debug (default: info)\n"
             "  -h, --help           Show this help\n"
             "\n"
@@ -99,6 +101,8 @@ int main(int argc, char **argv)
         } else if (option_value(argc, argv, &i, "--transfers", &value)) {
             ok = value && ft_parse_u32(value, &opt.transfers) && opt.transfers > 0 &&
                  opt.transfers <= MAX_TRANSFERS;
+        } else if (strcmp(arg, "--no-loss") == 0) {
+            opt.lossless = true;
         } else if (option_value(argc, argv, &i, "--log-level", &value)) {
             ok = value && ft_log_level_parse(value, &level);
         } else {
