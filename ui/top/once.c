@@ -326,6 +326,7 @@ static bool compose(const struct ft_top_model *m, const struct ft_top_options *o
         .mode = opt->mode,
         .previous_mode = FT_TOP_TRANSFERS,
         .full_paths = true,
+        .no_selection = true,
         .script_column = shows_script(m, opt),
         .delay_ns = opt->delay_ns,
         .window = opt->window,
