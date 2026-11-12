@@ -37,6 +37,21 @@ installs and reports diagnostics, and collects nothing.
 
 The documentation is at <https://filetrace.eorlov.org>.
 
+## Try it without installing
+
+On a Linux machine with kernel 6.1 or later, download the release archive and
+run the live view. Nothing is installed and no service is started: `top`
+collects by itself for as long as it runs.
+
+```sh
+v=$(curl -fsSL https://filetrace.eorlov.org/channels/stable) a=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -fsSL "https://filetrace.eorlov.org/dist/v$v-stable/filetrace-$v-linux-$a.tar.gz" | tar xz
+sudo "./filetrace-$v-linux-$a/bin/filetrace" top
+```
+
+Run this way, it shows activity from the moment it starts; the installed agent
+below keeps the history between runs and feeds the exporters.
+
 ## Install
 
 ```sh
