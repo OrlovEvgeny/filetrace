@@ -395,8 +395,115 @@ static void grouped_and_tree(void)
     fixture_free(&f);
 }
 
+static void leader(struct ft_rows *rows, uint32_t rank, uint32_t previous, const char *text,
+                   uint64_t bytes, const char *sender)
+{
+    struct ft_row_leader *row = calloc(1, sizeof(*row));
+
+    row->rank = rank;
+    row->previous_rank = previous;
+    row->bytes = bytes;
+    row->bytes_error = 5;
+    row->bytes_exact = bytes / 2;
+    row->transfers = 10 * rank;
+    row->destinations = rank;
+    row->files = 3;
+    row->file_size = text[0] == '/' && text[strlen(text) - 1] != '/' ? 4096 : 0;
+    row->dev = row->file_size ? 2049 : 0;
+    row->ino = row->file_size ? rank : 0;
+    row->first_wall_ns = WALL;
+    row->method = FT_METHOD_SENDFILE;
+    row->confidence = FT_CONF_EXACT;
+    row->flags = rank == 2 ? FT_LEADER_MORE_SENDERS : 0;
+    for (size_t i = 0; i < FT_LEADER_SLOTS; i++)
+        row->trend[i] = i;
+    ft_strlcpy(row->senders[0].name, sender, sizeof(row->senders[0].name));
+    row->senders[0].bytes = bytes;
+    row->senders[0].transfers = row->transfers;
+    ft_strlcpy(row->text, text, sizeof(row->text));
+    if (!row->file_size)
+        CHECK(ft_addr_parse("198.51.100.4", &row->remote));
+    CHECK(ft_rows_append(rows, row, offsetof(struct ft_row_leader, text) + strlen(text) + 1));
+    free(row);
+}
+
+static void leaders(void)
+{
+    struct ft_top_model *m = ft_top_model_create();
+    struct ft_rows ranking;
+    struct ft_rows directories;
+    struct ft_rows destinations;
+    struct ft_row_leader_summary summary = {
+        .window_ns = 3600 * SECOND,
+        .from_wall_ns = WALL - 3600 * SECOND,
+        .to_wall_ns = WALL,
+        .previous_from_wall_ns = WALL - 7200 * SECOND,
+        .bytes = 1000,
+        .bytes_exact = 500,
+        .top_bytes = 600,
+        .flags = FT_LEADERS_SHORT_HISTORY,
+    };
+
+    ft_rows_init(&ranking, FT_MSG_ROW_LEADER);
+    ft_rows_init(&directories, FT_MSG_ROW_LEADER);
+    ft_rows_init(&destinations, FT_MSG_ROW_LEADER);
+    leader(&ranking, 1, 2, "/var/lib/kafka/events-7.log", 9'007'199'254'740'993ull, "java");
+    leader(&ranking, 2, 0, AWKWARD, 200, "rclone");
+    leader(&directories, 1, 0, "/var/lib/kafka/", 400, "java");
+    leader(&destinations, 1, 0, "", 300, "nginx");
+    ft_top_set_leaders_request(m, FT_WINDOW_1H, FT_LEADER_FILE);
+    struct ft_top_leaders_sample sample = {
+        .window = FT_WINDOW_1H,
+        .key = FT_LEADER_FILE,
+        .by = FT_TOP_SORT_BYTES,
+        .summary = &summary,
+        .ranking = &ranking,
+        .directories = &directories,
+        .destinations = &destinations,
+    };
+    CHECK(ft_top_model_leaders(m, &sample));
+
+    char *text = document(m, FT_TOP_LEADERS, true);
+    CHECK(json_ok(text));
+    CHECK(has(text, "\"mode\": \"leaders\",\n  \"time\": \"2026-09-21T14:13:20.000Z\""));
+    CHECK(has(text, "\"window\": \"1h\",\n  \"by\": \"bytes\",\n  \"key\": \"file\","));
+    CHECK(has(text, "\"from\": \"2026-09-21T13:13:20.000Z\""));
+    CHECK(has(text, "\"previous_from\": \"2026-09-21T12:13:20.000Z\""));
+    CHECK(has(text, "\"short_history\": true,\n    \"capped\": false"));
+    CHECK(has(text, "\"files\": [\n    {\n      \"rank\": 1,\n      \"previous_rank\": 2,"));
+    CHECK(has(text, "\"bytes\": 9007199254740993,"));
+    CHECK(has(text, "\"previous_rank\": null,"));
+    CHECK(has(text, "\"file\": \"/srv/q\\\"u\\\\o\\nt\xc3\xa9.bin\""));
+    CHECK(has(text, "\"trend\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]"));
+    CHECK(has(text, "\"more_senders\": true"));
+    CHECK(has(text, "\"senders\": [\n        {\n          \"name\": \"java\","));
+    CHECK(has(text, "\"directories\": [\n    {\n      \"rank\": 1,"));
+    CHECK(has(text, "\"directory\": \"/var/lib/kafka/\""));
+    CHECK(has(text, "\"address\": \"198.51.100.4\""));
+    free(text);
+
+    /* The ranking is named after its key and is not given again as the side list. */
+    ft_top_set_leaders_request(m, FT_WINDOW_1H, FT_LEADER_DIRECTORY);
+    sample.key = FT_LEADER_DIRECTORY;
+    sample.ranking = &directories;
+    CHECK(ft_top_model_leaders(m, &sample));
+    text = document(m, FT_TOP_LEADERS, false);
+    CHECK(json_ok(text));
+    CHECK(has(text, "\"key\":\"directory\""));
+    CHECK(has(text, "\"directories\":[{\"rank\":1,"));
+    CHECK(!has(text, "\"files\":["));
+    CHECK(has(text, "\"destinations\":[{"));
+    free(text);
+
+    ft_rows_free(&ranking);
+    ft_rows_free(&directories);
+    ft_rows_free(&destinations);
+    ft_top_model_destroy(m);
+}
+
 void test_top_once(void)
 {
     documents();
     grouped_and_tree();
+    leaders();
 }
