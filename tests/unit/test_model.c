@@ -85,6 +85,26 @@ static void prefixes(void)
     CHECK(!ft_prefix_parse("/24", &net, &bits));
 }
 
+static void private_addresses(void)
+{
+    static const struct {
+        const char *text;
+        bool private;
+    } cases[] = {
+        {"10.0.5.22", true},    {"172.16.0.1", true},   {"172.31.255.255", true},
+        {"172.32.0.1", false},  {"192.168.1.1", true},  {"127.0.0.1", true},
+        {"169.254.10.1", true}, {"100.64.0.1", true},   {"100.128.0.1", false},
+        {"81.2.69.144", false}, {"::1", true},          {"fd12:3456::1", true},
+        {"fe80::1", true},      {"2001:db8::1", false},
+    };
+
+    for (size_t i = 0; i < FT_ARRAY_LEN(cases); i++) {
+        struct ft_endpoint ep;
+        CHECK(ft_addr_parse(cases[i].text, &ep));
+        CHECK(ft_addr_is_private(&ep) == cases[i].private);
+    }
+}
+
 static void names(void)
 {
     enum ft_confidence conf;
@@ -142,6 +162,7 @@ static void evidence(void)
 
 void test_model(void)
 {
+    private_addresses();
     endpoints();
     prefixes();
     names();

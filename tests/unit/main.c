@@ -9,12 +9,12 @@ int main(void)
         const char *name;
         void (*run)(void);
     } suites[] = {
-        {"format", test_format},   {"model", test_model},         {"table", test_table},
-        {"state", test_state},     {"agent", test_agent},         {"views", test_views},
-        {"config", test_config},   {"metrics", test_metrics},     {"grpc", test_grpc},
-        {"otlp", test_otlp},       {"process", test_process},     {"scripts", test_scripts},
-        {"leaders", test_leaders}, {"top_model", test_top_model}, {"top_filter", test_top_filter},
-        {"tui", test_tui},
+        {"format", test_format},   {"model", test_model},           {"table", test_table},
+        {"state", test_state},     {"agent", test_agent},           {"views", test_views},
+        {"config", test_config},   {"metrics", test_metrics},       {"grpc", test_grpc},
+        {"otlp", test_otlp},       {"process", test_process},       {"scripts", test_scripts},
+        {"leaders", test_leaders}, {"top_model", test_top_model},   {"top_filter", test_top_filter},
+        {"tui", test_tui},         {"top_source", test_top_source},
     };
 
     for (size_t i = 0; i < sizeof(suites) / sizeof(suites[0]); i++) {

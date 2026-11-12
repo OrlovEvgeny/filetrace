@@ -244,6 +244,22 @@ bool ft_addr_is_set(const struct ft_endpoint *ep)
     return ep->family != 0;
 }
 
+bool ft_addr_is_private(const struct ft_endpoint *ep)
+{
+    const uint8_t *a = ep->addr;
+
+    if (ep->family == 4)
+        return a[0] == 10 || a[0] == 127 || (a[0] == 172 && (a[1] & 0xf0) == 16) ||
+               (a[0] == 192 && a[1] == 168) || (a[0] == 169 && a[1] == 254) ||
+               (a[0] == 100 && (a[1] & 0xc0) == 64);
+    if (ep->family == 6) {
+        static const uint8_t loopback[16] = {[15] = 1};
+        return (a[0] & 0xfe) == 0xfc || (a[0] == 0xfe && (a[1] & 0xc0) == 0x80) ||
+               memcmp(a, loopback, sizeof(loopback)) == 0;
+    }
+    return false;
+}
+
 bool ft_addr_equal(const struct ft_endpoint *a, const struct ft_endpoint *b)
 {
     return a->family == b->family && memcmp(a->addr, b->addr, sizeof(a->addr)) == 0;

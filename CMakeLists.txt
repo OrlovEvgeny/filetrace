@@ -246,6 +246,7 @@ add_library(ft_cli STATIC
     cmd/queries.c
     cmd/resolve.c
     cmd/service.c
+    cmd/top.c
     cmd/views.c
     exporters/csv.c
     exporters/json.c
@@ -253,6 +254,9 @@ add_library(ft_cli STATIC
     ui/terminal.c
     ui/top/filter.c
     ui/top/model.c
+    ui/top/options.c
+    ui/top/source.c
+    ui/top/top.c
     ui/tui/canvas.c
     ui/tui/screen.c
     ui/tui/theme.c
