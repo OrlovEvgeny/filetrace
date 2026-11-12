@@ -15,7 +15,6 @@ constexpr int SHARE_CELLS = 15;
 constexpr int FILE_MIN = 30;
 constexpr unsigned PREVIOUS_TOP = 50;
 
-/* A run of text in one style; a line is drawn from several. */
 struct seg {
     const char *text;
     struct ft_style style;
@@ -29,7 +28,6 @@ static int segs_columns(const struct seg *segs, size_t n)
     return cols;
 }
 
-/* Draws the runs one after another, cutting the one that reaches the width with "…". */
 static int draw_segs(struct ft_canvas *c, int x, int y, int width, const struct seg *segs, size_t n)
 {
     int used = 0;
@@ -88,7 +86,6 @@ static void count_text(uint64_t n, const char *one, const char *many, char *buf,
     snprintf(buf, size, "%s %s", digits, n == 1 ? one : many);
 }
 
-/* A card's last line, in a wide form and in a form for a narrow card. */
 struct card_line {
     const struct seg *wide;
     size_t nwide;
@@ -96,7 +93,7 @@ struct card_line {
     size_t nnarrow;
 };
 
-/* A box with a label, a value and a line; without a value the agent has not answered yet. */
+/* value is nullptr until the agent has answered. */
 static void card(struct ft_top_draw *d, struct ft_rect box, const char *label, const char *value,
                  const struct card_line *line)
 {
@@ -432,7 +429,7 @@ static const struct column columns[COL_COUNT] = {
     [COL_TREND] = {"TREND", 12, false},
 };
 
-/* Where each column starts and how wide it is; width 0 when dropped. */
+/* A dropped column has width 0. */
 struct ranking_layout {
     int x[COL_COUNT];
     int w[COL_COUNT];
@@ -529,7 +526,7 @@ static void draw_ranking_header(struct ft_top_draw *d, struct ft_rect header,
     }
 }
 
-/* A path cut from its start with the directory dim and the name from name_offset bright. */
+/* Unlike ft_canvas_path, splits at name_offset, so a directory's own name is the bright part. */
 static void split_path_cell(struct ft_top_draw *d, int x, int y, int width, const char *path,
                             uint32_t name_offset, struct ft_style name)
 {

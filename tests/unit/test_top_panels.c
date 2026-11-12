@@ -86,10 +86,7 @@ static void leader(struct ft_rows *rows, uint32_t rank, const char *text, uint64
     free(row);
 }
 
-/*
- * Four nginx workers under their master, so that the tree folds two of them; a PHP request;
- * and a ranking whose rows hold the whole, half and a thousandth of the first one's bytes.
- */
+/* Four workers under one master, so that the tree folds three, and a ranking of three files. */
 static void fixture_init(struct fixture *f)
 {
     *f = (struct fixture){.m = ft_top_model_create()};

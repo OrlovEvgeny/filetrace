@@ -5,7 +5,10 @@
 #include <stdio.h>
 #include <string.h>
 
-/* A run of text in one style; a line is drawn from several. */
+/* Columns of the labels in the Inspect panel; the wide ones for the right half's facts. */
+constexpr int LABEL = 9;
+constexpr int WIDE_LABEL = 11;
+
 struct seg {
     const char *text;
     struct ft_style style;
@@ -21,7 +24,6 @@ static struct ft_style plain(enum ft_color fg)
     return ft_top_fg(fg, false);
 }
 
-/* Draws the runs one after another, cutting the one that reaches the width with "…". */
 static int draw_segs(struct ft_canvas *c, int x, int y, int width, const struct seg *segs, size_t n)
 {
     int used = 0;
@@ -31,7 +33,6 @@ static int draw_segs(struct ft_canvas *c, int x, int y, int width, const struct 
     return used;
 }
 
-/* A label in a column of its own and the runs after it. */
 static void label_line(struct ft_top_draw *d, int x, int y, int width, int label_width,
                        const char *label, const struct seg *segs, size_t n)
 {
@@ -216,10 +217,10 @@ void ft_top_draw_panel(struct ft_top_draw *d, struct ft_rect r)
 struct inspect {
     struct ft_top_draw *d;
     struct ft_rect r;
-    int lx; /* the left half */
-    int lw;
-    int rx; /* the right half */
-    int rw;
+    int left_x;
+    int left_w;
+    int right_x;
+    int right_w;
 };
 
 static int line_y(const struct inspect *in, int row)
@@ -227,10 +228,7 @@ static int line_y(const struct inspect *in, int row)
     return in->r.y + row;
 }
 
-/*
- * A title bar: prefix, middle and suffix on the left, the middle cut from its start when the
- * whole does not fit, and right at the right end.
- */
+/* The middle is cut from its start when prefix, middle and suffix do not fit together. */
 static void title_bar(struct ft_top_draw *d, struct ft_rect r, const char *prefix,
                       const char *middle, const char *suffix, const char *right)
 {
@@ -300,7 +298,7 @@ static void method_words(uint8_t method, uint8_t confidence, char *buf, size_t s
              ft_top_confidence_word(confidence, false));
 }
 
-/* The address a transfer goes to as the screen names it: the host name when one is known. */
+/* The host name instead of the address when one is known. */
 static void destination_text(const struct ft_top_transfer *t, char *buf, size_t size)
 {
     const struct ft_top_destination *dest = t->destination;
@@ -319,7 +317,7 @@ static void percent_cell(struct ft_top_draw *d, int x, int y, int width, double 
     ft_canvas_text_right(d->canvas, x, y, width, plain(FT_COLOR_GREEN), text);
 }
 
-/* A transfer's rate, right-aligned; "done" once it has finished. */
+/* "done" once the transfer has finished. */
 static void rate_cell(struct ft_top_draw *d, int x, int y, int width,
                       const struct ft_top_transfer *t)
 {
@@ -355,12 +353,12 @@ static void process_transfers(struct inspect *in, const struct ft_top_transfer *
                               size_t n)
 {
     struct ft_top_draw *d = in->d;
-    int x = in->rx;
+    int x = in->right_x;
     int dest_w = 22;
-    int file_w = in->rw - 8 - dest_w - 14;
+    int file_w = in->right_w - 8 - dest_w - 14;
     if (file_w < 16) {
         dest_w = 18;
-        file_w = in->rw - 8 - dest_w - 14;
+        file_w = in->right_w - 8 - dest_w - 14;
     }
     file_w = file_w > 29 ? 29 : file_w;
     int dest_x = x + 8 + file_w;
@@ -368,13 +366,14 @@ static void process_transfers(struct inspect *in, const struct ft_top_transfer *
     int done_x = rate_x + 7;
     int y = line_y(in, 1);
 
-    ft_canvas_text(d->canvas, x, y, in->rw, dim(), "ACTIVE");
+    ft_canvas_text(d->canvas, x, y, in->right_w, dim(), "ACTIVE");
     ft_canvas_text(d->canvas, x + 8, y, file_w, dim(), "FILE");
     ft_canvas_text(d->canvas, dest_x, y, dest_w, dim(), "DESTINATION");
     ft_canvas_text_right(d->canvas, rate_x, y, 7, dim(), "RATE");
     ft_canvas_text_right(d->canvas, done_x, y, 7, dim(), "DONE");
     if (n == 0) {
-        ft_canvas_text(d->canvas, x + 8, line_y(in, 2), in->rw - 8, dim(), "no active transfers");
+        ft_canvas_text(d->canvas, x + 8, line_y(in, 2), in->right_w - 8, dim(),
+                       "no active transfers");
         return;
     }
     size_t shown = n > 3 ? 2 : n;
@@ -393,7 +392,7 @@ static void process_transfers(struct inspect *in, const struct ft_top_transfer *
         percent_cell(d, done_x, y, 7, t->progress);
     }
     if (n > 3)
-        more_line(d, x + 8, line_y(in, 4), in->rw - 8, n - 2);
+        more_line(d, x + 8, line_y(in, 4), in->right_w - 8, n - 2);
 }
 
 static void inspect_process(struct inspect *in, const struct ft_top_process *p,
@@ -403,8 +402,8 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
     char pid[16];
     char title[256];
     char text[256];
-    int lx = in->lx;
-    int lw = in->lw;
+    int lx = in->left_x;
+    int lw = in->left_w;
 
     snprintf(pid, sizeof(pid), "%" PRIu32, p->pid);
     snprintf(title, sizeof(title), "%s%s", p->title[0] ? " " : "", p->title);
@@ -415,7 +414,7 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
     bool listed = d->ui->mode == FT_TOP_PROCESSES || process_listed(d->model, p);
     const char *exe = p->exe && p->exe[0] ? p->exe : p->comm;
     const struct seg exe_segs[] = {{exe && exe[0] ? exe : "—", plain(FT_COLOR_TEXT)}};
-    label_line(d, lx, line_y(in, 1), lw, 9, "exe", exe_segs, 1);
+    label_line(d, lx, line_y(in, 1), lw, LABEL, "exe", exe_segs, 1);
 
     char ppid[16];
     snprintf(ppid, sizeof(ppid), "%" PRIu32, p->ppid);
@@ -426,7 +425,7 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
         {"   cwd ", dim()},
         {p->cwd && p->cwd[0] ? p->cwd : "—", plain(FT_COLOR_TEXT)},
     };
-    label_line(d, lx, line_y(in, 2), lw, 9, "user", user_segs, FT_ARRAY_LEN(user_segs));
+    label_line(d, lx, line_y(in, 2), lw, LABEL, "user", user_segs, FT_ARRAY_LEN(user_segs));
 
     /* A transfer's own script differs from its process's only for a PHP request. */
     const struct ft_top_transfer *top = from                      ? from
@@ -438,7 +437,7 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
         {script[0] ? script : "—", script[0] ? ft_top_fg(FT_COLOR_AMBER, true) : dim()},
         {note, dim()},
     };
-    label_line(d, lx, line_y(in, 3), lw, 9, "script", script_segs, FT_ARRAY_LEN(script_segs));
+    label_line(d, lx, line_y(in, 3), lw, LABEL, "script", script_segs, FT_ARRAY_LEN(script_segs));
 
     uint8_t method = listed ? p->method : from ? from->method : FT_METHOD_NONE;
     uint8_t confidence = listed ? p->confidence : from ? from->confidence : FT_CONF_UNKNOWN;
@@ -449,7 +448,7 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
         {text, plain(ft_top_method_color(method))},
         {explain, dim()},
     };
-    label_line(d, lx, line_y(in, 4), lw, 9, "method", method_segs,
+    label_line(d, lx, line_y(in, 4), lw, LABEL, "method", method_segs,
                method == FT_METHOD_NONE ? 0 : FT_ARRAY_LEN(method_segs));
 
     char total[24];
@@ -472,9 +471,9 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
         {" since the agent started", plain(FT_COLOR_TEXT)},
     };
     if (listed)
-        label_line(d, lx, line_y(in, 5), lw, 9, "total", total_segs, FT_ARRAY_LEN(total_segs));
+        label_line(d, lx, line_y(in, 5), lw, LABEL, "total", total_segs, FT_ARRAY_LEN(total_segs));
     else
-        label_line(d, lx, line_y(in, 5), lw, 9, "total", total_only, FT_ARRAY_LEN(total_only));
+        label_line(d, lx, line_y(in, 5), lw, LABEL, "total", total_only, FT_ARRAY_LEN(total_only));
 
     if (listed)
         process_transfers(in, p->transfers, p->ntransfers);
@@ -482,7 +481,7 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
         process_transfers(in, from ? &from : nullptr, from ? 1 : 0);
     static const char *const keys[] = {"f", "follow",          "c", "copy path", "e", "events",
                                        "o", "open in Leaders", "j", "JSON"};
-    hint_line(d, in->rx, line_y(in, 5), in->rw, keys, FT_ARRAY_LEN(keys) / 2);
+    hint_line(d, in->right_x, line_y(in, 5), in->right_w, keys, FT_ARRAY_LEN(keys) / 2);
 }
 
 static void subnet_text(const struct ft_endpoint *address, char *buf, size_t size)
@@ -511,8 +510,8 @@ static void inspect_destination(struct inspect *in, const struct ft_top_destinat
              host[0] ? " · " : "", host, seen[0] ? " · first seen " : "", seen);
     inspect_frame(in, "F8 Inspect · destination ", dest->label, suffix);
 
-    int x = in->lx;
-    int file_w = in->lw - 35 > 37 ? 37 : in->lw - 35;
+    int x = in->left_x;
+    int file_w = in->left_w - 35 > 37 ? 37 : in->left_w - 35;
     int proc_x = x + file_w;
     int rate_x = proc_x + 21;
     int done_x = rate_x + 8;
@@ -563,16 +562,15 @@ static void inspect_destination(struct inspect *in, const struct ft_top_destinat
         {"method ", dim()},
         {method, plain(ft_top_method_color(dest->method))},
     };
-    draw_segs(d->canvas, x, line_y(in, 5), in->lw, info, FT_ARRAY_LEN(info));
+    draw_segs(d->canvas, x, line_y(in, 5), in->left_w, info, FT_ARRAY_LEN(info));
 
-    constexpr int LABEL = 11;
     char total[24];
     ft_top_format_size(dest->total, total, sizeof(total));
     const struct seg total_segs[] = {
         {total, plain(FT_COLOR_BRIGHT)},
         {" since the agent started", plain(FT_COLOR_TEXT)},
     };
-    label_line(d, in->rx, line_y(in, 1), in->rw, LABEL, "total", total_segs, 2);
+    label_line(d, in->right_x, line_y(in, 1), in->right_w, WIDE_LABEL, "total", total_segs, 2);
 
     char subnet[96];
     char hosts[48];
@@ -585,7 +583,7 @@ static void inspect_destination(struct inspect *in, const struct ft_top_destinat
         {count, plain(FT_COLOR_BRIGHT)},
         {hosts, plain(FT_COLOR_TEXT)},
     };
-    label_line(d, in->rx, line_y(in, 2), in->rw, LABEL, "subnet", subnet_segs,
+    label_line(d, in->right_x, line_y(in, 2), in->right_w, WIDE_LABEL, "subnet", subnet_segs,
                dest->address.family ? FT_ARRAY_LEN(subnet_segs) : 0);
 
     const struct ft_top_process *p = dest->top_process;
@@ -602,12 +600,12 @@ static void inspect_destination(struct inspect *in, const struct ft_top_destinat
             {" · cwd ", plain(FT_COLOR_TEXT)},
             {p->cwd && p->cwd[0] ? p->cwd : "—", plain(FT_COLOR_TEXT)},
         };
-        label_line(d, in->rx, line_y(in, 3), in->rw, LABEL, "user", user_segs,
+        label_line(d, in->right_x, line_y(in, 3), in->right_w, WIDE_LABEL, "user", user_segs,
                    FT_ARRAY_LEN(user_segs));
     }
     static const char *const keys[] = {
         "f", "follow", "o", "open in Leaders", "e", "events", "c", "copy", "j", "JSON"};
-    hint_line(d, in->rx, line_y(in, 5), in->rw, keys, FT_ARRAY_LEN(keys) / 2);
+    hint_line(d, in->right_x, line_y(in, 5), in->right_w, keys, FT_ARRAY_LEN(keys) / 2);
 }
 
 static void share_bar(struct ft_top_draw *d, int x, int y, int cells, double share, uint8_t method)
@@ -648,8 +646,8 @@ static void inspect_file(struct inspect *in, const struct ft_top_file *f)
     }
     inspect_frame(in, "F8 Inspect · file ", f->path, suffix);
 
-    int x = in->lx;
-    int name_w = in->lw - 35 > 20 ? 20 : in->lw - 35;
+    int x = in->left_x;
+    int name_w = in->left_w - 35 > 20 ? 20 : in->left_w - 35;
     int pid_x = x + name_w;
     int xfers_x = pid_x + 6;
     int rate_x = xfers_x + 10;
@@ -676,15 +674,15 @@ static void inspect_file(struct inspect *in, const struct ft_top_file *f)
         share_bar(d, share_x, y, 8, f->rate ? (double)s->rate / (double)f->rate : 0, f->method);
     }
     if (f->nsenders > 4)
-        more_line(d, x, line_y(in, 5), in->lw, f->nsenders - 3);
+        more_line(d, x, line_y(in, 5), in->left_w, f->nsenders - 3);
 
-    int dest_w = in->rw - 14 > 27 ? 27 : in->rw - 14;
-    int rrate_x = in->rx + dest_w;
+    int dest_w = in->right_w - 14 > 27 ? 27 : in->right_w - 14;
+    int rrate_x = in->right_x + dest_w;
     int rdone_x = rrate_x + 7;
     char header[48];
     snprintf(header, sizeof(header), "TOP DESTINATIONS (%" PRIu32 ")", f->destinations);
     y = line_y(in, 1);
-    ft_canvas_text_cut(d->canvas, in->rx, y, dest_w - 1, dim(), header, FT_CUT_END);
+    ft_canvas_text_cut(d->canvas, in->right_x, y, dest_w - 1, dim(), header, FT_CUT_END);
     ft_canvas_text_right(d->canvas, rrate_x, y, 7, dim(), "RATE");
     ft_canvas_text_right(d->canvas, rdone_x, y, 7, dim(), "DONE");
     for (size_t i = 0; i < f->ntransfers && i < 3; i++) {
@@ -692,14 +690,14 @@ static void inspect_file(struct inspect *in, const struct ft_top_file *f)
         char text[160];
         y = line_y(in, 2 + (int)i);
         destination_text(t, text, sizeof(text));
-        middle_cut(d->canvas, in->rx, y, dest_w - 1, plain(ft_top_egress_color(t->is_public)),
+        middle_cut(d->canvas, in->right_x, y, dest_w - 1, plain(ft_top_egress_color(t->is_public)),
                    text);
         rate_cell(d, rrate_x, y, 7, t);
         percent_cell(d, rdone_x, y, 7, t->progress);
     }
     static const char *const keys[] = {"d", "all destinations", "o", "open in Leaders",
                                        "c", "copy path",        "j", "JSON"};
-    hint_line(d, in->rx, line_y(in, 5), in->rw, keys, FT_ARRAY_LEN(keys) / 2);
+    hint_line(d, in->right_x, line_y(in, 5), in->right_w, keys, FT_ARRAY_LEN(keys) / 2);
 }
 
 static const char *leader_noun(enum ft_leader_key key)
@@ -759,8 +757,8 @@ static void inspect_leader(struct inspect *in, const struct ft_top_leader *l)
             : row->text;
     inspect_frame(in, prefix, name, suffix);
 
-    int x = in->lx;
-    int name_w = in->lw - 29 > 20 ? 20 : in->lw - 29;
+    int x = in->left_x;
+    int name_w = in->left_w - 29 > 20 ? 20 : in->left_w - 29;
     int xfers_x = x + name_w;
     int bytes_x = xfers_x + 10;
     int share_x = bytes_x + 12;
@@ -783,10 +781,9 @@ static void inspect_leader(struct inspect *in, const struct ft_top_leader *l)
                   row->method);
     }
     if (row->flags & FT_LEADER_MORE_SENDERS)
-        ft_canvas_text(d->canvas, x, line_y(in, 2 + (int)listed), in->lw, dim(),
+        ft_canvas_text(d->canvas, x, line_y(in, 2 + (int)listed), in->left_w, dim(),
                        "… and more senders");
 
-    constexpr int LABEL = 11;
     char rank[96];
     const char *by = all->by == FT_TOP_SORT_TRANSFERS      ? "transfers"
                      : all->by == FT_TOP_SORT_DESTINATIONS ? "destinations"
@@ -805,7 +802,7 @@ static void inspect_leader(struct inspect *in, const struct ft_top_leader *l)
     }
     snprintf(rank, sizeof(rank), "#%" PRIu32 " by %s%s", row->rank, by, change);
     const struct seg rank_segs[] = {{rank, plain(FT_COLOR_TEXT)}};
-    label_line(d, in->rx, line_y(in, 1), in->rw, LABEL, "rank", rank_segs, 1);
+    label_line(d, in->right_x, line_y(in, 1), in->right_w, WIDE_LABEL, "rank", rank_segs, 1);
 
     char count[32];
     char what[96];
@@ -815,18 +812,18 @@ static void inspect_leader(struct inspect *in, const struct ft_top_leader *l)
         snprintf(what, sizeof(what), "%s%s",
                  row->destinations > FT_LEADER_EXACT_DESTINATIONS ? "about " : "", dests);
         const struct seg seg_dests[] = {{what, plain(FT_COLOR_TEXT)}};
-        label_line(d, in->rx, line_y(in, 2), in->rw, LABEL, "sent to", seg_dests, 1);
+        label_line(d, in->right_x, line_y(in, 2), in->right_w, WIDE_LABEL, "sent to", seg_dests, 1);
     } else {
         count_words(row->files, "file", "files", count, sizeof(count));
         snprintf(what, sizeof(what), "%s to %s", count, dests);
         const struct seg seg_files[] = {{what, plain(FT_COLOR_TEXT)}};
-        label_line(d, in->rx, line_y(in, 2), in->rw, LABEL, "holds", seg_files, 1);
+        label_line(d, in->right_x, line_y(in, 2), in->right_w, WIDE_LABEL, "holds", seg_files, 1);
     }
 
     char method[64];
     method_words(row->method, row->confidence, method, sizeof(method));
     const struct seg method_segs[] = {{method, plain(ft_top_method_color(row->method))}};
-    label_line(d, in->rx, line_y(in, 3), in->rw, LABEL, "method", method_segs, 1);
+    label_line(d, in->right_x, line_y(in, 3), in->right_w, WIDE_LABEL, "method", method_segs, 1);
 
     char first[24];
     char last[24];
@@ -835,15 +832,17 @@ static void inspect_leader(struct inspect *in, const struct ft_top_leader *l)
     ft_format_clock_local(row->last_wall_ns, last, sizeof(last));
     snprintf(span, sizeof(span), "%s – %s", first, last);
     const struct seg span_segs[] = {{span, plain(FT_COLOR_TEXT)}};
-    label_line(d, in->rx, line_y(in, 4), in->rw, LABEL, "sent", span_segs, 1);
+    label_line(d, in->right_x, line_y(in, 4), in->right_w, WIDE_LABEL, "sent", span_segs, 1);
 
     static const char *const file_keys[] = {"f", "follow",    "d", "destinations", "e", "events",
                                             "c", "copy path", "j", "JSON"};
     static const char *const other_keys[] = {"f", "follow", "c", "copy", "j", "JSON"};
     if (file)
-        hint_line(d, in->rx, line_y(in, 5), in->rw, file_keys, FT_ARRAY_LEN(file_keys) / 2);
+        hint_line(d, in->right_x, line_y(in, 5), in->right_w, file_keys,
+                  FT_ARRAY_LEN(file_keys) / 2);
     else
-        hint_line(d, in->rx, line_y(in, 5), in->rw, other_keys, FT_ARRAY_LEN(other_keys) / 2);
+        hint_line(d, in->right_x, line_y(in, 5), in->right_w, other_keys,
+                  FT_ARRAY_LEN(other_keys) / 2);
 }
 
 static void inspect_section(struct inspect *in, const struct ft_top_section *s)
@@ -867,19 +866,19 @@ static void inspect_section(struct inspect *in, const struct ft_top_section *s)
     inspect_frame(in, prefix, s->title, "");
     ft_top_format_rate(s->rate, rate, sizeof(rate));
     const struct seg rate_segs[] = {{rate, ft_top_rate_style(s->rate)}};
-    label_line(d, in->lx, line_y(in, 1), in->lw, 9, "rate", rate_segs, 1);
+    label_line(d, in->left_x, line_y(in, 1), in->left_w, LABEL, "rate", rate_segs, 1);
     count_words(s->rows, members[d->ui->mode][0], members[d->ui->mode][1], text, sizeof(text));
     const struct seg member_segs[] = {{text, plain(FT_COLOR_TEXT)}};
-    label_line(d, in->lx, line_y(in, 2), in->lw, 9, "holds", member_segs, 1);
+    label_line(d, in->left_x, line_y(in, 2), in->left_w, LABEL, "holds", member_segs, 1);
     const uint32_t counts[] = {s->processes, s->files, s->destinations};
     const char *const labels[] = {"procs", "files", "dests"};
     for (size_t i = 0; i < FT_ARRAY_LEN(counts); i++) {
         ft_format_count(counts[i], text, sizeof(text));
         const struct seg segs[] = {{text, plain(FT_COLOR_BRIGHT)}};
-        label_line(d, in->lx, line_y(in, 3 + (int)i), in->lw, 9, labels[i], segs, 1);
+        label_line(d, in->left_x, line_y(in, 3 + (int)i), in->left_w, LABEL, labels[i], segs, 1);
     }
     static const char *const keys[] = {"Enter", "open or close", "+", "expand", "-", "collapse"};
-    hint_line(d, in->rx, line_y(in, 5), in->rw, keys, FT_ARRAY_LEN(keys) / 2);
+    hint_line(d, in->right_x, line_y(in, 5), in->right_w, keys, FT_ARRAY_LEN(keys) / 2);
 }
 
 static void inspect_fold(struct inspect *in, const struct ft_top_fold *f)
@@ -898,18 +897,18 @@ static void inspect_fold(struct inspect *in, const struct ft_top_fold *f)
         len += w > 0 ? (size_t)w : 0;
     }
     const struct seg pid_segs[] = {{text, dim()}};
-    label_line(d, in->lx, line_y(in, 1), in->lw, 9, "pids", pid_segs, 1);
+    label_line(d, in->left_x, line_y(in, 1), in->left_w, LABEL, "pids", pid_segs, 1);
     char rate[24];
     ft_top_format_rate(f->rate, rate, sizeof(rate));
     const struct seg rate_segs[] = {{rate, ft_top_rate_style(f->rate)}};
-    label_line(d, in->lx, line_y(in, 2), in->lw, 9, "rate", rate_segs, 1);
+    label_line(d, in->left_x, line_y(in, 2), in->left_w, LABEL, "rate", rate_segs, 1);
     char total[24];
     ft_top_format_size(f->total, total, sizeof(total));
     const struct seg total_segs[] = {
         {total, plain(FT_COLOR_BRIGHT)},
         {" since the agent started", plain(FT_COLOR_TEXT)},
     };
-    label_line(d, in->lx, line_y(in, 3), in->lw, 9, "total", total_segs, 2);
+    label_line(d, in->left_x, line_y(in, 3), in->left_w, LABEL, "total", total_segs, 2);
     char files[24];
     char dests[24];
     ft_format_count(f->files, files, sizeof(files));
@@ -920,13 +919,13 @@ static void inspect_fold(struct inspect *in, const struct ft_top_fold *f)
         {dests, plain(FT_COLOR_BRIGHT)},
         {f->destinations == 1 ? " destination" : " destinations", plain(FT_COLOR_TEXT)},
     };
-    label_line(d, in->lx, line_y(in, 4), in->lw, 9, "active", active_segs,
+    label_line(d, in->left_x, line_y(in, 4), in->left_w, LABEL, "active", active_segs,
                FT_ARRAY_LEN(active_segs));
     const struct seg method_segs[] = {
         {ft_top_method_word(f->method), plain(ft_top_method_color(f->method))}};
-    label_line(d, in->lx, line_y(in, 5), in->lw, 9, "method", method_segs, 1);
+    label_line(d, in->left_x, line_y(in, 5), in->left_w, LABEL, "method", method_segs, 1);
     static const char *const keys[] = {"+", "list them"};
-    hint_line(d, in->rx, line_y(in, 5), in->rw, keys, FT_ARRAY_LEN(keys) / 2);
+    hint_line(d, in->right_x, line_y(in, 5), in->right_w, keys, FT_ARRAY_LEN(keys) / 2);
 }
 
 void ft_top_draw_inspect(struct ft_top_draw *d, struct ft_rect r)
@@ -935,14 +934,14 @@ void ft_top_draw_inspect(struct ft_top_draw *d, struct ft_rect r)
     struct inspect in = {
         .d = d,
         .r = r,
-        .lx = r.x + 2,
-        .rx = r.x + r.w / 2 + 1,
+        .left_x = r.x + 2,
+        .right_x = r.x + r.w / 2 + 1,
     };
 
     if (r.w < 4 || r.h < 2)
         return;
-    in.lw = in.rx - 2 - in.lx;
-    in.rw = r.x + r.w - 2 - in.rx;
+    in.left_w = in.right_x - 2 - in.left_x;
+    in.right_w = r.x + r.w - 2 - in.right_x;
     struct ft_rect clip = ft_canvas_clip(d->canvas, r);
 
     size_t index = ft_top_selected(d->model, mode);
@@ -951,7 +950,8 @@ void ft_top_draw_inspect(struct ft_top_draw *d, struct ft_rect r)
     if (!row || (mode == FT_TOP_LEADERS &&
                  (d->ui->leaders_unsupported || !ft_top_leaders(d->model)->answered))) {
         inspect_frame(&in, "F8 Inspect", "", "");
-        ft_canvas_text(d->canvas, in.lx, line_y(&in, 1), in.lw, dim(), "Nothing is selected.");
+        ft_canvas_text(d->canvas, in.left_x, line_y(&in, 1), in.left_w, dim(),
+                       "Nothing is selected.");
         ft_canvas_clip(d->canvas, clip);
         return;
     }
