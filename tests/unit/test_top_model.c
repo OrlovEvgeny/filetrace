@@ -690,6 +690,57 @@ static void churn(void)
     fixture_free(&f);
 }
 
+/* Rows cut at every length, inside a field too, never grow a table past what was fed. */
+static void short_rows(void)
+{
+    constexpr uint32_t N = 8;
+    static const struct ft_row_transfer zero;
+    struct ft_row_transfer *t = calloc(1, sizeof(*t));
+    struct ft_row_process *p = calloc(1, sizeof(*p));
+    struct ft_process_strings text = {"worker --serve", "/srv", "/srv/run.php"};
+
+    ft_strlcpy(t->path, "/srv/data/file.bin", FT_PATH_MAX);
+    size_t lead = strlen(t->path) + 1;
+    size_t transfer_size = offsetof(struct ft_row_transfer, path) + lead +
+                           ft_process_strings_pack(t->path + lead, sizeof(t->path) - lead, &text);
+    size_t process_size = offsetof(struct ft_row_process, text) +
+                          ft_process_strings_pack(p->text, sizeof(p->text), &text);
+    size_t longest = transfer_size > process_size ? transfer_size : process_size;
+
+    for (size_t cut = 0; cut <= longest; cut++) {
+        struct fixture f;
+        fixture_init(&f);
+        /* A row of zeros is known first, so a reader that zeros a cut field counts nothing new. */
+        CHECK(ft_rows_append(&f.transfers, &zero, offsetof(struct ft_row_transfer, path) + 1));
+        sample(&f, 0);
+
+        for (uint32_t k = 1; k <= N; k++) {
+            t->id = k * 0x0101'0101'0101'0101ULL;
+            t->pid = k * 0x0101'0101u;
+            t->ppid = 1;
+            t->rate = 1000 * k;
+            t->dev = 2049;
+            t->ino = k;
+            t->flags =
+                FT_XFER_ACTIVE | FT_XFER_FILE_KNOWN | FT_XFER_PATH_KNOWN | FT_XFER_PROCESS_TEXT;
+            t->remote.family = 4;
+            memset(t->remote.addr, (int)k, sizeof(t->remote.addr));
+            CHECK(ft_rows_append(&f.transfers, t, cut < transfer_size ? cut : transfer_size));
+            p->pid = t->pid;
+            p->ppid = 1;
+            CHECK(ft_rows_append(&f.processes, p, cut < process_size ? cut : process_size));
+        }
+        sample(&f, 1);
+        CHECK(ft_top_row_count(f.m, FT_TOP_TRANSFERS) <= N + 1);
+        CHECK(ft_top_row_count(f.m, FT_TOP_FILES) <= N + 1);
+        CHECK(ft_top_row_count(f.m, FT_TOP_DESTINATIONS) <= N + 1);
+        CHECK(ft_top_row_count(f.m, FT_TOP_PROCESSES) <= 2 * N + 2);
+        fixture_free(&f);
+    }
+    free(t);
+    free(p);
+}
+
 static void leader(struct ft_rows *rows, uint32_t rank, uint32_t previous, const char *path,
                    uint64_t bytes, const char *sender)
 {
@@ -781,5 +832,6 @@ void test_top_model(void)
     groups();
     search();
     churn();
+    short_rows();
     leaders();
 }

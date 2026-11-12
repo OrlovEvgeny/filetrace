@@ -373,6 +373,8 @@ static double half_power(double x)
 
 static struct ft_top_process_entry *new_process(struct ft_top_model *m, uint32_t pid)
 {
+    if (m->nprocesses[m->now] == m->processes_cap[m->now])
+        return nullptr;
     struct ft_top_process_entry *p = &m->processes[m->now][m->nprocesses[m->now]];
     *p = (struct ft_top_process_entry){0};
     p->pub.pid = pid;
@@ -410,11 +412,13 @@ static void add_processes(struct ft_top_model *m, const struct ft_rows *rows,
 
         const char *text[3];
         size_t len[3];
-        size_t size = rows->sizes[i];
-        const char *tail = (const char *)rows->data + rows->offsets[i] + FIXED;
-        unpack_strings(tail, size > FIXED ? size - FIXED : 0, text, len);
+        size_t tail_len = rows->sizes[i] > FIXED ? rows->sizes[i] - FIXED : 0;
+        const char *tail = tail_len ? (const char *)rows->data + rows->offsets[i] + FIXED : "";
+        unpack_strings(tail, tail_len, text, len);
 
         struct ft_top_process_entry *p = new_process(m, row->pid);
+        if (!p)
+            continue;
         const struct ft_top_user *u = user_of(m, row->uid);
         p->pub.ppid = row->ppid;
         p->pub.uid = row->uid;
@@ -439,6 +443,8 @@ static uint32_t adopt_process(struct ft_top_model *m, const struct ft_top_proces
         return *found;
 
     struct ft_top_process_entry *p = new_process(m, old->pid);
+    if (!p)
+        return FT_TOP_NONE;
     const char *text[3] = {old->command_line, old->cwd, old->script};
     size_t len[3] = {strlen(old->command_line), strlen(old->cwd), strlen(old->script)};
     p->pub.ppid = old->ppid;
@@ -521,6 +527,33 @@ static size_t take_transfers(struct ft_top_model *m, const struct ft_rows *rows,
 
         if (found && m->transfers[*found].seen == m->samples)
             continue;
+        if (!found && m->ntransfers == m->transfers_cap)
+            continue;
+
+        size_t size = rows->sizes[i];
+        size_t tail_len = size > FIXED ? size - FIXED : 0;
+        const char *tail = tail_len ? (const char *)rows->data + rows->offsets[i] + FIXED : "";
+        size_t path_len = strnlen(tail, tail_len < FT_PATH_MAX - 1 ? tail_len : FT_PATH_MAX - 1);
+        const char *text[3] = {"", "", ""};
+        size_t len[3] = {0, 0, 0};
+        if ((row->flags & FT_XFER_PROCESS_TEXT) && path_len + 1 < tail_len)
+            unpack_strings(tail + path_len + 1, tail_len - path_len - 1, text, len);
+
+        uint32_t process;
+        uint32_t *proc = ft_top_map_find(&m->process_index,
+                                         (struct ft_top_key){row->pid, 0, FT_TOP_KEY_PROCESS});
+        if (proc) {
+            process = *proc;
+        } else {
+            struct ft_top_process_entry *p = new_process(m, row->pid);
+            if (!p)
+                continue;
+            p->pub.ppid = row->ppid;
+            p->pub.user = "";
+            set_process_text(pool, &p->pub, row->comm, row->exe, text, len);
+            process = (uint32_t)(m->nprocesses[m->now] - 1);
+        }
+
         if (found) {
             e = &m->transfers[*found];
             double raw = (double)row->rate;
@@ -532,27 +565,7 @@ static size_t take_transfers(struct ft_top_model *m, const struct ft_rows *rows,
             m->ntransfers++;
             started++;
         }
-
-        size_t size = rows->sizes[i];
-        size_t tail_len = size > FIXED ? size - FIXED : 0;
-        const char *tail = (const char *)rows->data + rows->offsets[i] + FIXED;
-        size_t path_len = strnlen(tail, tail_len < FT_PATH_MAX - 1 ? tail_len : FT_PATH_MAX - 1);
-        const char *text[3] = {"", "", ""};
-        size_t len[3] = {0, 0, 0};
-        if ((row->flags & FT_XFER_PROCESS_TEXT) && path_len + 1 < tail_len)
-            unpack_strings(tail + path_len + 1, tail_len - path_len - 1, text, len);
-
-        uint32_t *proc = ft_top_map_find(&m->process_index,
-                                         (struct ft_top_key){row->pid, 0, FT_TOP_KEY_PROCESS});
-        if (proc) {
-            e->process = *proc;
-        } else {
-            struct ft_top_process_entry *p = new_process(m, row->pid);
-            p->pub.ppid = row->ppid;
-            p->pub.user = "";
-            set_process_text(pool, &p->pub, row->comm, row->exe, text, len);
-            e->process = (uint32_t)(m->nprocesses[m->now] - 1);
-        }
+        e->process = process;
         const struct ft_top_process *p = &m->processes[m->now][e->process].pub;
 
         struct ft_top_transfer *t = &e->pub;
@@ -596,7 +609,8 @@ static void finish_transfers(struct ft_top_model *m, uint64_t mono_ns, struct ft
             continue;
         bool keep =
             is_selected(m, e->key) && (!e->pub.done || mono_ns - e->done_mono_ns < FT_TOP_DONE_NS);
-        if (!keep) {
+        uint32_t process = keep ? adopt_process(m, &old[e->process], pool) : FT_TOP_NONE;
+        if (process == FT_TOP_NONE) {
             remove_transfer(m, i);
             continue;
         }
@@ -606,7 +620,7 @@ static void finish_transfers(struct ft_top_model *m, uint64_t mono_ns, struct ft
         }
         e->raw_rate = 0;
         e->pub.rate = 0;
-        e->process = adopt_process(m, &old[e->process], pool);
+        e->process = process;
 
         struct ft_top_transfer *t = &e->pub;
         const char *script = t->script;
@@ -737,6 +751,8 @@ static void update_destinations(struct ft_top_model *m, uint64_t dt_ns)
         struct ft_top_key key = address_key(&address, FT_TOP_KEY_DESTINATION);
         uint32_t *found = ft_top_map_find(&m->destination_index, key);
         struct ft_top_destination_entry *d;
+        if (!found && m->ndestinations == m->destinations_cap)
+            continue;
         if (found) {
             d = &m->destinations[*found];
         } else {
@@ -951,13 +967,15 @@ static void mark_stale(struct ft_top_model *m)
         m->modes[i].stale = true;
 }
 
-/* Copies a field of a row as received, or zeros when the row is too short to hold it. */
+/* Copies a field of a row as ft_rows_get does: the bytes present, then zeros. */
 static void peek(const struct ft_rows *rows, size_t i, size_t offset, void *out, size_t size)
 {
-    if (rows->sizes[i] >= offset + size)
-        memcpy(out, rows->data + rows->offsets[i] + offset, size);
-    else
-        memset(out, 0, size);
+    size_t present = rows->sizes[i] > offset ? rows->sizes[i] - offset : 0;
+    if (present > size)
+        present = size;
+    if (present)
+        memcpy(out, rows->data + rows->offsets[i] + offset, present);
+    memset((unsigned char *)out + present, 0, size - present);
 }
 
 struct bounds {
