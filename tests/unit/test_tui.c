@@ -1,6 +1,7 @@
 #include "unit/test.h"
 
 #include "ui/tui/canvas.h"
+#include "ui/tui/lineedit.h"
 #include "ui/tui/theme.h"
 
 static const struct ft_style TEXT = {.fg = FT_COLOR_TEXT};
@@ -331,6 +332,77 @@ static void test_theme_detect(void)
     CHECK(ft_color_depth_for(FT_COLOR_MODE_AUTO, "xterm", nullptr, nullptr) == FT_DEPTH_16);
 }
 
+static bool press(struct ft_lineedit *e, enum ft_key key, uint32_t rune)
+{
+    struct ft_input in = {.kind = FT_INPUT_KEY, .key = key, .rune = rune};
+
+    return ft_lineedit_key(e, &in);
+}
+
+static void test_lineedit_utf8(void)
+{
+    struct ft_lineedit e = {0};
+
+    CHECK(press(&e, FT_KEY_CHAR, 'a'));
+    CHECK(press(&e, FT_KEY_CHAR, U'é'));
+    CHECK(press(&e, FT_KEY_CHAR, 'b'));
+    CHECK_STR(e.text, "aéb");
+    CHECK_U64(e.cursor, 4);
+
+    CHECK(!press(&e, FT_KEY_LEFT, 0));
+    CHECK_U64(e.cursor, 3);
+    press(&e, FT_KEY_LEFT, 0);
+    CHECK_U64(e.cursor, 1);
+    press(&e, FT_KEY_RIGHT, 0);
+    CHECK_U64(e.cursor, 3);
+
+    CHECK(press(&e, FT_KEY_BACKSPACE, 0));
+    CHECK_STR(e.text, "ab");
+    CHECK_U64(e.cursor, 1);
+    CHECK(press(&e, FT_KEY_CHAR, U'漢'));
+    CHECK_STR(e.text, "a漢b");
+    CHECK_U64(e.cursor, 4);
+    press(&e, FT_KEY_LEFT, 0);
+    CHECK_U64(e.cursor, 1);
+    CHECK(press(&e, FT_KEY_DELETE, 0));
+    CHECK_STR(e.text, "ab");
+    CHECK_U64(e.len, 2);
+
+    press(&e, FT_KEY_HOME, 0);
+    CHECK(!press(&e, FT_KEY_BACKSPACE, 0));
+    CHECK(!press(&e, FT_KEY_CHAR, 0x1b));
+    CHECK_STR(e.text, "ab");
+
+    ft_lineedit_set(&e, "abcdefghij");
+    struct ft_canvas *c = ft_canvas_create(6, 1);
+    CHECK_U64(ft_lineedit_draw(&e, c, 1, 0, 5, TEXT), 5);
+    CHECK_STR(row(c, 0), " ghij ");
+    ft_canvas_destroy(c);
+}
+
+static void test_lineedit_words(void)
+{
+    struct ft_lineedit e = {0};
+
+    ft_lineedit_set(&e, "file:/srv/app/** dest:public  ");
+    CHECK(press(&e, FT_KEY_CTRL_W, 0));
+    CHECK_STR(e.text, "file:/srv/app/** ");
+    CHECK(press(&e, FT_KEY_CTRL_W, 0));
+    CHECK_STR(e.text, "");
+    CHECK(!press(&e, FT_KEY_CTRL_W, 0));
+
+    ft_lineedit_set(&e, "foo bär baz");
+    for (int i = 0; i < 4; i++)
+        press(&e, FT_KEY_LEFT, 0);
+    CHECK(press(&e, FT_KEY_CTRL_W, 0));
+    CHECK_STR(e.text, "foo  baz");
+    CHECK_U64(e.cursor, 4);
+    CHECK(press(&e, FT_KEY_CTRL_K, 0));
+    CHECK_STR(e.text, "foo ");
+    CHECK(press(&e, FT_KEY_CTRL_U, 0));
+    CHECK_STR(e.text, "");
+}
+
 void test_tui(void)
 {
     test_text_clipping();
@@ -344,4 +416,6 @@ void test_tui(void)
     test_bar_widths();
     test_theme_roles();
     test_theme_detect();
+    test_lineedit_utf8();
+    test_lineedit_words();
 }
