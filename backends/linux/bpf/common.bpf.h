@@ -681,13 +681,18 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
                                         enum carry_end end)
 {
     bool flight = c->kind == CARRY_FLIGHT;
-    /* A small first flight the connection went on from was a hello or a first request. */
-    if (flight && end == CARRY_AGAIN && c->wire < CARRY_FLIGHT_MAX) {
+    __u64 read = c->read > c->read_seen ? c->read : c->read_seen;
+    __u64 whole = c->size && c->size < read ? c->size : read;
+    /*
+     * A small first flight the connection went on from was a hello or a first request, and one
+     * that took far more than a small or strict file in it did not carry that file.
+     */
+    bool small = c->held || (c->size && c->size < CARRY_FLOOR);
+    if (flight && ((end == CARRY_AGAIN && c->wire < CARRY_FLIGHT_MAX) ||
+                   (small && c->wire > whole + CARRY_SLACK + whole / 128))) {
         dial_charged(sk, &c->file, -(__s64)c->sent);
         return;
     }
-    __u64 read = c->read > c->read_seen ? c->read : c->read_seen;
-    __u64 whole = c->size && c->size < read ? c->size : read;
     bool by_volume = !flight || c->held;
     bool file = false;
     if (c->sends && by_volume) {
