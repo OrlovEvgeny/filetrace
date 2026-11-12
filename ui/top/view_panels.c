@@ -981,10 +981,117 @@ void ft_top_draw_inspect(struct ft_top_draw *d, struct ft_rect r)
     ft_canvas_clip(d->canvas, clip);
 }
 
+static void draw_slice(struct ft_canvas *c, int *x, int y, int right, struct ft_style s,
+                       const char *text, size_t len)
+{
+    char buf[512];
+    size_t n = len < sizeof(buf) ? len : sizeof(buf) - 1;
+    memcpy(buf, text, n);
+    buf[n] = '\0';
+    if (*x < right)
+        *x += ft_canvas_text(c, *x, y, right - *x, s, buf);
+}
+
+static bool json_literal(const char *p, const char **end)
+{
+    static const char *const words[] = {"true", "false", "null"};
+    for (size_t i = 0; i < FT_ARRAY_LEN(words); i++) {
+        size_t n = strlen(words[i]);
+        if (strncmp(p, words[i], n) == 0) {
+            *end = p + n;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A line of pretty-printed JSON: keys cyan, strings plain, numbers and literals bright. */
+static void json_line(struct ft_canvas *c, int x, int y, int width, const char *line)
+{
+    int right = x + width;
+    const char *p = line;
+
+    while (*p && x < right) {
+        const char *end = p + 1;
+        struct ft_style s = plain(FT_COLOR_TEXT);
+        if (*p == '"') {
+            while (*end && *end != '"')
+                end += end[0] == '\\' && end[1] ? 2 : 1;
+            if (*end)
+                end++;
+            const char *after = end;
+            while (*after == ' ')
+                after++;
+            s = plain(*after == ':' ? FT_COLOR_CYAN : FT_COLOR_TEXT);
+        } else if (*p == '-' || (*p >= '0' && *p <= '9')) {
+            while (*end && strchr("0123456789.eE+-", *end))
+                end++;
+            s = plain(FT_COLOR_BRIGHT);
+        } else if (json_literal(p, &end)) {
+            s = plain(FT_COLOR_BRIGHT);
+        } else {
+            while (*end && !strchr("\"-0123456789tfn", *end))
+                end++;
+        }
+        draw_slice(c, &x, y, right, s, p, (size_t)(end - p));
+        p = end;
+    }
+}
+
+/* An events line: its leading time dim, the rest in text color. */
+static void event_line(struct ft_canvas *c, int x, int y, int width, const char *line)
+{
+    size_t time = strspn(line, "0123456789:.");
+    int right = x + width;
+
+    if (time == 0 || (line[time] != ' ' && line[time] != '\0')) {
+        ft_canvas_text_cut(c, x, y, width, plain(FT_COLOR_TEXT), line, FT_CUT_END);
+        return;
+    }
+    draw_slice(c, &x, y, right, dim(), line, time);
+    if (x < right)
+        ft_canvas_text_cut(c, x, y, right - x, plain(FT_COLOR_TEXT), line + time, FT_CUT_END);
+}
+
 void ft_top_draw_overlay(struct ft_top_draw *d, struct ft_rect r)
 {
-    (void)d;
-    (void)r;
+    const struct ft_top_text *t = &d->ui->overlay_text;
+    int visible = r.h - 1;
+    char position[64] = "";
+
+    if (r.w < 4 || r.h < 1)
+        return;
+    struct ft_rect clip = ft_canvas_clip(d->canvas, r);
+    size_t first = t->scroll;
+    size_t last_start = t->count > (size_t)(visible > 0 ? visible : 0)
+                            ? t->count - (size_t)(visible > 0 ? visible : 0)
+                            : 0;
+    if (first > last_start)
+        first = last_start;
+    size_t shown = visible > 0 ? t->count - first : 0;
+    if (shown > (size_t)(visible > 0 ? visible : 0))
+        shown = (size_t)visible;
+    if (t->count)
+        snprintf(position, sizeof(position), "lines %zu–%zu of %zu   Esc close", first + 1,
+                 first + shown, t->count);
+    else
+        ft_strlcpy(position, "Esc close", sizeof(position));
+    title_bar(d, (struct ft_rect){r.x, r.y, r.w, 1}, t->title, "", "", position);
+    close_hit(d, r);
+
+    if (t->count == 0 && visible > 0)
+        ft_canvas_text(d->canvas, r.x + 1, r.y + 1, r.w - 2, dim(), "Nothing to show.");
+    for (size_t i = 0; i < shown; i++) {
+        const char *line = t->lines[first + i];
+        int y = r.y + 1 + (int)i;
+        if (!line)
+            continue;
+        if (d->ui->overlay == FT_TOP_OVERLAY_JSON)
+            json_line(d->canvas, r.x + 1, y, r.w - 2, line);
+        else
+            event_line(d->canvas, r.x + 1, y, r.w - 2, line);
+    }
+    ft_canvas_clip(d->canvas, clip);
 }
 
 void ft_top_draw_help(struct ft_top_draw *d)
