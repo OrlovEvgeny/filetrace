@@ -783,6 +783,28 @@ static void rates_cover_recent_seconds(void)
     fixture_close(&f);
 }
 
+static void rates_take_records_out_of_time_order(void)
+{
+    struct ft_rate in_order = {0};
+    struct ft_rate late = {0};
+    struct ft_rate stale = {0};
+
+    ft_rate_add(&in_order, 900 * FT_NS_PER_MS, 100);
+    ft_rate_add(&in_order, 950 * FT_NS_PER_MS, 100);
+    ft_rate_add(&in_order, 1100 * FT_NS_PER_MS, 100);
+    CHECK_U64(ft_rate_per_second(&in_order, 1200 * FT_NS_PER_MS), 250);
+
+    ft_rate_add(&late, 900 * FT_NS_PER_MS, 100);
+    ft_rate_add(&late, 1100 * FT_NS_PER_MS, 100);
+    ft_rate_add(&late, 950 * FT_NS_PER_MS, 100);
+    CHECK_U64(ft_rate_per_second(&late, 1200 * FT_NS_PER_MS), 250);
+
+    /* A record older than the previous second counts in no rate and keeps the window. */
+    ft_rate_add(&stale, 3100 * FT_NS_PER_MS, 120);
+    ft_rate_add(&stale, 1500 * FT_NS_PER_MS, 100);
+    CHECK_U64(ft_rate_per_second(&stale, 3200 * FT_NS_PER_MS), 100);
+}
+
 static void emit_loss(struct fixture *f, uint64_t count)
 {
     struct ft_event ev = {.type = FT_EVENT_LOSS, .ts_ns = f->now};
@@ -1743,6 +1765,7 @@ void test_state(void)
     reused_inode_is_another_file();
     processes_count_their_files();
     rates_cover_recent_seconds();
+    rates_take_records_out_of_time_order();
     events_are_logged_in_order();
     event_log_keeps_the_most_recent();
     event_floods_stay_in_their_class();

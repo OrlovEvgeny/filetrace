@@ -31,6 +31,13 @@ void ft_rate_add(struct ft_rate *r, uint64_t now_ns, uint64_t bytes)
 {
     uint64_t second = now_ns / FT_NS_PER_SEC;
 
+    /* Records can come out of time order; one older than the previous second is in no rate. */
+    if (second + 1 == r->second) {
+        r->previous += bytes;
+        return;
+    }
+    if (second < r->second)
+        return;
     if (second != r->second) {
         r->previous = second == r->second + 1 ? r->current : 0;
         r->current = 0;
