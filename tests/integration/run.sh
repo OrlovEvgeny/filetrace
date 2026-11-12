@@ -441,7 +441,8 @@ expect "dialed path, read then sendfile: method" \
 "$workload" respond 300 0 1 "$data/reply-ka-a.bin" 2048 "$data/reply-ka-b.bin" 8192 \
     "$data/reply-ka-c.bin" 30000 >/dev/null
 "$workload" respond 300 0 3 "$data/reply-ka-same.bin" 4096 >/dev/null
-# From 64 KB on a read is reported as it goes, by the thresholds alone.
+# From 64 KB on a read is reported as it goes, by the thresholds alone. 64k-other marks that
+# boundary of the small-file judgement: its 5000 B reply is the known residue of the base rule.
 "$workload" respond 300 0 1 "$data/reply-63k.bin" 64512 >/dev/null
 "$workload" respond 300 0 1 "$data/reply-64k.bin" 65536 >/dev/null
 "$workload" respond 0 5000 1 "$data/reply-63k-other.bin" 64512 >/dev/null
@@ -1097,6 +1098,8 @@ CONFIG
 : >"$data/strict-halves.py"
 : >"$data/strict-framed.js"
 : >"$data/strict-after.bin"
+: >"$data/strict-short.py"
+: >"$data/strict-beside.py"
 mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
     { echo "FAIL: the agent did not start with background_paths"; exit 1; }
@@ -1111,6 +1114,8 @@ passwd_report=$("$workload" upload /etc/passwd 65536)
 "$workload" readudp "$data/strict-metrics.py" 30000 100 50 >/dev/null
 "$workload" readudp "$data/strict-chunks.py" 61440 1400 44 >/dev/null
 "$workload" readudptwo "$data/strict-halves.py" 8192 >/dev/null
+"$workload" readudp "$data/strict-short.py" 8192 7500 1 >/dev/null
+"$workload" sendbeside "$data/plain-beside.json" 1500 "$data/strict-beside.py" 2048 548 >/dev/null
 "$workload" sendlisted heard "$data/listed.both" 4096 >/dev/null
 "$workload" sendlisted heard "$data/special.mixed" 4096 >/dev/null
 "$workload" framed "$data/strict-framed.js" 1048576 16384 22 >/dev/null
@@ -1138,6 +1143,10 @@ expect "strict: file sent in datagrams bytes" \
     "$(ft files --path "$data/strict-chunks.py" --format csv | column transfer.bytes_sent)" 61440
 expect "strict: small datagrams after a read not reported" \
     "$(ft files --path "$data/strict-metrics.py" --format csv | rows)" 0
+expect "strict: most of a file in one datagram, bytes that went" \
+    "$(ft files --path "$data/strict-short.py" --format csv | column transfer.bytes_sent)" 7500
+expect "strict: file read for itself beside a reply not reported" \
+    "$(ft files --path "$data/strict-beside.py" --format csv | rows)" 0
 expect "strict: halves over two datagram sockets not taken for one" \
     "$(ft files --path "$data/strict-halves.py" --format csv | rows)" 0
 expect "strict: file sent in secure records bytes" \

@@ -1282,6 +1282,30 @@ static void scenario_framed(const char *path, size_t size, size_t record, size_t
 }
 
 /*
+ * sendbeside <path> <bytes> <strict> <strict bytes> <head bytes>: over a connection that has
+ * heard from its peer, reads the file and then the strict one, and sends a head and the file.
+ */
+static void scenario_send_beside(const char *path, size_t size, const char *strict,
+                                 size_t strict_size, size_t head)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    free(read_whole_file(strict, strict_size));
+    char *request = calloc(1, head + size);
+    if (!request)
+        die("malloc");
+    memcpy(request + head, contents, size);
+    send_all(sock, request, head + size);
+    close(sock);
+    free(request);
+    free(contents);
+    report("sendbeside", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
  */
@@ -1962,6 +1986,9 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "sendbeside") == 0 && argc == 7)
+        scenario_send_beside(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
+                             arg_size(argv[6]));
     else if (strcmp(name, "framed") == 0 && argc == 6)
         scenario_framed(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "sendfileeof") == 0 && argc == 4)
