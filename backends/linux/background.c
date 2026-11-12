@@ -118,10 +118,8 @@ void ft_linux_background_learn(int map_fd, const struct ft_backend_config *cfg, 
             value = FT_BPF_BACKGROUND_LEARNED | FT_BPF_BACKGROUND_STRICT;
     }
     if (value) {
-        /* A background path overrides a strict name the kernel matched on the first read. */
         struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
-        bpf_map_update_elem(map_fd, &key, &value,
-                            value & FT_BPF_BACKGROUND_STRICT ? BPF_NOEXIST : BPF_ANY);
+        bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST);
     }
 }
 

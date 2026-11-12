@@ -247,13 +247,24 @@ struct {
 /* A first flight this large is no handshake and no request without a body. */
 #define CARRY_FLIGHT_MAX (4 * 1024)
 
-/* Files learned by name come back on their next read, so the least used make room. */
+/* The files the agent resolved the patterns to, by scanning or by a path it saw read. */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, FT_BPF_BACKGROUND_MAX);
+    __type(key, struct ft_bpf_background_key);
+    __type(value, __u8);
+} background_files SEC(".maps");
+
+/*
+ * The files learned by name as they are read. They come back on their next read, so the least
+ * used make room, apart from the files the agent resolved.
+ */
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, FT_BPF_BACKGROUND_MAX);
     __type(key, struct ft_bpf_background_key);
     __type(value, __u8);
-} background_files SEC(".maps");
+} background_named SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -450,14 +461,19 @@ static __always_inline void sendfile_read(struct thread_state *ts, __u64 ino, __
         foreground_reset(ts);
 }
 
-/* Which list names the file by its inode, or 0. */
+/* Which list names the file by its inode, or 0; background where the two maps differ. */
 static __always_inline __u8 listed_inode(const struct file_key *fk)
 {
     struct ft_bpf_background_key key = {.ino = fk->ino, .dev = fk->dev};
-    __u8 *source = bpf_map_lookup_elem(&background_files, &key);
-    if (!source)
-        return 0;
-    return *source & FT_BPF_BACKGROUND_STRICT ? FT_BPF_LISTED_STRICT : FT_BPF_LISTED_BACKGROUND;
+    __u8 *resolved = bpf_map_lookup_elem(&background_files, &key);
+    __u8 *named = bpf_map_lookup_elem(&background_named, &key);
+    __u8 kind = 0;
+    if (resolved)
+        kind =
+            *resolved & FT_BPF_BACKGROUND_STRICT ? FT_BPF_LISTED_STRICT : FT_BPF_LISTED_BACKGROUND;
+    if (named && kind != FT_BPF_LISTED_BACKGROUND)
+        kind = *named & FT_BPF_BACKGROUND_STRICT ? FT_BPF_LISTED_STRICT : FT_BPF_LISTED_BACKGROUND;
+    return kind;
 }
 
 struct suffix_match {
@@ -510,7 +526,7 @@ static __always_inline __u8 listed_by_name(const unsigned char *dname, const str
         struct ft_bpf_background_key key = {.ino = fk->ino, .dev = fk->dev};
         __u8 learned = FT_BPF_BACKGROUND_LEARNED |
                        (kind == FT_BPF_LISTED_STRICT ? FT_BPF_BACKGROUND_STRICT : 0);
-        bpf_map_update_elem(&background_files, &key, &learned, BPF_NOEXIST);
+        bpf_map_update_elem(&background_named, &key, &learned, BPF_NOEXIST);
     }
     return kind;
 }
@@ -1486,6 +1502,7 @@ static __always_inline void forget_file(struct inode *inode)
     /* The inode number can be given to an unrelated file next. */
     struct ft_bpf_background_key bk = {.ino = fk.ino, .dev = fk.dev};
     bpf_map_delete_elem(&background_files, &bk);
+    bpf_map_delete_elem(&background_named, &bk);
 }
 
 /* A PHP request's script path, before it is queued. */
