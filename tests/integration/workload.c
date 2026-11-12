@@ -69,6 +69,7 @@ enum sink_mode {
     SINK_DISCARD, /* reads and discards what each peer sends */
     SINK_GREET,   /* sends one line to each peer first */
     SINK_ANSWER,  /* answers each read with one line, as a server answers requests */
+    SINK_STALL,   /* greets each peer and reads nothing for two seconds */
 };
 
 static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
@@ -108,8 +109,10 @@ static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
             int c = accept(fd, nullptr, nullptr);
             if (c < 0)
                 _exit(0);
-            if (mode == SINK_GREET && write(c, "hello\n", 6) != 6)
+            if ((mode == SINK_GREET || mode == SINK_STALL) && write(c, "hello\n", 6) != 6)
                 _exit(1);
+            if (mode == SINK_STALL)
+                sleep(2);
             while (read(c, buf, sizeof(buf)) > 0) {
                 if (mode == SINK_ANSWER && write(c, "hello\n", 6) != 6)
                     _exit(1);
@@ -1551,6 +1554,57 @@ static void scenario_late_body(const char *path, size_t size, size_t head, size_
 }
 
 /*
+ * slowflight <path> <bytes> <request bytes> <seconds>: connects to a peer that never answers,
+ * reads the file and sends a request, then keeps the connection open.
+ */
+static void scenario_slow_flight(const char *path, size_t size, size_t request, size_t seconds)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    int sock = connect_sink(&sink);
+    free(read_whole_file(path, size));
+    char *out = calloc(1, request);
+    if (!out)
+        die("malloc");
+    send_all(sock, out, request);
+    report("slowflight", path, size, sink.port);
+    fflush(stdout);
+    sleep((unsigned)seconds);
+    close(sock);
+    free(out);
+    stop_sink(&sink);
+}
+
+/*
+ * cutreply <path> <bytes>: over a connection to a peer that stops reading, reads the file and
+ * sends it without blocking, so that the socket takes only part of it, then hears from another
+ * peer and keeps the first connection open.
+ */
+static void scenario_cut_reply(const char *path, size_t size)
+{
+    struct sink stalled = start_sink(SOCK_STREAM, false, SINK_STALL);
+    struct sink other = start_sink(SOCK_STREAM, false, SINK_GREET);
+    int sock = connect_sink(&stalled);
+    hear(sock);
+    int small = 4096;
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+    fcntl(sock, F_SETFL, fcntl(sock, F_GETFL) | O_NONBLOCK);
+    char *contents = read_whole_file(path, size);
+    ssize_t n = send(sock, contents, size, 0);
+    if (n <= 0 || (size_t)n >= size)
+        die("send was not cut");
+    int side = connect_sink(&other);
+    hear(side);
+    report("cutreply", path, (size_t)n, stalled.port);
+    fflush(stdout);
+    sleep(10);
+    close(side);
+    close(sock);
+    free(contents);
+    stop_sink(&other);
+    stop_sink(&stalled);
+}
+
+/*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
  */
@@ -2231,6 +2285,10 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "slowflight") == 0 && argc == 6)
+        scenario_slow_flight(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
+    else if (strcmp(name, "cutreply") == 0 && argc == 4)
+        scenario_cut_reply(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "holdopen") == 0 && argc == 6)
         scenario_hold_open(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "twosenders") == 0 && argc == 6)

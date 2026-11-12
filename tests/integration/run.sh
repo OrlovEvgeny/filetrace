@@ -621,22 +621,35 @@ expect "file tailed to a peer that never answers: bytes" \
 
 # A reply its peer never answers is judged once the correlation window has passed, while the
 # connection is still open: by what went, and as the base rule took it when that is short.
-"$workload" holdopen "$data/held.js" 20000 20300 6 >/dev/null &
+"$workload" holdopen "$data/held.js" 20000 20300 10 >/dev/null &
 held_strict=$!
-"$workload" holdopen "$data/held-page.tpl" 5000 20300 6 >/dev/null &
+"$workload" holdopen "$data/held-page.tpl" 5000 20300 10 >/dev/null &
 held_page=$!
+"$workload" holdopen "$data/held-cfg.ini" 5000 2000 10 >/dev/null &
+held_cfg=$!
+"$workload" slowflight "$data/slow-token.txt" 1500 1600 10 >/dev/null &
+slow_flight=$!
+"$workload" cutreply "$data/cut-reply.bin" 60000 >"$work/cut-reply.out" &
+cut_reply=$!
 "$workload" twosenders "$data/token.txt" 2000 150 2100 >/dev/null
 "$workload" latebody "$data/client.conf" 5000 200 4 5000 >/dev/null
-sleep 4
+sleep 2
 expect "held reply never answered: strict file bytes" \
     "$(ft files --path "$data/held.js" --format csv | column transfer.bytes_sent)" 20000
 expect "held reply never answered: a page far larger than its template not reported" \
     "$(ft files --path "$data/held-page.tpl" --format csv | rows)" 0
+expect "held reply never answered: a small file answered by a smaller reply not reported" \
+    "$(ft files --path "$data/held-cfg.ini" --format csv | rows)" 0
+expect "first flight to a slow peer not reported while it waits" \
+    "$(ft files --path "$data/slow-token.txt" --format csv | rows)" 0
+expect "reply cut short, then another peer heard: bytes that went" \
+    "$(ft files --path "$data/cut-reply.bin" --format csv | column transfer.bytes_sent)" \
+    "$(field "$(cat "$work/cut-reply.out")" bytes)"
 expect "reply with another thread's bytes on the connection not reported" \
     "$(ft files --path "$data/token.txt" --format csv | rows)" 0
 expect "body long after a small file's read not reported" \
     "$(ft files --path "$data/client.conf" --format csv | rows)" 0
-wait "$held_strict" "$held_page"
+wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply"
 
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.
