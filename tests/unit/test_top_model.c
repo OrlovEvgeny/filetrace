@@ -2,6 +2,8 @@
 
 #include "ui/top/model.h"
 
+#include <stdlib.h>
+
 static const char *size_text(uint64_t bytes)
 {
     static char buf[32];
@@ -78,7 +80,478 @@ static void units(void)
     CHECK_STR(percent_text(-0.2), "  0%");
 }
 
+constexpr uint64_t SECOND = FT_NS_PER_SEC;
+constexpr uint64_t WALL = 1'790'000'000 * FT_NS_PER_SEC;
+
+struct fixture {
+    struct ft_top_model *m;
+    struct ft_rows transfers;
+    struct ft_rows processes;
+    struct ft_row_stats stats;
+};
+
+static void fixture_init(struct fixture *f)
+{
+    *f = (struct fixture){.m = ft_top_model_create()};
+    CHECK(f->m != nullptr);
+    ft_rows_init(&f->transfers, FT_MSG_ROW_TRANSFER);
+    ft_rows_init(&f->processes, FT_MSG_ROW_PROCESS);
+}
+
+static void fixture_free(struct fixture *f)
+{
+    ft_top_model_destroy(f->m);
+    ft_rows_free(&f->transfers);
+    ft_rows_free(&f->processes);
+}
+
+static void process(struct fixture *f, uint32_t pid, uint32_t ppid, const char *comm,
+                    const char *command_line, const char *script, uint64_t file_bytes)
+{
+    struct ft_row_process *row = calloc(1, sizeof(*row));
+    struct ft_process_strings text = {command_line, "/srv", script};
+
+    row->pid = pid;
+    row->ppid = ppid;
+    row->uid = 0;
+    row->file_bytes = file_bytes;
+    ft_strlcpy(row->comm, comm, sizeof(row->comm));
+    size_t size = offsetof(struct ft_row_process, text) +
+                  ft_process_strings_pack(row->text, sizeof(row->text), &text);
+    CHECK(ft_rows_append(&f->processes, row, size));
+    free(row);
+}
+
+struct xfer {
+    uint64_t id;
+    uint32_t pid;
+    uint64_t rate;
+    const char *path;
+    const char *remote;
+    uint16_t port;
+    uint8_t method; /* sendfile when 0 */
+    uint64_t bytes;
+    uint64_t size;
+    uint64_t ino; /* the id when 0 */
+    const char *script;
+};
+
+static void transfer(struct fixture *f, struct xfer x)
+{
+    struct ft_row_transfer *row = calloc(1, sizeof(*row));
+    struct ft_process_strings text = {"", "/srv", x.script ? x.script : ""};
+
+    row->id = x.id;
+    row->pid = x.pid;
+    row->rate = x.rate;
+    row->bytes = x.bytes;
+    row->file_size = x.size;
+    row->dev = 2049;
+    row->ino = x.ino ? x.ino : x.id;
+    row->first_wall_ns = WALL;
+    row->method = x.method ? x.method : FT_METHOD_SENDFILE;
+    row->confidence = row->method == FT_METHOD_SENDFILE ? FT_CONF_EXACT : FT_CONF_INFERRED;
+    row->flags = FT_XFER_ACTIVE | FT_XFER_FILE_KNOWN | FT_XFER_PATH_KNOWN | FT_XFER_PROCESS_TEXT;
+    CHECK(ft_addr_parse(x.remote ? x.remote : "203.0.113.7", &row->remote));
+    row->remote.port = x.port ? x.port : 443;
+    ft_strlcpy(row->comm, "worker", sizeof(row->comm));
+    ft_strlcpy(row->path, x.path ? x.path : "/srv/data/file.bin", FT_PATH_MAX);
+    size_t lead = strlen(row->path) + 1;
+    ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    CHECK(ft_rows_append(&f->transfers, row, ft_row_transfer_size(row)));
+    free(row);
+}
+
+/* Hands the rows gathered so far to the model as the answers taken at second at. */
+static void sample(struct fixture *f, double at)
+{
+    uint64_t at_ns = (uint64_t)(at * (double)SECOND);
+    f->stats.now_wall_ns = WALL + at_ns;
+    struct ft_top_sample s = {
+        .mono_ns = at_ns + SECOND,
+        .stats = &f->stats,
+        .transfers = &f->transfers,
+        .processes = &f->processes,
+    };
+    CHECK(ft_top_model_sample(f->m, &s));
+    ft_rows_clear(&f->transfers);
+    ft_rows_clear(&f->processes);
+}
+
+static const struct ft_top_row *row_at(struct fixture *f, enum ft_top_mode mode, size_t i)
+{
+    static const struct ft_top_row none;
+    const struct ft_top_row *r = ft_top_row_at(f->m, mode, i);
+    CHECK(r != nullptr);
+    return r ? r : &none;
+}
+
+static uint64_t id_at(struct fixture *f, size_t i)
+{
+    const struct ft_top_row *r = row_at(f, FT_TOP_TRANSFERS, i);
+    return r->kind == FT_TOP_ROW_TRANSFER && r->transfer ? r->transfer->id : 0;
+}
+
+static void smoothing(void)
+{
+    struct fixture even;
+    struct fixture uneven;
+    fixture_init(&even);
+    fixture_init(&uneven);
+
+    /* The first sample shows the agent's rate as it is. */
+    transfer(&even, (struct xfer){.id = 1, .pid = 7, .rate = 1000});
+    sample(&even, 0);
+    CHECK_U64(id_at(&even, 0), 1);
+    CHECK_U64(row_at(&even, FT_TOP_TRANSFERS, 0)->transfer->rate, 1000);
+    transfer(&uneven, (struct xfer){.id = 1, .pid = 7, .rate = 1000});
+    sample(&uneven, 0);
+
+    /* A step to 2000 is halfway there after three seconds, however they are split. */
+    for (int s = 1; s <= 3; s++) {
+        transfer(&even, (struct xfer){.id = 1, .pid = 7, .rate = 2000});
+        sample(&even, s);
+    }
+    static const double times[] = {0.5, 2.0, 3.0};
+    for (size_t i = 0; i < FT_ARRAY_LEN(times); i++) {
+        transfer(&uneven, (struct xfer){.id = 1, .pid = 7, .rate = 2000});
+        sample(&uneven, times[i]);
+    }
+    CHECK_U64(row_at(&even, FT_TOP_TRANSFERS, 0)->transfer->rate, 1500);
+    CHECK_U64(row_at(&uneven, FT_TOP_TRANSFERS, 0)->transfer->rate, 1500);
+
+    /* Six seconds in, three quarters. */
+    for (int s = 4; s <= 6; s++) {
+        transfer(&even, (struct xfer){.id = 1, .pid = 7, .rate = 2000});
+        sample(&even, s);
+    }
+    CHECK_U64(row_at(&even, FT_TOP_TRANSFERS, 0)->transfer->rate, 1750);
+    CHECK_U64(ft_top_totals(even.m)->rate.value, 1750);
+
+    fixture_free(&even);
+    fixture_free(&uneven);
+}
+
+/* The raw rate that brings a smoothed rate from prev to target in one second. */
+static uint64_t raw_for(double prev, double target)
+{
+    double keep = 0.7937005259840998; /* 2^(-1/3) */
+    return (uint64_t)((target - prev * keep) / (1 - keep) + 0.5);
+}
+
+static void meters(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    /* The scale rounds the largest rate up to 1, 2 or 5 times a power of ten. */
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 4800});
+    sample(&f, 0);
+    CHECK_U64(ft_top_totals(f.m)->rate.scale, 5000);
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = raw_for(4800, 12000)});
+    sample(&f, 1);
+    CHECK_U64(ft_top_totals(f.m)->rate.scale, 20000);
+
+    /* Idle, the rate falls under a fifth of the scale at 6 s (3780), and stays there. */
+    for (int s = 2; s <= 65; s++) {
+        transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 0});
+        sample(&f, s);
+        if (s == 5)
+            CHECK_U64(ft_top_totals(f.m)->rate.value, 4762);
+    }
+    CHECK_U64(ft_top_totals(f.m)->rate.scale, 20000);
+    /* A minute later it shrinks to fit the largest rate seen meanwhile. */
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 0});
+    sample(&f, 66);
+    CHECK_U64(ft_top_totals(f.m)->rate.scale, 5000);
+    fixture_free(&f);
+}
+
+static void order(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 1000, .bytes = 5000});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 900, .bytes = 5050});
+    sample(&f, 0);
+    CHECK_U64(id_at(&f, 0), 1);
+    CHECK_U64(id_at(&f, 1), 2);
+
+    /* Crossing by 2% keeps the rows where they were. */
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 1000, .bytes = 5000});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = raw_for(900, 1020), .bytes = 5050});
+    sample(&f, 1);
+    CHECK_U64(row_at(&f, FT_TOP_TRANSFERS, 1)->transfer->rate, 1020);
+    CHECK_U64(id_at(&f, 0), 1);
+    CHECK_U64(id_at(&f, 1), 2);
+
+    /* Still 2% ahead a refresh later: now it moves up. */
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 1000, .bytes = 5000});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 1020, .bytes = 5050});
+    sample(&f, 2);
+    CHECK_U64(id_at(&f, 0), 2);
+    CHECK_U64(id_at(&f, 1), 1);
+
+    /* Crossing by 10% swaps at once. */
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = raw_for(1000, 1130), .bytes = 5000});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 1020, .bytes = 5050});
+    sample(&f, 3);
+    CHECK_U64(id_at(&f, 0), 1);
+    CHECK_U64(id_at(&f, 1), 2);
+
+    /* A new sort key orders at once, however close the values. */
+    CHECK(ft_top_set_sort(f.m, FT_TOP_TRANSFERS, FT_TOP_SORT_BYTES, true));
+    CHECK_U64(id_at(&f, 0), 2);
+    CHECK_U64(id_at(&f, 1), 1);
+    CHECK(ft_top_set_sort(f.m, FT_TOP_TRANSFERS, FT_TOP_SORT_PID, true));
+    CHECK(!ft_top_set_sort(f.m, FT_TOP_TRANSFERS, FT_TOP_SORT_TOTAL, true));
+    fixture_free(&f);
+}
+
+static void selection(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    for (uint64_t id = 1; id <= 3; id++)
+        transfer(&f, (struct xfer){.id = id, .pid = 7, .rate = 4000 - id * 1000});
+    sample(&f, 0);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 0);
+    ft_top_select_by(f.m, FT_TOP_TRANSFERS, 1);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 1);
+    CHECK(row_at(&f, FT_TOP_TRANSFERS, 1)->flags & FT_TOP_ROW_SELECTED);
+
+    /* The selection follows its transfer to the top. */
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 3000});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 90000});
+    transfer(&f, (struct xfer){.id = 3, .pid = 7, .rate = 1000});
+    sample(&f, 1);
+    CHECK_U64(id_at(&f, 0), 2);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 0);
+
+    /* Once finished it stays two seconds, done, where it was. */
+    ft_top_select_by(f.m, FT_TOP_TRANSFERS, 1);
+    CHECK_U64(id_at(&f, 1), 1);
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 90000});
+    transfer(&f, (struct xfer){.id = 3, .pid = 7, .rate = 1000});
+    sample(&f, 2);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 3);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 1);
+    const struct ft_top_row *done = row_at(&f, FT_TOP_TRANSFERS, 1);
+    CHECK_U64(done->transfer->id, 1);
+    CHECK(done->flags & FT_TOP_ROW_DONE);
+    CHECK(done->transfer->done);
+    CHECK_U64(done->transfer->rate, 0);
+    CHECK_U64(ft_top_totals(f.m)->transfers, 2);
+
+    /* An unselected transfer goes at once. */
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 90000});
+    sample(&f, 2.5);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 2);
+    CHECK_U64(id_at(&f, 1), 1);
+
+    /* It finished with the sample taken at 3 s on the model's clock. */
+    CHECK(!ft_top_model_tick(f.m, 4 * SECOND + 990 * FT_NS_PER_MS));
+    CHECK(ft_top_model_tick(f.m, 5 * SECOND));
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 1);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 0);
+    CHECK_U64(id_at(&f, 0), 2);
+    fixture_free(&f);
+}
+
+static void tags(void)
+{
+    struct fixture f;
+    struct ft_error err = {0};
+    fixture_init(&f);
+
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 3000, .path = "/srv/a.log"});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 2000, .path = "/srv/b.log"});
+    sample(&f, 0);
+    ft_top_tag_toggle(f.m, FT_TOP_TRANSFERS);
+    CHECK(row_at(&f, FT_TOP_TRANSFERS, 0)->flags & FT_TOP_ROW_TAGGED);
+    CHECK_U64(ft_top_tag_count(f.m, FT_TOP_TRANSFERS), 1);
+
+    CHECK(ft_top_set_filter(f.m, FT_TOP_TRANSFERS, "file:b.log", &err));
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 1);
+    CHECK(!(row_at(&f, FT_TOP_TRANSFERS, 0)->flags & FT_TOP_ROW_TAGGED));
+    CHECK_U64(ft_top_view_of(f.m, FT_TOP_TRANSFERS)->shown, 1);
+    CHECK_U64(ft_top_view_of(f.m, FT_TOP_TRANSFERS)->total, 2);
+    CHECK(!ft_top_set_filter(f.m, FT_TOP_TRANSFERS, "usr:x", &err));
+    CHECK_STR(ft_top_filter_of(f.m, FT_TOP_TRANSFERS), "file:b.log");
+
+    CHECK(ft_top_set_filter(f.m, FT_TOP_TRANSFERS, "", &err));
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 2);
+    CHECK_U64(id_at(&f, 0), 1);
+    CHECK(row_at(&f, FT_TOP_TRANSFERS, 0)->flags & FT_TOP_ROW_TAGGED);
+    CHECK(!(row_at(&f, FT_TOP_TRANSFERS, 1)->flags & FT_TOP_ROW_TAGGED));
+    ft_top_tags_clear(f.m, FT_TOP_TRANSFERS);
+    CHECK(!(row_at(&f, FT_TOP_TRANSFERS, 0)->flags & FT_TOP_ROW_TAGGED));
+    fixture_free(&f);
+}
+
+static void aggregates(void)
+{
+    struct fixture f;
+    struct ft_error err = {0};
+    fixture_init(&f);
+
+    process(&f, 100, 1, "nginx", "nginx: master process /usr/sbin/nginx", "", 0);
+    for (uint32_t pid = 101; pid <= 104; pid++)
+        process(&f, pid, 100, "nginx", "nginx: worker process", "", 1000 * pid);
+    process(&f, 200, 1, "php-fpm8.3", "php-fpm: pool www", "/srv/app/public/download.php", 7);
+    /* Four workers send one file; one of them twice to one client, on two ports. */
+    for (uint32_t pid = 101; pid <= 104; pid++)
+        transfer(&f, (struct xfer){.id = pid,
+                                   .pid = pid,
+                                   .rate = 1000,
+                                   .ino = 9,
+                                   .path = "/var/www/video.mp4",
+                                   .remote = "198.51.100.4",
+                                   .port = (uint16_t)(40000 + pid)});
+    transfer(&f, (struct xfer){.id = 105,
+                               .pid = 101,
+                               .rate = 500,
+                               .ino = 8,
+                               .path = "/var/www/hero.webp",
+                               .remote = "198.51.100.4",
+                               .port = 40101});
+    transfer(&f, (struct xfer){.id = 201,
+                               .pid = 200,
+                               .rate = 300,
+                               .path = "/srv/app/inv.pdf",
+                               .remote = "10.0.0.5",
+                               .port = 5000,
+                               .method = FT_METHOD_READ_SEND});
+    sample(&f, 0);
+
+    const struct ft_top_totals *t = ft_top_totals(f.m);
+    CHECK_U64(t->rate.value, 4800);
+    CHECK_U64(t->transfers, 6);
+    CHECK_U64(t->processes.value, 5);
+    CHECK_U64(t->destinations, 2);
+    CHECK_U64(t->destinations_public, 1);
+    CHECK_U64(t->files.value, 3);
+    CHECK_U64(t->fanout.value, 4);
+    CHECK_U64(t->rate_by_method[FT_METHOD_SENDFILE], 4500);
+    CHECK_U64(t->rate.scale, 5000);
+    CHECK(t->exact_share > 0.93 && t->exact_share < 0.94);
+
+    /* A process's rate is the sum of its transfers. */
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_PROCESSES), 5);
+    const struct ft_top_process *p = row_at(&f, FT_TOP_PROCESSES, 0)->process;
+    CHECK_U64(p->pid, 101);
+    CHECK_U64(p->rate, 1500);
+    CHECK_U64(p->files, 2);
+    CHECK_U64(p->destinations, 1);
+    CHECK_U64(p->ntransfers, 2);
+    CHECK_U64(p->total, 101000);
+    CHECK_STR(p->title, "nginx: worker process");
+    CHECK_STR(p->head, "nginx: worker");
+    CHECK_STR(p->rest, "process");
+    CHECK_STR(p->user, "root");
+    const struct ft_top_process *php = row_at(&f, FT_TOP_PROCESSES, 4)->process;
+    CHECK_STR(php->head, "php-fpm: pool");
+    CHECK_STR(php->script_name, "download.php");
+    CHECK_U64(php->method, FT_METHOD_READ_SEND);
+    CHECK_U64(php->confidence, FT_CONF_INFERRED);
+
+    /* The filter narrows what the aggregates add up. */
+    CHECK(ft_top_set_filter(f.m, FT_TOP_PROCESSES, "file:*.mp4", &err));
+    p = row_at(&f, FT_TOP_PROCESSES, 0)->process;
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_PROCESSES), 4);
+    CHECK_U64(p->rate, 1000);
+    CHECK_U64(p->files, 1);
+    CHECK_U64(ft_top_view_of(f.m, FT_TOP_PROCESSES)->shown, 4);
+    CHECK_U64(ft_top_view_of(f.m, FT_TOP_PROCESSES)->total, 5);
+    CHECK(ft_top_set_filter(f.m, FT_TOP_PROCESSES, "dest:private", &err));
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_PROCESSES), 1);
+    CHECK_U64(row_at(&f, FT_TOP_PROCESSES, 0)->process->pid, 200);
+
+    /* A destination over two ports is ip:*, one port shows it. */
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_DESTINATIONS), 2);
+    const struct ft_top_destination *d = row_at(&f, FT_TOP_DESTINATIONS, 0)->destination;
+    CHECK_STR(d->label, "198.51.100.4:*");
+    CHECK_U64(d->ports, 4);
+    CHECK_U64(d->rate, 4500);
+    CHECK_U64(d->files, 2);
+    CHECK_U64(d->processes, 4);
+    CHECK_U64(d->top_process->pid, 101);
+    CHECK(d->is_public);
+    CHECK_STR(row_at(&f, FT_TOP_DESTINATIONS, 1)->destination->label, "10.0.0.5:5000");
+
+    /* A file four processes of one name send reads "name ×4". */
+    const struct ft_top_file *file = row_at(&f, FT_TOP_FILES, 0)->file;
+    CHECK_STR(file->path, "/var/www/video.mp4");
+    CHECK_STR(file->path + file->name_offset, "video.mp4");
+    CHECK_STR(file->senders, "nginx ×4");
+    CHECK_U64(file->active, 4);
+    CHECK_U64(file->destinations, 1);
+    CHECK_U64(file->nsenders, 4);
+    CHECK(file->public_share == 1.0);
+    fixture_free(&f);
+}
+
+static void search(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 300, .path = "/srv/a.log"});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 200, .path = "/srv/report.csv"});
+    transfer(&f, (struct xfer){.id = 3, .pid = 7, .rate = 100, .path = "/srv/REPORT.pdf"});
+    sample(&f, 0);
+    ft_top_set_search(f.m, FT_TOP_TRANSFERS, "report");
+    CHECK_U64(ft_top_view_of(f.m, FT_TOP_TRANSFERS)->matches, 2);
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 1);
+    CHECK(ft_top_search_step(f.m, FT_TOP_TRANSFERS, 1));
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 2);
+    CHECK(ft_top_search_step(f.m, FT_TOP_TRANSFERS, 1));
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 1);
+    CHECK(ft_top_search_step(f.m, FT_TOP_TRANSFERS, -1));
+    CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 2);
+    CHECK(!(row_at(&f, FT_TOP_TRANSFERS, 0)->flags & FT_TOP_ROW_MATCH));
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 3);
+    ft_top_set_search(f.m, FT_TOP_TRANSFERS, "");
+    CHECK(!ft_top_search_step(f.m, FT_TOP_TRANSFERS, 1));
+    fixture_free(&f);
+}
+
+static void churn(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    /* Transfers come and go every refresh; the tables must keep track of each one. */
+    for (uint64_t round = 0; round < 40; round++) {
+        for (uint64_t i = 0; i < 300; i++) {
+            uint64_t id = i % 10 == round % 10 ? 1000 * (round + 1) + i : i + 1;
+            transfer(&f, (struct xfer){.id = id,
+                                       .pid = (uint32_t)(10 + i % 7),
+                                       .rate = 1000 + i,
+                                       .ino = i % 50 + 1});
+        }
+        sample(&f, (double)round);
+        size_t live = 0;
+        for (size_t i = 0; i < ft_top_row_count(f.m, FT_TOP_TRANSFERS); i++)
+            live += !(row_at(&f, FT_TOP_TRANSFERS, i)->flags & FT_TOP_ROW_DONE);
+        CHECK_U64(live, 300);
+        CHECK_U64(ft_top_totals(f.m)->transfers, 300);
+        CHECK_U64(ft_top_totals(f.m)->files.value, 50);
+    }
+    fixture_free(&f);
+}
+
 void test_top_model(void)
 {
     units();
+    smoothing();
+    order();
+    meters();
+    selection();
+    tags();
+    aggregates();
+    search();
+    churn();
 }
