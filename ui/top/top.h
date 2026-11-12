@@ -27,6 +27,13 @@ enum ft_top_sort : uint8_t {
     FT_TOP_SORT_DESTINATION,
     FT_TOP_SORT_METHOD,
     FT_TOP_SORT_CONFIDENCE,
+    FT_TOP_SORT_TOTAL,        /* bytes since the agent started */
+    FT_TOP_SORT_FILES,        /* how many files */
+    FT_TOP_SORT_DESTINATIONS, /* how many remote addresses */
+    FT_TOP_SORT_PROCESSES,    /* how many processes */
+    FT_TOP_SORT_TRANSFERS,    /* how many transfers */
+    FT_TOP_SORT_KIND,         /* public or private */
+    FT_TOP_SORT_HOSTNAME,
     FT_TOP_SORT_COUNT,
 };
 
