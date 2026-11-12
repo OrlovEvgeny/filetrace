@@ -12,6 +12,10 @@ add_executable(ft_unit_tests
     unit/test_config.c
     unit/test_metrics.c
     unit/test_views.c
+    unit/test_leaders.c
+    unit/test_top_model.c
+    unit/test_top_filter.c
+    unit/test_tui.c
 )
 target_link_libraries(ft_unit_tests PRIVATE ft_cli)
 set_property(SOURCE unit/test_agent.c unit/test_otlp.c
@@ -19,6 +23,12 @@ set_property(SOURCE unit/test_agent.c unit/test_otlp.c
 target_include_directories(ft_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME unit COMMAND ft_unit_tests)
 set_tests_properties(unit PROPERTIES TIMEOUT 60)
+
+# The agent with made-up traffic in place of a kernel backend, for trying the
+# commands on any system.
+add_executable(ft_sim_agent sim/sim_agent.c sim/sim_backend.c)
+target_link_libraries(ft_sim_agent PRIVATE ft_agent)
+target_include_directories(ft_sim_agent PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(ft_workload integration/workload.c)

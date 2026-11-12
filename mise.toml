@@ -30,11 +30,11 @@ run = "ctest --preset dev"
 
 [tasks.fmt]
 description = "Format the C sources"
-run = "git ls-files -z '*.c' '*.h' ':!gen' | xargs -0 clang-format -i"
+run = "git ls-files -z '*.c' '*.h' ':!gen' ':!third_party' | xargs -0 clang-format -i"
 
 [tasks."fmt:check"]
 description = "Check the formatting of the C sources"
-run = "git ls-files -z '*.c' '*.h' ':!gen' | xargs -0 clang-format --dry-run -Werror"
+run = "git ls-files -z '*.c' '*.h' ':!gen' ':!third_party' | xargs -0 clang-format --dry-run -Werror"
 
 [tasks.gen]
 description = "Regenerate gen/ from proto/"

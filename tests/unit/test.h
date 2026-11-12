@@ -54,5 +54,9 @@ void test_grpc(void);
 void test_otlp(void);
 void test_process(void);
 void test_scripts(void);
+void test_leaders(void);
+void test_top_model(void);
+void test_top_filter(void);
+void test_tui(void);
 
 #endif

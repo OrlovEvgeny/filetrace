@@ -184,6 +184,7 @@ add_library(ft_core STATIC
     core/clock.c
     core/evlog.c
     core/format.c
+    core/leaders.c
     core/metrics.c
     core/model.c
     core/net.c
@@ -250,10 +251,20 @@ add_library(ft_cli STATIC
     exporters/json.c
     ui/table.c
     ui/terminal.c
+    ui/top/filter.c
+    ui/top/model.c
+    ui/tui/canvas.c
+    ui/tui/screen.c
+    ui/tui/theme.c
     ui/watch.c
 )
+
+# termbox2 is one header that also holds its implementation; this is its translation unit.
+add_library(ft_termbox STATIC ui/tui/termbox.c)
+target_include_directories(ft_termbox SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/termbox2)
+target_compile_options(ft_termbox PRIVATE -w)
 find_package(Threads REQUIRED)
-target_link_libraries(ft_cli PUBLIC ft_agent Threads::Threads)
+target_link_libraries(ft_cli PUBLIC ft_agent Threads::Threads PRIVATE ft_termbox)
 
 add_executable(filetrace cmd/filetrace.c)
 target_link_libraries(filetrace PRIVATE ft_cli)

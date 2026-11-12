@@ -19,6 +19,8 @@ enum ft_msg_type : uint16_t {
     FT_MSG_ROW_STATS = 20,
     FT_MSG_ROW_CAPABILITY = 21,
     FT_MSG_ROW_EVENT = 22,
+    FT_MSG_ROW_LEADER_SUMMARY = 23,
+    FT_MSG_ROW_LEADER = 24,
 
     FT_MSG_END = 64,
     FT_MSG_ERROR = 65,
@@ -40,6 +42,7 @@ enum ft_query_kind : uint16_t {
     FT_Q_FLOWS,
     FT_Q_TRANSFERS,
     FT_Q_EVENTS,
+    FT_Q_LEADERS,
 };
 
 enum ft_query_flag : uint32_t {
@@ -63,8 +66,31 @@ enum ft_sort : uint16_t {
     FT_SORT_PID,
     FT_SORT_RATE,
     FT_SORT_DURATION,
-    FT_SORT_PROCESS, /* by name, ascending */
-    FT_SORT_FILE,    /* by path, ascending */
+    FT_SORT_PROCESS,      /* by name, ascending */
+    FT_SORT_FILE,         /* by path, ascending */
+    FT_SORT_TRANSFERS,    /* leaders: by transfers started */
+    FT_SORT_DESTINATIONS, /* leaders: by distinct remote addresses */
+};
+
+/* The span a ranking covers. Each window but the lifetime one is kept as slots of equal length. */
+enum ft_leader_window : uint8_t {
+    FT_WINDOW_LIFETIME = 0, /* since the agent started */
+    FT_WINDOW_1M,
+    FT_WINDOW_5M,
+    FT_WINDOW_15M,
+    FT_WINDOW_1H,
+    FT_WINDOW_24H,
+    FT_WINDOW_7D,
+    FT_WINDOW_COUNT,
+};
+
+/* What one row of a ranking stands for. */
+enum ft_leader_key : uint8_t {
+    FT_LEADER_FILE = 0,
+    FT_LEADER_DIRECTORY,   /* files merged by their parent directory */
+    FT_LEADER_EXTENSION,   /* files merged by the extension of their name */
+    FT_LEADER_DESTINATION, /* remote addresses, whatever the port */
+    FT_LEADER_KEY_COUNT,
 };
 
 struct ft_query {
@@ -83,7 +109,8 @@ struct ft_query {
     uint8_t confidence;       /* enum ft_confidence or FT_CONF_ANY */
     uint8_t remote_host_bits; /* low-order address bits left out of the comparison */
     uint8_t local_host_bits;
-    uint8_t pad[2];
+    uint8_t window;         /* leaders: enum ft_leader_window */
+    uint8_t leader_key;     /* leaders: enum ft_leader_key */
     uint32_t event_types;   /* events: bit per enum ft_record_type; 0: any */
     uint64_t since_wall_ns; /* 0: unbounded */
     uint64_t until_wall_ns; /* 0: unbounded */
@@ -321,6 +348,69 @@ struct ft_row_event {
     char text[FT_PATH_MAX + FT_PROCESS_TEXT_MAX];
 };
 
+#define FT_LEADER_SLOTS 12  /* trend points of a window */
+#define FT_LEADER_SENDERS 3 /* sender names listed per row */
+
+/* Above this many, a row's count of remote addresses is an estimate. */
+#define FT_LEADER_EXACT_DESTINATIONS 15
+
+#define FT_LEADERS_SHORT_HISTORY 0x1u /* the agent has run for less than the window */
+#define FT_LEADERS_CAPPED 0x2u        /* entries were replaced to keep memory bounded */
+
+/* Precedes the rows of a leaders query. */
+struct ft_row_leader_summary {
+    uint64_t window_ns; /* 0: lifetime */
+    uint64_t slot_ns;   /* length of one trend slot; 0: lifetime */
+    uint64_t from_wall_ns;
+    uint64_t to_wall_ns;
+    uint64_t previous_from_wall_ns; /* start of the span ranks are compared with; 0: none */
+    uint64_t bytes;                 /* file bytes sent in the span, ranked or not */
+    uint64_t bytes_exact;           /* of them, moved by the kernel itself */
+    uint64_t transfers;
+    uint64_t top_bytes; /* sent by the ten largest files */
+    uint64_t files;     /* distinct files; an estimate when large */
+    uint64_t destinations_public;
+    uint64_t destinations_private;
+    uint32_t processes; /* distinct sender names */
+    uint32_t scripts;
+    uint32_t flags;
+    uint32_t pad;
+};
+
+struct ft_leader_sender {
+    uint64_t bytes;
+    uint64_t transfers;
+    char name[FT_COMM_MAX];
+};
+
+#define FT_LEADER_DELETED 0x1u      /* the file has no remaining links */
+#define FT_LEADER_MORE_SENDERS 0x2u /* more names sent it than are listed */
+
+struct ft_row_leader {
+    uint64_t bytes;       /* counted for this entry itself, so never more than the truth */
+    uint64_t bytes_error; /* how much more the truth may be */
+    uint64_t bytes_exact; /* of bytes, moved by the kernel itself */
+    uint64_t transfers;
+    uint64_t transfers_error;
+    uint64_t destinations; /* distinct remote addresses */
+    uint64_t files;        /* distinct files behind a directory, extension or destination */
+    uint64_t file_size;
+    uint64_t dev;
+    uint64_t ino;
+    uint64_t first_wall_ns;
+    uint64_t last_wall_ns;
+    uint64_t trend[FT_LEADER_SLOTS]; /* bytes per slot, oldest first; zero for lifetime */
+    uint32_t rank;                   /* from 1, in the order asked for */
+    uint32_t previous_rank;          /* in the span before; 0: not among its first fifty */
+    uint32_t flags;
+    uint8_t confidence; /* the lowest among its transfers */
+    uint8_t method;     /* the one that carried the most bytes */
+    uint8_t pad[2];
+    struct ft_endpoint remote; /* FT_LEADER_DESTINATION: the address, with port 0 */
+    struct ft_leader_sender senders[FT_LEADER_SENDERS]; /* largest first; unused ones zero */
+    char text[FT_PATH_MAX]; /* path, directory or ".ext"; sent up to its terminator */
+};
+
 struct ft_msg_end {
     uint32_t rows;
     uint32_t health;
@@ -339,6 +429,7 @@ struct ft_msg_error {
 size_t ft_row_process_size(const struct ft_row_process *row);
 size_t ft_row_transfer_size(const struct ft_row_transfer *row);
 size_t ft_row_event_size(const struct ft_row_event *row);
+size_t ft_row_leader_size(const struct ft_row_leader *row);
 
 /* Writes the three strings one after another, each cut to its size; returns the bytes used. */
 size_t ft_process_strings_pack(char *buf, size_t size, const struct ft_process_strings *s);
