@@ -1451,6 +1451,19 @@ enum ft_top_group ft_top_group_of(const struct ft_top_model *m, enum ft_top_mode
     return m->modes[mode].group;
 }
 
+void ft_top_set_tree(struct ft_top_model *m, bool on)
+{
+    if (m->tree == on)
+        return;
+    m->tree = on;
+    rebuild(m, FT_TOP_PROCESSES, true);
+}
+
+bool ft_top_tree_of(const struct ft_top_model *m)
+{
+    return m->tree;
+}
+
 void ft_top_set_resolve(struct ft_top_model *m, bool on)
 {
     size_t budget = LOOKUPS_PER_SAMPLE;

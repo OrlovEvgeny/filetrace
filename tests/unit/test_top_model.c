@@ -493,6 +493,89 @@ static void aggregates(void)
     fixture_free(&f);
 }
 
+static void tree(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    process(&f, 100, 1, "nginx", "nginx: master process /usr/sbin/nginx", "", 0);
+    for (uint32_t pid = 101; pid <= 104; pid++)
+        process(&f, pid, 100, "nginx", "nginx: worker process", "", 1000);
+    process(&f, 300, 1, "java", "/usr/bin/java -Xmx6g kafka.Kafka", "", 50);
+    for (uint32_t pid = 101; pid <= 104; pid++)
+        transfer(&f, (struct xfer){.id = pid, .pid = pid, .rate = 100 * (105 - pid)});
+    transfer(&f, (struct xfer){.id = 301, .pid = 300, .rate = 50});
+    transfer(&f, (struct xfer){.id = 302, .pid = 300, .rate = 40, .remote = "10.0.0.9"});
+    /* A parent the agent does not report shows as its pid alone. */
+    transfer(&f, (struct xfer){.id = 501, .pid = 501, .rate = 10});
+    sample(&f, 0);
+    ft_top_set_tree(f.m, true);
+
+    /* The idle master, its first worker, then the other three folded. */
+    const struct ft_top_row *r = row_at(&f, FT_TOP_PROCESSES, 0);
+    CHECK_U64(r->kind, FT_TOP_ROW_PROCESS);
+    CHECK_U64(r->process->pid, 100);
+    CHECK_U64(r->process->rate, 1000);
+    CHECK_U64(r->process->total, 4000);
+    CHECK_U64(r->process->files, 4);
+    CHECK_U64(r->depth, 0);
+    CHECK_U64(r->node, FT_TOP_NODE_EXPANDED);
+    r = row_at(&f, FT_TOP_PROCESSES, 1);
+    CHECK_U64(r->process->pid, 101);
+    CHECK_U64(r->depth, 1);
+    CHECK_U64(r->node, FT_TOP_NODE_COLLAPSED);
+    CHECK(!(r->flags & FT_TOP_ROW_LAST));
+    r = row_at(&f, FT_TOP_PROCESSES, 2);
+    CHECK_U64(r->kind, FT_TOP_ROW_FOLD);
+    CHECK_U64(r->fold->count, 3);
+    CHECK_U64(r->fold->rate, 600);
+    CHECK_U64(r->fold->members[0]->pid, 102);
+    CHECK_STR(r->fold->name, "nginx");
+    CHECK(r->flags & FT_TOP_ROW_LAST);
+    CHECK_U64(r->node, FT_TOP_NODE_COLLAPSED);
+    r = row_at(&f, FT_TOP_PROCESSES, 3);
+    CHECK_U64(r->process->pid, 300);
+    CHECK_STR(r->process->head, "java");
+    CHECK_STR(r->process->rest, "-Xmx6g kafka.Kafka");
+    CHECK_U64(row_at(&f, FT_TOP_PROCESSES, 4)->process->pid, 501);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_PROCESSES), 5);
+
+    /* Expanding a leaf shows its transfers; expanding the fold lists its members. */
+    ft_top_toggle_expanded(f.m, FT_TOP_PROCESSES, 1);
+    CHECK_U64(row_at(&f, FT_TOP_PROCESSES, 1)->node, FT_TOP_NODE_EXPANDED);
+    r = row_at(&f, FT_TOP_PROCESSES, 2);
+    CHECK_U64(r->kind, FT_TOP_ROW_TRANSFER);
+    CHECK_U64(r->transfer->id, 101);
+    CHECK_U64(r->depth, 2);
+    CHECK_U64(r->rails, 1u << 1);
+    CHECK(r->flags & FT_TOP_ROW_LAST);
+    ft_top_toggle_expanded(f.m, FT_TOP_PROCESSES, 3);
+    CHECK_U64(row_at(&f, FT_TOP_PROCESSES, 3)->node, FT_TOP_NODE_EXPANDED);
+    CHECK_U64(row_at(&f, FT_TOP_PROCESSES, 4)->process->pid, 102);
+    CHECK_U64(row_at(&f, FT_TOP_PROCESSES, 4)->depth, 2);
+    CHECK(row_at(&f, FT_TOP_PROCESSES, 6)->flags & FT_TOP_ROW_LAST);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_PROCESSES), 9);
+
+    /* A parent that is not known shows by its pid. */
+    process(&f, 100, 1, "nginx", "nginx: master process /usr/sbin/nginx", "", 0);
+    process(&f, 101, 100, "nginx", "nginx: worker process", "", 1000);
+    process(&f, 600, 77, "bash", "bash", "", 0);
+    transfer(&f, (struct xfer){.id = 101, .pid = 101, .rate = 400});
+    transfer(&f, (struct xfer){.id = 601, .pid = 600, .rate = 5});
+    sample(&f, 1);
+    bool placeholder = false;
+    for (size_t i = 0; i < ft_top_row_count(f.m, FT_TOP_PROCESSES); i++) {
+        r = row_at(&f, FT_TOP_PROCESSES, i);
+        if (r->kind == FT_TOP_ROW_PROCESS && r->process->pid == 77) {
+            placeholder = !r->process->known && r->process->title[0] == '\0' && r->depth == 0;
+            CHECK_U64(r->process->rate, 5);
+            CHECK_U64(row_at(&f, FT_TOP_PROCESSES, i + 1)->process->pid, 600);
+        }
+    }
+    CHECK(placeholder);
+    fixture_free(&f);
+}
+
 static void groups(void)
 {
     struct fixture f;
@@ -616,6 +699,7 @@ void test_top_model(void)
     selection();
     tags();
     aggregates();
+    tree();
     groups();
     search();
     churn();

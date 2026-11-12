@@ -7,6 +7,8 @@
 constexpr double HOLD_SHARE = 0.05; /* rows closer than this keep their order */
 constexpr uint32_t POSITION_MASK = 0xffffffu;
 constexpr uint32_t EXPLICIT_COLLAPSED = 1;
+constexpr uint32_t EXPLICIT_EXPANDED = 2;
+constexpr unsigned FOLD_AT = 3; /* siblings sharing a title from which all but the first fold */
 
 enum key_type : uint8_t {
     BY_VALUE,
@@ -20,9 +22,21 @@ struct order {
     bool hysteresis;
 };
 
+/* What a tree node shows below itself. */
+enum shows : uint8_t {
+    SHOWS_NOTHING,
+    SHOWS_CHILDREN,
+    SHOWS_ALL,
+};
+
 static struct ft_top_process_entry *process_entry(const struct ft_top_process *p)
 {
     return (struct ft_top_process_entry *)(void *)p;
+}
+
+static struct ft_top_transfer_entry *transfer_entry(const struct ft_top_transfer *t)
+{
+    return (struct ft_top_transfer_entry *)(void *)t;
 }
 
 static int sign(int c)
@@ -316,6 +330,49 @@ static void transfer_item(struct ft_top_item *it, const struct ft_top_transfer_e
     }
 }
 
+/* The fields a process row and a fold row are sorted by. */
+struct tally {
+    uint64_t rate;
+    uint64_t total;
+    uint32_t files;
+    uint32_t destinations;
+    uint32_t pid;
+    uint8_t method;
+    const char *user;
+    const char *title;
+};
+
+static void tally_item(struct ft_top_item *it, const struct tally *t, enum ft_top_sort sort)
+{
+    it->rate = (double)t->rate;
+    switch (sort) {
+    case FT_TOP_SORT_TOTAL:
+        it->value = (double)t->total;
+        break;
+    case FT_TOP_SORT_FILES:
+        it->value = t->files;
+        break;
+    case FT_TOP_SORT_DESTINATIONS:
+        it->value = t->destinations;
+        break;
+    case FT_TOP_SORT_PID:
+        it->value = t->pid;
+        break;
+    case FT_TOP_SORT_USER:
+        it->text = t->user;
+        break;
+    case FT_TOP_SORT_METHOD:
+        it->text = ft_method_name((enum ft_method)t->method);
+        break;
+    case FT_TOP_SORT_PROCESS:
+        it->text = t->title;
+        break;
+    default:
+        it->value = (double)t->rate;
+        break;
+    }
+}
+
 static void process_item(struct ft_top_item *it, const struct ft_top_process *p,
                          enum ft_top_sort sort)
 {
@@ -324,33 +381,10 @@ static void process_item(struct ft_top_item *it, const struct ft_top_process *p,
         .key = {p->pid, 0, FT_TOP_KEY_PROCESS},
         .kind = FT_TOP_ROW_PROCESS,
     };
-    it->rate = (double)p->rate;
-    switch (sort) {
-    case FT_TOP_SORT_TOTAL:
-        it->value = (double)p->total;
-        break;
-    case FT_TOP_SORT_FILES:
-        it->value = p->files;
-        break;
-    case FT_TOP_SORT_DESTINATIONS:
-        it->value = p->destinations;
-        break;
-    case FT_TOP_SORT_PID:
-        it->value = p->pid;
-        break;
-    case FT_TOP_SORT_USER:
-        it->text = p->user;
-        break;
-    case FT_TOP_SORT_METHOD:
-        it->text = ft_method_name((enum ft_method)p->method);
-        break;
-    case FT_TOP_SORT_PROCESS:
-        it->text = p->title;
-        break;
-    default:
-        it->value = (double)p->rate;
-        break;
-    }
+    tally_item(it,
+               &(struct tally){p->rate, p->total, p->files, p->destinations, p->pid, p->method,
+                               p->user, p->title},
+               sort);
 }
 
 static void destination_item(struct ft_top_item *it, const struct ft_top_destination_entry *e,
@@ -1115,6 +1149,436 @@ static bool build_files(struct ft_top_model *m, struct ft_top_mode_state *ms)
     return emit_flat(m, ms, shown);
 }
 
+struct tree {
+    struct ft_top_model *m;
+    struct ft_top_mode_state *ms;
+    struct ft_top_tree_node *nodes;
+    size_t nnodes;
+    uint32_t roots;                     /* first root; roots are linked by next_sibling */
+    const struct ft_top_transfer **own; /* own transfers per node, at nodes[i].own_first */
+    const struct ft_top_transfer **sub; /* transfers in depth-first order */
+    size_t top;                         /* items in use below this level */
+    size_t nfolds;
+};
+
+static uint32_t add_node(struct tree *t, struct ft_top_process_entry *p)
+{
+    uint32_t i = (uint32_t)t->nnodes++;
+    t->nodes[i] = (struct ft_top_tree_node){
+        .proc = p,
+        .parent = FT_TOP_NONE,
+        .first_child = FT_TOP_NONE,
+        .next_sibling = FT_TOP_NONE,
+    };
+    p->node = i;
+    return i;
+}
+
+static struct ft_top_process_entry *placeholder(struct tree *t, uint32_t pid, size_t *nplaceholders)
+{
+    struct ft_top_mode_state *ms = t->ms;
+    struct ft_top_key key = {pid, 0, FT_TOP_KEY_PROCESS};
+    uint32_t *found = ft_top_map_find(&ms->scratch, key);
+    if (found)
+        return &ms->placeholders[*found];
+
+    struct ft_top_process_entry *p = &ms->placeholders[*nplaceholders];
+    *p = (struct ft_top_process_entry){.node = FT_TOP_NONE};
+    snprintf(p->pid_text, sizeof(p->pid_text), "%u", pid);
+    p->pub = (struct ft_top_process){
+        .pid = pid,
+        .user = "",
+        .comm = "",
+        .exe = "",
+        .command_line = "",
+        .cwd = "",
+        .script = "",
+        .script_name = "",
+        .title = "",
+        .name = "",
+        .head = "",
+        .rest = "",
+    };
+    ft_top_map_put(&ms->scratch, key, (uint32_t)(*nplaceholders)++);
+    return p;
+}
+
+/* Every process with a passed transfer, and the ancestors that lead to it. */
+static void grow_tree(struct tree *t)
+{
+    struct ft_top_model *m = t->m;
+    struct ft_top_process_entry *procs = m->processes[m->now];
+    size_t nprocs = m->nprocesses[m->now];
+    size_t nplaceholders = 0;
+
+    ft_top_map_clear(&t->ms->scratch);
+    for (size_t i = 0; i < nprocs; i++)
+        procs[i].node = FT_TOP_NONE;
+    for (size_t i = 0; i < nprocs; i++) {
+        if (procs[i].count)
+            add_node(t, &procs[i]);
+    }
+    for (size_t i = 0; i < t->nnodes; i++) {
+        struct ft_top_process_entry *p = t->nodes[i].proc;
+        uint32_t ppid = p->pub.ppid;
+        if (!p->pub.known && p->pub.ppid == 0)
+            continue;
+        if (ppid <= 1 || ppid == p->pub.pid)
+            continue;
+        uint32_t *found =
+            ft_top_map_find(&m->process_index, (struct ft_top_key){ppid, 0, FT_TOP_KEY_PROCESS});
+        struct ft_top_process_entry *parent =
+            found ? &procs[*found] : placeholder(t, ppid, &nplaceholders);
+        if (parent->node == FT_TOP_NONE)
+            add_node(t, parent);
+        t->nodes[i].parent = parent->node;
+    }
+
+    /* A loop of parents would hide its members; cut it where found. */
+    for (size_t i = 0; i < t->nnodes; i++) {
+        uint32_t at = t->nodes[i].parent;
+        for (size_t depth = 0; at != FT_TOP_NONE; depth++) {
+            if (depth > t->nnodes || at == i) {
+                t->nodes[i].parent = FT_TOP_NONE;
+                break;
+            }
+            at = t->nodes[at].parent;
+        }
+    }
+
+    t->roots = FT_TOP_NONE;
+    for (size_t i = t->nnodes; i-- > 0;) {
+        struct ft_top_tree_node *node = &t->nodes[i];
+        if (node->parent == FT_TOP_NONE) {
+            node->next_sibling = t->roots;
+            t->roots = (uint32_t)i;
+        } else {
+            struct ft_top_tree_node *parent = &t->nodes[node->parent];
+            node->next_sibling = parent->first_child;
+            parent->first_child = (uint32_t)i;
+            parent->children++;
+        }
+    }
+}
+
+/* Lays out each node's transfers and its descendants' as one range, and sums over it. */
+static void sum_tree(struct tree *t)
+{
+    struct ft_top_model *m = t->m;
+    uint32_t *preorder = t->ms->indices;
+    size_t npre = 0;
+    size_t pos = 0;
+
+    for (uint32_t root = t->roots; root != FT_TOP_NONE; root = t->nodes[root].next_sibling) {
+        uint32_t v = root;
+        bool finished = false;
+        while (!finished) {
+            struct ft_top_tree_node *node = &t->nodes[v];
+            preorder[npre++] = v;
+            node->sub_first = (uint32_t)pos;
+            for (size_t k = 0; k < node->own_count; k++)
+                t->sub[pos++] = t->own[node->own_first + k];
+            if (node->first_child != FT_TOP_NONE) {
+                v = node->first_child;
+                continue;
+            }
+            for (;;) {
+                t->nodes[v].sub_end = (uint32_t)pos;
+                if (v == root) {
+                    finished = true;
+                    break;
+                }
+                if (t->nodes[v].next_sibling != FT_TOP_NONE) {
+                    v = t->nodes[v].next_sibling;
+                    break;
+                }
+                v = t->nodes[v].parent;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < t->nnodes; i++) {
+        struct ft_top_tree_node *node = &t->nodes[i];
+        const struct ft_top_process_entry *p = node->proc;
+        node->total = p->pub.known ? p->file_bytes : 0;
+        for (size_t k = 0; !p->pub.known && k < node->own_count; k++)
+            node->total += t->own[node->own_first + k]->bytes;
+    }
+    for (size_t k = npre; k-- > 0;) {
+        const struct ft_top_tree_node *node = &t->nodes[preorder[k]];
+        if (node->parent != FT_TOP_NONE)
+            t->nodes[node->parent].total += node->total;
+    }
+    for (size_t i = 0; i < t->nnodes; i++) {
+        struct ft_top_tree_node *node = &t->nodes[i];
+        struct ft_top_process *p = &node->proc->pub;
+        struct summary sum;
+        summarize(t->sub + node->sub_first, node->sub_end - node->sub_first, ft_top_next_mark(m),
+                  &sum);
+        p->rate = sum.rate;
+        p->files = sum.files;
+        p->destinations = sum.destinations;
+        p->method = sum.method;
+        p->confidence = sum.confidence;
+        p->total = node->total;
+        p->transfers = t->own + node->own_first;
+        p->ntransfers = node->own_count;
+    }
+}
+
+static enum shows node_shows(const struct ft_top_mode_state *ms, struct ft_top_key key,
+                             bool has_children)
+{
+    uint32_t *state = ft_top_map_find(&ms->expansion, key);
+    if (state)
+        return *state == EXPLICIT_COLLAPSED ? SHOWS_NOTHING : SHOWS_ALL;
+    if (ms->expanded_all)
+        return SHOWS_ALL;
+    return has_children ? SHOWS_CHILDREN : SHOWS_NOTHING;
+}
+
+static bool fold_open(const struct ft_top_mode_state *ms, struct ft_top_key key)
+{
+    uint32_t *state = ft_top_map_find(&ms->expansion, key);
+    return state ? *state == EXPLICIT_EXPANDED : ms->expanded_all;
+}
+
+static uint32_t child_rails(uint32_t rails, uint8_t depth, bool last)
+{
+    return depth >= 1 && depth < 32 && !last ? rails | 1u << depth : rails;
+}
+
+static bool emit_node(struct tree *t, uint32_t v, uint8_t depth, uint32_t rails, bool last,
+                      const struct ft_top_item *it);
+
+/* A fold row for siblings beyond the first of their title. */
+static void fold_values(struct tree *t, struct ft_top_fold *fold, struct ft_top_item *it)
+{
+    uint32_t mark = ft_top_next_mark(t->m);
+    struct summary sum = {0};
+    struct summary part;
+    uint64_t by_method[FT_TOP_METHODS] = {0};
+
+    for (size_t k = 0; k < fold->count; k++) {
+        const struct ft_top_tree_node *node = &t->nodes[process_entry(fold->members[k])->node];
+        summarize(t->sub + node->sub_first, node->sub_end - node->sub_first, mark, &part);
+        sum.rate += part.rate;
+        sum.files += part.files;
+        sum.destinations += part.destinations;
+        by_method[part.method] += part.rate;
+        fold->total += node->total;
+    }
+    for (size_t i = 0; i < FT_TOP_METHODS; i++) {
+        if (by_method[i] > by_method[sum.method])
+            sum.method = (uint8_t)i;
+    }
+    if (sum.rate == 0 && fold->count)
+        sum.method = fold->members[0]->method;
+    fold->rate = sum.rate;
+    fold->files = sum.files;
+    fold->destinations = sum.destinations;
+    fold->method = sum.method;
+    tally_item(it,
+               &(struct tally){fold->rate, fold->total, fold->files, fold->destinations,
+                               fold->members[0]->pid, fold->method, fold->members[0]->user,
+                               fold->title},
+               t->ms->sort);
+}
+
+/*
+ * Emits what hangs below a node at depth: its own transfers when it shows them, then its
+ * children, siblings sharing a title beyond the first of them folded into one row.
+ */
+static bool emit_below(struct tree *t, uint32_t parent, uint32_t first_child, size_t ntransfers,
+                       const struct ft_top_transfer *const *transfers, uint8_t depth,
+                       uint32_t rails)
+{
+    struct ft_top_mode_state *ms = t->ms;
+    size_t base = t->top;
+    size_t nchildren = 0;
+
+    for (uint32_t c = first_child; c != FT_TOP_NONE; c = t->nodes[c].next_sibling) {
+        struct ft_top_item *it = &ms->items[base + nchildren++];
+        process_item(it, &t->nodes[c].proc->pub, ms->sort);
+        it->index = c;
+    }
+    struct order o = mode_order(ms);
+    order_items(ms, ms->items + base, nchildren, &o);
+
+    /* Count titles, then send the second and later of a crowded title into its fold. */
+    uint32_t parent_pid = parent == FT_TOP_NONE ? 0 : t->nodes[parent].proc->pub.pid;
+    ft_top_map_clear(&ms->scratch);
+    for (size_t k = 0; k < nchildren; k++) {
+        const struct ft_top_process *p = ms->items[base + k].entity;
+        size_t len = strlen(p->title);
+        struct ft_top_key key = {ft_top_hash(p->title, len, 7), parent_pid, FT_TOP_KEY_FOLD};
+        uint32_t *n = ft_top_map_find(&ms->scratch, key);
+        ft_top_map_put(&ms->scratch, key, n ? *n + 1 : 1);
+    }
+
+    size_t listed = base + nchildren;
+    size_t nlisted = 0;
+    struct ft_top_item *list = &ms->items[listed];
+    for (size_t k = 0; k < nchildren; k++) {
+        struct ft_top_item *it = &ms->items[base + k];
+        const struct ft_top_process *p = it->entity;
+        size_t len = strlen(p->title);
+        struct ft_top_key key = {ft_top_hash(p->title, len, 7), parent_pid, FT_TOP_KEY_FOLD};
+        uint32_t *n = ft_top_map_find(&ms->scratch, key);
+        process_entry(p)->fold = FT_TOP_NONE;
+        if (!n || *n < FOLD_AT || p->title[0] == '\0') {
+            list[nlisted++] = *it;
+            continue;
+        }
+        /* The first of the title keeps its row, and its fold row follows it. */
+        struct ft_top_key first = {key.a, key.b, FT_TOP_KEY_SECTION};
+        uint32_t *at = ft_top_map_find(&ms->scratch, first);
+        if (!at) {
+            list[nlisted++] = *it;
+            struct ft_top_fold *fold = &ms->folds[t->nfolds];
+            const struct ft_top_process **members =
+                ft_top_pool_alloc(&ms->pool, (*n - 1) * sizeof(*members));
+            if (!members)
+                return false;
+            *fold = (struct ft_top_fold){.title = p->title, .name = p->name, .members = members};
+            list[nlisted] = (struct ft_top_item){
+                .entity = fold,
+                .key = key,
+                .kind = FT_TOP_ROW_FOLD,
+                .index = (uint32_t)t->nfolds++,
+            };
+            ft_top_map_put(&ms->scratch, first, (uint32_t)nlisted++);
+            continue;
+        }
+        struct ft_top_fold *fold = (struct ft_top_fold *)(void *)list[*at].entity;
+        ((const struct ft_top_process **)fold->members)[fold->count++] = p;
+        process_entry(p)->fold = list[*at].index;
+    }
+    for (size_t k = 0; k < nlisted; k++) {
+        if (list[k].kind == FT_TOP_ROW_FOLD)
+            fold_values(t, (struct ft_top_fold *)(void *)list[k].entity, &list[k]);
+    }
+    t->top = listed + nlisted;
+
+    /* Own transfers first, by rate. */
+    size_t tbase = t->top;
+    for (size_t k = 0; k < ntransfers; k++)
+        transfer_item(&ms->items[tbase + k], transfer_entry(transfers[k]), FT_TOP_SORT_RATE);
+    struct order by_rate_order = rate_order(ms);
+    order_items(ms, ms->items + tbase, ntransfers, &by_rate_order);
+    t->top = tbase + ntransfers;
+
+    uint8_t below = depth < UINT8_MAX ? (uint8_t)(depth + 1) : depth;
+    if (parent == FT_TOP_NONE)
+        below = 0;
+    for (size_t k = 0; k < ntransfers; k++) {
+        bool last = k + 1 == ntransfers && nlisted == 0;
+        if (!emit(ms, &ms->items[tbase + k], below, rails, FT_TOP_NODE_LEAF, last))
+            return false;
+    }
+    for (size_t k = 0; k < nlisted; k++) {
+        const struct ft_top_item *it = &list[k];
+        bool last = k + 1 == nlisted;
+        bool ok;
+        if (it->kind == FT_TOP_ROW_FOLD) {
+            const struct ft_top_fold *fold = it->entity;
+            bool open = fold_open(ms, it->key);
+            size_t row = ms->nrows;
+            ok = emit(ms, it, below, rails, open ? FT_TOP_NODE_EXPANDED : FT_TOP_NODE_COLLAPSED,
+                      last);
+            uint32_t inner = child_rails(rails, below, last);
+            uint8_t deeper = below < UINT8_MAX ? (uint8_t)(below + 1) : below;
+            size_t j = 0;
+            for (size_t c = 0; ok && c < nchildren; c++) {
+                const struct ft_top_item *member = &ms->items[base + c];
+                if (process_entry(member->entity)->fold != it->index)
+                    continue;
+                j++;
+                ok = open ? emit_node(t, member->index, deeper, inner, j == fold->count, member)
+                          : remember(ms, member->key, row, next_due(member));
+            }
+        } else {
+            ok = emit_node(t, it->index, below, rails, last, it);
+        }
+        if (!ok)
+            return false;
+    }
+    t->top = base;
+    return true;
+}
+
+static bool emit_node(struct tree *t, uint32_t v, uint8_t depth, uint32_t rails, bool last,
+                      const struct ft_top_item *it)
+{
+    struct ft_top_mode_state *ms = t->ms;
+    const struct ft_top_tree_node *node = &t->nodes[v];
+    bool has_children = node->first_child != FT_TOP_NONE;
+    enum shows shows = node_shows(ms, it->key, has_children);
+    enum ft_top_node state = !has_children && node->own_count == 0 ? FT_TOP_NODE_LEAF
+                             : shows == SHOWS_NOTHING              ? FT_TOP_NODE_COLLAPSED
+                                                                   : FT_TOP_NODE_EXPANDED;
+    size_t row = ms->nrows;
+
+    if (!emit(ms, it, depth, rails, state, last))
+        return false;
+    if (shows == SHOWS_NOTHING) {
+        for (size_t k = 0; k < node->own_count; k++) {
+            if (!remember(ms, transfer_entry(t->own[node->own_first + k])->key, row, 0))
+                return false;
+        }
+        for (uint32_t c = node->first_child; c != FT_TOP_NONE; c = t->nodes[c].next_sibling) {
+            if (!remember(ms, (struct ft_top_key){t->nodes[c].proc->pub.pid, 0, FT_TOP_KEY_PROCESS},
+                          row, 0))
+                return false;
+        }
+        return true;
+    }
+    size_t ntransfers = shows == SHOWS_ALL ? node->own_count : 0;
+    return emit_below(t, v, node->first_child, ntransfers, t->own + node->own_first, depth,
+                      child_rails(rails, depth, last));
+}
+
+static bool build_tree(struct ft_top_model *m, struct ft_top_mode_state *ms)
+{
+    size_t nprocs = m->nprocesses[m->now];
+    struct ft_top_process_entry *procs = m->processes[m->now];
+    size_t most = 2 * nprocs + 1;
+    struct slicing s;
+    struct tree t = {.m = m, .ms = ms};
+
+    if (!reserve_lists(ms, 2 * ms->npassed + 1) || !slicing_reserve(ms, &s, nprocs) ||
+        !ft_top_reserve(&ms->nodes, &ms->nodes_cap, most, sizeof(*ms->nodes)) ||
+        !ft_top_reserve(&ms->placeholders, &ms->placeholders_cap, nprocs + 1,
+                        sizeof(*ms->placeholders)) ||
+        !ft_top_reserve(&ms->folds, &ms->folds_cap, nprocs + 1, sizeof(*ms->folds)) ||
+        !ft_top_map_reserve(&ms->scratch, most))
+        return false;
+    size_t shown = 0;
+    slice_by(ms, s.count, s.first, nprocs, process_of, true);
+    for (size_t i = 0; i < nprocs; i++) {
+        procs[i].count = s.count[i];
+        procs[i].first = s.first[i];
+        shown += s.count[i] != 0;
+    }
+
+    t.nodes = ms->nodes;
+    t.own = ms->lists;
+    t.sub = ms->lists + ms->npassed;
+    grow_tree(&t);
+    for (size_t i = 0; i < t.nnodes; i++) {
+        struct ft_top_tree_node *node = &t.nodes[i];
+        node->own_first = node->proc->count ? node->proc->first : 0;
+        node->own_count = node->proc->count;
+    }
+    if (!reserve_items(ms, 3 * t.nnodes + ms->npassed + 16))
+        return false;
+    sum_tree(&t);
+
+    ms->view.shown = shown;
+    ms->view.total = m->totals.processes.value;
+    return emit_below(&t, FT_TOP_NONE, t.roots, 0, nullptr, 0, 0);
+}
+
 static bool row_matches(const struct ft_top_row *r, const char *needle, size_t n)
 {
     size_t a;
@@ -1223,7 +1687,7 @@ bool ft_top_build(struct ft_top_model *m, enum ft_top_mode mode)
             if (mode == FT_TOP_TRANSFERS) {
                 ok = build_transfers(m, ms);
             } else if (mode == FT_TOP_PROCESSES) {
-                ok = build_processes(m, ms);
+                ok = m->tree ? build_tree(m, ms) : build_processes(m, ms);
             } else if (mode == FT_TOP_DESTINATIONS) {
                 ok = build_destinations(m, ms);
             } else {
