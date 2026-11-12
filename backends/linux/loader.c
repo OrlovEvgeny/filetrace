@@ -236,6 +236,18 @@ static int load_with(const struct ft_probe_set *set, const struct ft_backend_con
     return 0;
 }
 
+/* Puts the background and strict lists in place, so that the first read a probe sees is told. */
+static void load_lists(struct ft_linux_probes *p, const struct ft_backend_config *cfg)
+{
+    int files_fd = bpf_map__fd(bpf_object__find_map_by_name(p->obj, "background_files"));
+    int names_fd = bpf_map__fd(bpf_object__find_map_by_name(p->obj, "background_names"));
+    int suffixes_fd = bpf_map__fd(bpf_object__find_map_by_name(p->obj, "background_suffixes"));
+    if (files_fd >= 0)
+        p->listed_files = ft_linux_background_load(files_fd, cfg, &p->listed_truncated);
+    if (names_fd >= 0 && suffixes_fd >= 0)
+        ft_linux_background_names(names_fd, suffixes_fd, cfg);
+}
+
 static int load_set(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
                     struct ft_linux_probes *out)
 {
@@ -306,6 +318,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
         return err;
     }
 
+    load_lists(out, cfg);
     for (size_t i = 0; i < set->count; i++) {
         if (!enabled[i])
             continue;
@@ -410,12 +423,7 @@ struct ft_backend {
 static void background_scan(struct ft_backend *b, uint64_t now_ns)
 {
     bool truncated = false;
-    size_t held = ft_linux_background_load(b->background_fd, &b->cfg, &truncated);
-    if (truncated && !b->background_scan_ns)
-        ft_log(
-            FT_LOG_WARN,
-            "[correlation] background_paths and strict_paths name more than %d files; %zu are kept",
-            FT_BPF_BACKGROUND_MAX, held);
+    ft_linux_background_load(b->background_fd, &b->cfg, &truncated);
     b->background_scan_ns = now_ns;
 }
 
@@ -907,12 +915,12 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     b->ncpus = libbpf_num_possible_cpus();
     b->last_flush_ns = ft_clock_mono_ns();
     b->background_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_files"));
-    if (b->background_fd >= 0)
-        background_scan(b, b->last_flush_ns);
-    int names_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_names"));
-    int suffixes_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_suffixes"));
-    if (names_fd >= 0 && suffixes_fd >= 0)
-        ft_linux_background_names(names_fd, suffixes_fd, &b->cfg);
+    b->background_scan_ns = b->last_flush_ns;
+    if (b->probes.listed_truncated)
+        ft_log(
+            FT_LOG_WARN,
+            "[correlation] background_paths and strict_paths name more than %d files; %zu are kept",
+            FT_BPF_BACKGROUND_MAX, b->probes.listed_files);
     if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
         b->php = ft_linux_php_open(obj);
         if (b->php)
