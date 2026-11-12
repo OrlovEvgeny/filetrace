@@ -530,6 +530,7 @@ done
 for n in 65536 300000; do
     "$workload" headbody "$data/head-continue-$n.bin" "$n" early >/dev/null
     "$workload" headbody "$data/head-split-$n.bin" "$n" split >/dev/null
+    "$workload" headbody "$data/head-split3-$n.bin" "$n" split3 >/dev/null
 done
 settle
 for n in 1024 2048 3072 4096 5120 20000 60000; do
@@ -545,6 +546,8 @@ for n in 65536 300000; do
         "$(ft files --path "$data/head-continue-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
     expect "body sent in two runs: $n bytes" \
         "$(ft files --path "$data/head-split-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
+    expect "body sent in three runs: $n bytes" \
+        "$(ft files --path "$data/head-split3-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
 done
 
 # Two PUTs of one file over a keep-alive connection: the second is a reply's; the first only when
@@ -1092,6 +1095,8 @@ CONFIG
 : >"$data/strict-metrics.py"
 : >"$data/strict-chunks.py"
 : >"$data/strict-halves.py"
+: >"$data/strict-framed.js"
+: >"$data/strict-after.bin"
 mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
     { echo "FAIL: the agent did not start with background_paths"; exit 1; }
@@ -1108,6 +1113,8 @@ passwd_report=$("$workload" upload /etc/passwd 65536)
 "$workload" readudptwo "$data/strict-halves.py" 8192 >/dev/null
 "$workload" sendlisted heard "$data/listed.both" 4096 >/dev/null
 "$workload" sendlisted heard "$data/special.mixed" 4096 >/dev/null
+"$workload" framed "$data/strict-framed.js" 1048576 16384 22 >/dev/null
+"$workload" sendlisted after "$data/strict-after.bin" 2048 "$data/plain-first.cfg" 1500 >/dev/null
 settle
 csv=$(ft files --path "$data/up-bundle.bin" --format csv)
 expect "background: file read before the bundle reported" "$(printf '%s\n' "$csv" | rows)" 1
@@ -1133,6 +1140,12 @@ expect "strict: small datagrams after a read not reported" \
     "$(ft files --path "$data/strict-metrics.py" --format csv | rows)" 0
 expect "strict: halves over two datagram sockets not taken for one" \
     "$(ft files --path "$data/strict-halves.py" --format csv | rows)" 0
+expect "strict: file sent in secure records bytes" \
+    "$(ft files --path "$data/strict-framed.js" --format csv | column transfer.bytes_sent)" 1048576
+expect "strict: file read after a smaller one, closer to what went, bytes" \
+    "$(ft files --path "$data/strict-after.bin" --format csv | column transfer.bytes_sent)" 2048
+expect "strict: the smaller file read before not reported" \
+    "$(ft files --path "$data/plain-first.cfg" --format csv | rows)" 0
 expect "both lists: background wins" "$(ft files --path "$data/listed.both" --format csv | rows)" 0
 expect "both lists: a background suffix wins over a strict name" \
     "$(ft files --path "$data/special.mixed" --format csv | rows)" 0

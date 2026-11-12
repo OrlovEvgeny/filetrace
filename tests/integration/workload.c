@@ -1065,18 +1065,19 @@ static void scenario_dial_idle(const char *path, size_t size, size_t seconds)
 }
 
 /*
- * headbody <path> <bytes> <fresh|heard|continue|early|split>: connects, hearing from the peer
- * first with heard, then reads the file and sends a signed request head and the file as its
- * body, as an S3 client does, and closes. With continue, the peer answers the head before the
- * body is sent and answers the body, as with Expect: 100-continue; early is continue with the
- * file read before the connection is opened; split is early with the body sent in two halves
- * and an answer heard between them, as a TLS 1.3 client reads a session ticket.
+ * headbody <path> <bytes> <fresh|heard|continue|early|split|split3>: connects, hearing from the
+ * peer first with heard, then reads the file and sends a signed request head and the file as
+ * its body, as an S3 client does, and closes. With continue, the peer answers the head before
+ * the body is sent and answers the body, as with Expect: 100-continue; early is continue with
+ * the file read before the connection is opened; split and split3 are early with the body sent
+ * in two or three parts and an answer heard between them, as a TLS 1.3 client reads its session
+ * tickets.
  */
 static void scenario_head_body(const char *path, size_t size, const char *shape)
 {
     bool heard = strcmp(shape, "heard") == 0;
-    bool split = strcmp(shape, "split") == 0;
-    bool early = split || strcmp(shape, "early") == 0;
+    size_t parts = strcmp(shape, "split3") == 0 ? 3 : strcmp(shape, "split") == 0 ? 2 : 1;
+    bool early = parts > 1 || strcmp(shape, "early") == 0;
     bool answered = early || strcmp(shape, "continue") == 0;
     struct sink sink = start_sink(SOCK_STREAM, false,
                                   heard      ? SINK_GREET
@@ -1093,11 +1094,12 @@ static void scenario_head_body(const char *path, size_t size, const char *shape)
     send_all(sock, head, sizeof(head));
     if (answered)
         hear(sock);
-    size_t first = split ? size / 2 : size;
-    send_all(sock, contents, first);
-    if (split) {
-        hear(sock);
-        send_all(sock, contents + first, size - first);
+    for (size_t i = 0; i < parts; i++) {
+        size_t from = size * i / parts;
+        size_t to = size * (i + 1) / parts;
+        if (i)
+            hear(sock);
+        send_all(sock, contents + from, to - from);
     }
     if (answered)
         hear(sock);
@@ -1246,6 +1248,36 @@ static void scenario_read_udp_two(const char *path, size_t size)
     free(contents);
     report("readudptwo", path, size, sink.port);
     usleep(100 * 1000);
+    stop_sink(&sink);
+}
+
+/*
+ * framed <path> <bytes> <record bytes> <frame bytes>: over a connection that has heard from its
+ * peer, reads the file and sends a request head and the file in records, each with a frame of its
+ * own, as a TLS connection does.
+ */
+static void scenario_framed(const char *path, size_t size, size_t record, size_t frame)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    char head[200];
+    memset(head, 'H', sizeof(head));
+    char *out = malloc(record + frame);
+    if (!out)
+        die("malloc");
+    memset(out, 'F', frame);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    send_all(sock, head, sizeof(head));
+    for (size_t at = 0; at < size; at += record) {
+        size_t n = size - at < record ? size - at : record;
+        memcpy(out + frame, contents + at, n);
+        send_all(sock, out, frame + n);
+    }
+    close(sock);
+    free(out);
+    free(contents);
+    report("framed", path, size, sink.port);
     stop_sink(&sink);
 }
 
@@ -1930,6 +1962,8 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "framed") == 0 && argc == 6)
+        scenario_framed(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "sendfileeof") == 0 && argc == 4)
         scenario_sendfile_eof(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readudp") == 0 && argc == 6)
