@@ -266,6 +266,21 @@ struct msghdr {
     unsigned int msg_flags;
 };
 
+/* What an iterator over a map's elements is given for each element. */
+struct seq_file;
+struct bpf_map;
+struct bpf_iter_meta {
+    struct seq_file *seq;
+    u64 session_id;
+    u64 seq_num;
+};
+struct bpf_iter__bpf_map_elem {
+    struct bpf_iter_meta *meta;
+    struct bpf_map *map;
+    void *key;
+    void *value;
+};
+
 #pragma clang attribute pop
 
 #endif

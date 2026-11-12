@@ -719,6 +719,29 @@ static __always_inline void carry_close(void *map, __u64 sk, enum carry_end end,
     bpf_map_delete_elem(&carries, &sk);
 }
 
+/*
+ * Judges a window that nothing touched for the correlation window as it stands. The agent runs
+ * it over the windows once a second. A first flight its peer answered was a hello.
+ */
+SEC("iter/bpf_map_elem")
+int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
+{
+    __u64 *key = ctx->key;
+    struct carry *c = ctx->value;
+    void *map = agg_map_now();
+    if (!key || !c || !map)
+        return 0;
+    __u64 now = bpf_ktime_get_boot_ns();
+    if (now - c->last_ns <= cfg.corr_window_ns)
+        return 0;
+    __u64 sk = *key;
+    carry_settle(map, sk, now);
+    enum carry_end end = c->kind == CARRY_FLIGHT && sock_heard(sk) ? CARRY_AGAIN : CARRY_AGED;
+    carry_judge(map, sk, c, end);
+    bpf_map_delete_elem(&carries, &sk);
+    return 0;
+}
+
 /* Keeps the three longest runs of sends, longest first. */
 static __always_inline void runs_keep(__u64 *runs, __u64 run)
 {

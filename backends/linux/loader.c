@@ -229,8 +229,20 @@ static int load_with(const struct ft_probe_set *set, const struct ft_backend_con
 
     int err = bpf_object__load(obj);
     if (err) {
+        /* Without the aging iterator, a window is judged at its connection's next event. */
         bpf_object__close(obj);
-        return err;
+        obj = open_object(set, cfg, enabled);
+        struct bpf_program *aging =
+            obj ? bpf_object__find_program_by_name(obj, "ft_carries_aged") : nullptr;
+        if (!aging) {
+            bpf_object__close(obj);
+            return err;
+        }
+        bpf_program__set_autoload(aging, false);
+        if (bpf_object__load(obj)) {
+            bpf_object__close(obj);
+            return err;
+        }
     }
     *out = obj;
     return 0;
@@ -413,6 +425,8 @@ struct ft_backend {
     uint64_t last_flush_ns;
     int background_fd;
     uint64_t background_scan_ns; /* when the background map was last brought up to date */
+    struct bpf_link *aging;      /* the iterator that judges windows nothing touched lately */
+    uint64_t aged_ns;
     struct ft_linux_php *php;
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
@@ -786,6 +800,18 @@ static void report_losses(struct ft_backend *b, const uint64_t totals[FT_BPF_CNT
     }
 }
 
+/* Runs the aging iterator over the windows, which judges the ones nothing touched lately. */
+static void age_windows(struct ft_backend *b)
+{
+    int fd = bpf_iter_create(bpf_link__fd(b->aging));
+    if (fd < 0)
+        return;
+    char buf[64];
+    while (read(fd, buf, sizeof(buf)) > 0) {
+    }
+    close(fd);
+}
+
 static void backend_flush(struct ft_backend *b)
 {
     uint64_t now_ns = ft_clock_mono_ns();
@@ -795,6 +821,10 @@ static void backend_flush(struct ft_backend *b)
     if (queued > b->queue_peak_bytes)
         b->queue_peak_bytes = queued;
     ring_buffer__consume(b->ring);
+    if (b->aging && now_ns - b->aged_ns >= FT_NS_PER_SEC) {
+        age_windows(b);
+        b->aged_ns = now_ns;
+    }
 
     /* Emptying a counter map walks all of its buckets; skip it while it received no entries. */
     read_counters(b, totals);
@@ -836,6 +866,7 @@ static void backend_close(struct ft_backend *b)
         return;
     ring_buffer__free(b->ring);
     ft_linux_php_close(b->php);
+    bpf_link__destroy(b->aging);
     ft_linux_probes_unload(&b->probes);
     free(b->cpu_values);
     free(b->keys);
@@ -914,6 +945,22 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     b->queue_bytes = bpf_map__max_entries(events);
     b->ncpus = libbpf_num_possible_cpus();
     b->last_flush_ns = ft_clock_mono_ns();
+    struct bpf_program *aging = bpf_object__find_program_by_name(obj, "ft_carries_aged");
+    struct bpf_map *carries = bpf_object__find_map_by_name(obj, "carries");
+    if (aging && carries && bpf_program__fd(aging) >= 0) {
+        union bpf_iter_link_info info = {.map = {.map_fd = (uint32_t)bpf_map__fd(carries)}};
+        /* libbpf refuses options whose padding is not zero. */
+        struct bpf_iter_attach_opts opts;
+        memset(&opts, 0, sizeof(opts));
+        opts.sz = sizeof(opts);
+        opts.link_info = &info;
+        opts.link_info_len = sizeof(info);
+        b->aging = bpf_program__attach_iter(aging, &opts);
+    }
+    if (!b->aging)
+        ft_log(FT_LOG_WARN,
+               "a held transfer is judged only when its connection or thread acts again: "
+               "the kernel refused the iterator that judges it after a quiet while");
     b->background_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_files"));
     b->background_scan_ns = b->last_flush_ns;
     if (b->probes.listed_truncated)
