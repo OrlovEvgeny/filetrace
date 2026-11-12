@@ -146,6 +146,19 @@ static bool has(const char *text, const char *needle)
     return strstr(text, needle) != nullptr;
 }
 
+static bool starts(const char *text, const char *prefix)
+{
+    return strncmp(text, prefix, strlen(prefix)) == 0;
+}
+
+static bool ends(const char *text, const char *suffix)
+{
+    size_t len = strlen(text);
+    size_t tail = strlen(suffix);
+
+    return len >= tail && strcmp(text + len - tail, suffix) == 0;
+}
+
 static size_t count(const char *text, char c)
 {
     size_t n = 0;
@@ -395,6 +408,52 @@ static void grouped_and_tree(void)
     fixture_free(&f);
 }
 
+static char *row_json(const struct ft_top_model *m, enum ft_top_mode mode, size_t index)
+{
+    char *text = nullptr;
+    size_t size = 0;
+    FILE *out = open_memstream(&text, &size);
+
+    CHECK(out != nullptr);
+    if (!out)
+        return strdup("");
+    ft_top_row_json(m, mode, index, out);
+    fclose(out);
+    return text;
+}
+
+static void single_rows(void)
+{
+    struct fixture f;
+
+    fixture_init(&f);
+    fill(&f);
+
+    /* An object that stands alone: indented from the margin, without a final newline. */
+    char *text = row_json(f.m, FT_TOP_TRANSFERS, 0);
+    CHECK(json_ok(text));
+    CHECK(starts(text, "{\n  \"id\": \"tr_1\",\n"));
+    CHECK(has(text, "\n  \"remote\": {\n    \"address\": \"198.51.100.4\","));
+    CHECK(ends(text, "\n}"));
+    free(text);
+
+    text = row_json(f.m, FT_TOP_TRANSFERS, 99);
+    CHECK_STR(text, "");
+    free(text);
+
+    /* A group heading is a row too, and a row of a group names it. */
+    ft_top_set_group(f.m, FT_TOP_TRANSFERS, FT_TOP_GROUP_SCRIPT);
+    text = row_json(f.m, FT_TOP_TRANSFERS, 0);
+    CHECK(json_ok(text));
+    CHECK(starts(text, "{\n  \"group\": null,\n  \"rows\": 2,"));
+    free(text);
+    text = row_json(f.m, FT_TOP_TRANSFERS, 4);
+    CHECK(json_ok(text));
+    CHECK(has(text, "\"group\": \"/srv/app/public/download.php\",\n  \"id\": \"tr_3\""));
+    free(text);
+    fixture_free(&f);
+}
+
 static void leader(struct ft_rows *rows, uint32_t rank, uint32_t previous, const char *text,
                    uint64_t bytes, const char *sender)
 {
@@ -506,4 +565,5 @@ void test_top_once(void)
     documents();
     grouped_and_tree();
     leaders();
+    single_rows();
 }
