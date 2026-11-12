@@ -600,14 +600,15 @@ static bool agent_badge(const struct ft_top_draw *d, struct badge *b)
     b->style = badge_style(d, FT_COLOR_RED);
     if (agent_unreachable(ui)) {
         ft_strlcpy(b->text, " agent unreachable ", sizeof(b->text));
+    } else if (ui->lag_ns) {
+        b->style = badge_style(d, FT_COLOR_AMBER);
+        snprintf(b->text, sizeof(b->text), " ui lag %.1fs ", (double)ui->lag_ns / 1e9);
     } else if (t->agent && t->degraded && t->events_dropped) {
         ft_format_count(t->events_dropped, count, sizeof(count));
         snprintf(b->text, sizeof(b->text), " %s %s lost ", count,
                  plural(t->events_dropped, "event", "events"));
     } else if (t->agent && t->degraded) {
         ft_strlcpy(b->text, " agent degraded ", sizeof(b->text));
-    } else if (ui->lag_ns) {
-        snprintf(b->text, sizeof(b->text), " ui lag %.1fs ", (double)ui->lag_ns / 1e9);
     } else {
         return false;
     }
