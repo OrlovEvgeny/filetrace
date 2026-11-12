@@ -3,6 +3,7 @@
 #include "filetrace/clock.h"
 #include "ui/top/document.h"
 #include "ui/top/plain.h"
+#include "ui/top/presets.h"
 #include "ui/top/source.h"
 #include "ui/ui.h"
 
@@ -127,16 +128,6 @@ static void signals_restore(const struct signals *saved)
     sigaction(SIGPIPE, &saved->pipe, nullptr);
 }
 
-/* The expression saved under a name. */
-static bool preset_find(const char *name, char *expression, size_t size, struct ft_error *err)
-{
-    (void)name;
-    (void)expression;
-    (void)size;
-    ft_error_set(err, FT_EXIT_USAGE, "presets are not available here");
-    return false;
-}
-
 /* The filter with a leading @name replaced by what the preset holds; nullptr when it has none. */
 static int expand_preset(const char *filter, char **expanded)
 {
@@ -152,7 +143,7 @@ static int expand_preset(const char *filter, char **expanded)
         return ft_usage_error("top", "filter: a preset name must follow '@'");
     memcpy(name, filter + 1, len);
     name[len] = '\0';
-    if (!preset_find(name, expression, sizeof(expression), &err))
+    if (!ft_top_presets_find(name, expression, sizeof(expression), &err))
         return ft_usage_error("top", "filter: %s", err.msg);
 
     const char *rest = filter + 1 + len + strspn(filter + 1 + len, " \t");
