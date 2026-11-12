@@ -150,6 +150,14 @@ static void keep_row(void *dst, size_t dst_size, const void *payload, size_t siz
     memcpy(dst, payload, size < dst_size ? size : dst_size);
 }
 
+static void keep_stats(struct ft_row_stats *st, const void *payload, size_t size)
+{
+    keep_row(st, sizeof(*st), payload, size);
+    st->backend[sizeof(st->backend) - 1] = '\0';
+    st->mode[sizeof(st->mode) - 1] = '\0';
+    st->version[sizeof(st->version) - 1] = '\0';
+}
+
 static void on_row(void *ctx, uint16_t type, const void *payload, size_t size)
 {
     struct sink *sink = ctx;
@@ -158,7 +166,7 @@ static void on_row(void *ctx, uint16_t type, const void *payload, size_t size)
         if (!ft_rows_append(sink->rows, payload, size))
             sink->full = true;
     } else if (sink->stats && type == FT_MSG_ROW_STATS) {
-        keep_row(sink->stats, sizeof(*sink->stats), payload, size);
+        keep_stats(sink->stats, payload, size);
     } else if (sink->summary && type == FT_MSG_ROW_LEADER_SUMMARY) {
         keep_row(sink->summary, sizeof(*sink->summary), payload, size);
     }

@@ -1128,8 +1128,11 @@ static bool copy_rows(const struct ft_rows *rows, struct ft_row_leader **out, si
     if (!*out)
         return false;
     for (size_t i = 0; i < rows->count; i++) {
-        ft_rows_get(rows, i, &(*out)[i], sizeof(**out));
-        (*out)[i].text[sizeof((*out)[i].text) - 1] = '\0';
+        struct ft_row_leader *row = &(*out)[i];
+        ft_rows_get(rows, i, row, sizeof(*row));
+        for (size_t k = 0; k < FT_LEADER_SENDERS; k++)
+            row->senders[k].name[sizeof(row->senders[k].name) - 1] = '\0';
+        row->text[sizeof(row->text) - 1] = '\0';
     }
     *count = rows->count;
     return true;
