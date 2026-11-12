@@ -6,3 +6,4 @@ zlib|zlib|Zlib|https://zlib.net|zlib.LICENSE
 libzstd|Zstandard|BSD-3-Clause|https://github.com/facebook/zstd|zstd.LICENSE
 libprotobuf-c|protobuf-c|BSD-2-Clause|https://github.com/protobuf-c/protobuf-c|protobuf-c.LICENSE
 libnghttp2|nghttp2|MIT|https://nghttp2.org|nghttp2.COPYING
+termbox2|termbox2|MIT|https://github.com/termbox/termbox2|termbox2.LICENSE

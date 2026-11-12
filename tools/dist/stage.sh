@@ -51,6 +51,7 @@ fi
     for module in libbpf libelf zlib libzstd libprotobuf-c libnghttp2; do
         printf '%s %s\n' "$module" "$(pkg-config --modversion "$module")"
     done
+    printf 'termbox2 %s\n' "$(sed -n 's/^#define TB_VERSION_STR "\(.*\)"$/\1/p' third_party/termbox2/termbox2.h)"
 } >"$stage/third-party.txt"
 
 ls -l "$stage/bin"

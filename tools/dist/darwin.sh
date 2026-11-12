@@ -45,8 +45,11 @@ if [ "$reported" != "Filetrace $version" ]; then
 fi
 
 # The libraries linked into the binaries, for the third-party notices.
-for module in libprotobuf-c libnghttp2; do
-    printf '%s %s\n' "$module" "$(pkg-config --modversion "$module")"
-done >"$stage/third-party.txt"
+{
+    for module in libprotobuf-c libnghttp2; do
+        printf '%s %s\n' "$module" "$(pkg-config --modversion "$module")"
+    done
+    printf 'termbox2 %s\n' "$(sed -n 's/^#define TB_VERSION_STR "\(.*\)"$/\1/p' third_party/termbox2/termbox2.h)"
+} >"$stage/third-party.txt"
 
 ls -l "$stage/bin"
