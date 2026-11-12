@@ -690,6 +690,84 @@ static void churn(void)
     fixture_free(&f);
 }
 
+static void leader(struct ft_rows *rows, uint32_t rank, uint32_t previous, const char *path,
+                   uint64_t bytes, const char *sender)
+{
+    struct ft_row_leader *row = calloc(1, sizeof(*row));
+    row->rank = rank;
+    row->previous_rank = previous;
+    row->bytes = bytes;
+    row->transfers = 10 * rank;
+    row->method = FT_METHOD_SENDFILE;
+    ft_strlcpy(row->senders[0].name, sender, sizeof(row->senders[0].name));
+    ft_strlcpy(row->text, path, sizeof(row->text));
+    CHECK(ft_rows_append(rows, row, offsetof(struct ft_row_leader, text) + strlen(path) + 1));
+    free(row);
+}
+
+static void leaders(void)
+{
+    struct ft_top_model *m = ft_top_model_create();
+    struct ft_rows ranking;
+    struct ft_row_leader_summary summary = {
+        .bytes = 1000, .top_bytes = 600, .previous_from_wall_ns = 1};
+    struct ft_error err = {0};
+
+    ft_rows_init(&ranking, FT_MSG_ROW_LEADER);
+    leader(&ranking, 1, 2, "/var/lib/kafka/events-7.log", 400, "java");
+    leader(&ranking, 2, 0, "/srv/backups/base.tar.zst", 200, "rclone");
+    leader(&ranking, 3, 3, "/var/www/video.mp4", 100, "nginx");
+    ft_top_set_leaders_request(m, FT_WINDOW_1H, FT_LEADER_FILE);
+    struct ft_top_leaders_sample s = {
+        .window = FT_WINDOW_1H,
+        .key = FT_LEADER_FILE,
+        .by = FT_TOP_SORT_BYTES,
+        .summary = &summary,
+        .ranking = &ranking,
+    };
+    CHECK(ft_top_model_leaders(m, &s));
+
+    const struct ft_top_leaders *view = ft_top_leaders(m);
+    CHECK(view->answered);
+    CHECK(view->concentration == 0.6);
+    CHECK_U64(ft_top_row_count(m, FT_TOP_LEADERS), 3);
+    const struct ft_top_leader *l = ft_top_row_at(m, FT_TOP_LEADERS, 0)->leader;
+    CHECK_U64(l->rank_change, 1);
+    CHECK(!l->is_new);
+    CHECK(l->bar == 1.0);
+    CHECK(l->share == 0.4);
+    CHECK_STR(l->row->text + l->name_offset, "events-7.log");
+    l = ft_top_row_at(m, FT_TOP_LEADERS, 1)->leader;
+    CHECK(l->is_new);
+    CHECK(l->bar == 0.5);
+    CHECK_U64(ft_top_row_at(m, FT_TOP_LEADERS, 2)->leader->rank_change, 0);
+
+    /* The selection stays with its file when the ranking changes. */
+    ft_top_select_at(m, FT_TOP_LEADERS, 2);
+    ft_rows_clear(&ranking);
+    leader(&ranking, 1, 3, "/var/www/video.mp4", 500, "nginx");
+    leader(&ranking, 2, 1, "/var/lib/kafka/events-7.log", 400, "java");
+    CHECK(ft_top_model_leaders(m, &s));
+    CHECK_U64(ft_top_selected(m, FT_TOP_LEADERS), 0);
+
+    /* A filter tests what a ranking row has, and refuses what it lacks. */
+    CHECK(ft_top_set_filter(m, FT_TOP_LEADERS, "proc:java", &err));
+    CHECK_U64(ft_top_row_count(m, FT_TOP_LEADERS), 1);
+    CHECK_U64(ft_top_view_of(m, FT_TOP_LEADERS)->total, 2);
+    CHECK(!ft_top_set_filter(m, FT_TOP_LEADERS, "pid:1", &err));
+    CHECK_STR(err.msg, "'pid:1' does not apply to Leaders");
+
+    /* Another request has no answer until the agent gives one. */
+    ft_top_set_leaders_request(m, FT_WINDOW_24H, FT_LEADER_FILE);
+    CHECK(!ft_top_leaders(m)->answered);
+    CHECK_U64(ft_top_row_count(m, FT_TOP_LEADERS), 0);
+    ft_top_set_leaders_request(m, FT_WINDOW_1H, FT_LEADER_FILE);
+    CHECK(ft_top_leaders(m)->answered);
+
+    ft_rows_free(&ranking);
+    ft_top_model_destroy(m);
+}
+
 void test_top_model(void)
 {
     units();
@@ -703,4 +781,5 @@ void test_top_model(void)
     groups();
     search();
     churn();
+    leaders();
 }

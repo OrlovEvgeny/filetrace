@@ -1579,6 +1579,90 @@ static bool build_tree(struct ft_top_model *m, struct ft_top_mode_state *ms)
     return emit_below(&t, FT_TOP_NONE, t.roots, 0, nullptr, 0, 0);
 }
 
+static struct ft_top_key leader_key(const struct ft_row_leader *row)
+{
+    size_t len = strlen(row->text);
+    uint64_t address =
+        ft_top_hash((const char *)row->remote.addr, sizeof(row->remote.addr), row->remote.family);
+    return (struct ft_top_key){ft_top_hash(row->text, len, 11), address, FT_TOP_KEY_LEADER};
+}
+
+static bool build_leaders(struct ft_top_model *m, struct ft_top_mode_state *ms)
+{
+    const struct ft_top_cached_answer *a = ft_top_current_answer(m);
+    struct ft_top_leaders *view = &m->leaders;
+    enum ft_top_sort by = ms->sort;
+
+    *view = (struct ft_top_leaders){
+        .window = m->leaders_window,
+        .key = m->leaders_key,
+        .by = by,
+        .answered = a != nullptr,
+    };
+    ms->view = (struct ft_top_view){0};
+    if (!a)
+        return true;
+
+    size_t nside = a->ndirectories + a->ndestinations;
+    if (!ft_top_reserve(&m->side, &m->side_cap, nside + 1, sizeof(*m->side)) ||
+        !ft_top_reserve(&ms->leaders, &ms->leaders_cap, a->nrows + 1, sizeof(*ms->leaders)) ||
+        !reserve_items(ms, a->nrows + 1))
+        return false;
+
+    double span = (double)a->summary.bytes;
+    bool compared = a->summary.previous_from_wall_ns != 0;
+    view->summary = a->summary;
+    view->exact_share = span > 0 ? (double)a->summary.bytes_exact / span : 0.0;
+    view->concentration = span > 0 ? (double)a->summary.top_bytes / span : 0.0;
+    for (size_t i = 0; i < a->ndirectories; i++)
+        ft_top_leader_fill(m, &a->directories[i], (double)a->directories[0].bytes, span,
+                           FT_TOP_SORT_BYTES, compared, &m->side[i]);
+    for (size_t i = 0; i < a->ndestinations; i++)
+        ft_top_leader_fill(m, &a->destinations[i], (double)a->destinations[0].bytes, span,
+                           FT_TOP_SORT_BYTES, compared, &m->side[a->ndirectories + i]);
+    view->directories = m->side;
+    view->ndirectories = a->ndirectories;
+    view->destinations = m->side + a->ndirectories;
+    view->ndestinations = a->ndestinations;
+
+    double top = 0;
+    if (a->nrows) {
+        const struct ft_row_leader *first = &a->rows[0];
+        top = (double)(by == FT_TOP_SORT_TRANSFERS      ? first->transfers
+                       : by == FT_TOP_SORT_DESTINATIONS ? first->destinations
+                                                        : first->bytes);
+    }
+    size_t shown = 0;
+    for (size_t i = 0; i < a->nrows; i++) {
+        struct ft_top_leader *l = &ms->leaders[i];
+        ft_top_leader_fill(m, &a->rows[i], top, span, by, compared, l);
+        const char *senders[FT_LEADER_SENDERS];
+        size_t nsenders = 0;
+        for (size_t k = 0; k < FT_LEADER_SENDERS && a->rows[i].senders[k].name[0]; k++)
+            senders[nsenders++] = a->rows[i].senders[k].name;
+        struct ft_top_leader_subject subject = {
+            .text = a->rows[i].text,
+            .senders = senders,
+            .nsenders = nsenders,
+            .remote = &a->rows[i].remote,
+            .remote_text = l->remote_text,
+            .host = l->host,
+            .method = a->rows[i].method,
+            .confidence = a->rows[i].confidence,
+        };
+        if (ms->filter && !ft_top_filter_match_leader(ms->filter, &subject))
+            continue;
+        struct ft_top_item it = {
+            .entity = l, .key = leader_key(&a->rows[i]), .kind = FT_TOP_ROW_LEADER};
+        if (!emit(ms, &it, 0, 0, FT_TOP_NODE_LEAF, false))
+            return false;
+        shown++;
+    }
+    ms->view.shown = shown;
+    ms->view.total = a->nrows;
+    return true;
+}
+
 static bool row_matches(const struct ft_top_row *r, const char *needle, size_t n)
 {
     size_t a;
@@ -1678,8 +1762,7 @@ bool ft_top_build(struct ft_top_model *m, enum ft_top_mode mode)
     ft_top_map_clear(next_memory(ms));
     ms->nrows = 0;
     if (mode == FT_TOP_LEADERS) {
-        ms->view = (struct ft_top_view){0};
-        ok = true;
+        ok = build_leaders(m, ms);
     } else {
         ok = pass_filter(m, ms);
         if (ok) {

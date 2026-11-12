@@ -1100,6 +1100,115 @@ bool ft_top_model_tick(struct ft_top_model *m, uint64_t mono_ns)
     return changed;
 }
 
+static bool copy_rows(const struct ft_rows *rows, struct ft_row_leader **out, size_t *count)
+{
+    *out = nullptr;
+    *count = 0;
+    if (!rows || rows->count == 0)
+        return true;
+    *out = calloc(rows->count, sizeof(**out));
+    if (!*out)
+        return false;
+    for (size_t i = 0; i < rows->count; i++) {
+        ft_rows_get(rows, i, &(*out)[i], sizeof(**out));
+        (*out)[i].text[sizeof((*out)[i].text) - 1] = '\0';
+    }
+    *count = rows->count;
+    return true;
+}
+
+static void answer_free(struct ft_top_cached_answer *a)
+{
+    free(a->rows);
+    free(a->directories);
+    free(a->destinations);
+    *a = (struct ft_top_cached_answer){0};
+}
+
+bool ft_top_model_leaders(struct ft_top_model *m, const struct ft_top_leaders_sample *s)
+{
+    struct ft_top_cached_answer *slot = nullptr;
+    for (size_t i = 0; i < FT_TOP_ANSWERS && !slot; i++) {
+        struct ft_top_cached_answer *a = &m->answers[i];
+        if (a->used && a->window == s->window && a->key == s->key && a->by == s->by)
+            slot = a;
+    }
+    for (size_t i = 0; i < FT_TOP_ANSWERS && !slot; i++) {
+        if (!m->answers[i].used)
+            slot = &m->answers[i];
+    }
+    if (!slot) {
+        slot = &m->answers[0];
+        for (size_t i = 1; i < FT_TOP_ANSWERS; i++) {
+            if (m->answers[i].used_at < slot->used_at)
+                slot = &m->answers[i];
+        }
+    }
+
+    struct ft_top_cached_answer next = {
+        .used = true,
+        .used_at = ++m->answers_used,
+        .window = s->window,
+        .key = s->key,
+        .by = s->by,
+    };
+    if (s->summary)
+        next.summary = *s->summary;
+    if (!copy_rows(s->ranking, &next.rows, &next.nrows) ||
+        !copy_rows(s->directories, &next.directories, &next.ndirectories) ||
+        !copy_rows(s->destinations, &next.destinations, &next.ndestinations)) {
+        answer_free(&next);
+        return false;
+    }
+    answer_free(slot);
+    *slot = next;
+    m->modes[FT_TOP_LEADERS].stale = true;
+    return true;
+}
+
+const struct ft_top_cached_answer *ft_top_current_answer(const struct ft_top_model *m)
+{
+    enum ft_top_sort by = m->modes[FT_TOP_LEADERS].sort;
+    for (size_t i = 0; i < FT_TOP_ANSWERS; i++) {
+        const struct ft_top_cached_answer *a = &m->answers[i];
+        if (a->used && a->window == m->leaders_window && a->key == m->leaders_key && a->by == by)
+            return a;
+    }
+    return nullptr;
+}
+
+static uint64_t ranked_value(const struct ft_row_leader *row, enum ft_top_sort by)
+{
+    switch (by) {
+    case FT_TOP_SORT_TRANSFERS:
+        return row->transfers;
+    case FT_TOP_SORT_DESTINATIONS:
+        return row->destinations;
+    default:
+        return row->bytes;
+    }
+}
+
+void ft_top_leader_fill(const struct ft_top_model *m, const struct ft_row_leader *row,
+                        double top_value, double span_bytes, enum ft_top_sort by, bool compared,
+                        struct ft_top_leader *out)
+{
+    *out = (struct ft_top_leader){.row = row, .name_offset = name_offset(row->text)};
+    if (row->remote.family) {
+        ft_addr_format(&row->remote, out->remote_text, sizeof(out->remote_text));
+        if (m->resolve) {
+            out->host = ft_resolver_name(&row->remote);
+            out->host_state = out->host                            ? FT_TOP_HOST_NAMED
+                              : ft_resolver_nameless(&row->remote) ? FT_TOP_HOST_NAMELESS
+                                                                   : FT_TOP_HOST_PENDING;
+        }
+    }
+    out->is_new = compared && row->previous_rank == 0;
+    out->rank_change = row->previous_rank ? (int32_t)row->previous_rank - (int32_t)row->rank : 0;
+    out->bar = top_value > 0 ? (double)ranked_value(row, by) / top_value : 0.0;
+    out->share = span_bytes > 0 ? (double)row->bytes / span_bytes : 0.0;
+}
+
 static const struct ft_top_sort_option transfer_sorts[] = {
     {FT_TOP_SORT_RATE, "RATE", true},
     {FT_TOP_SORT_BYTES, "BYTES SENT", true},
@@ -1230,6 +1339,8 @@ void ft_top_model_destroy(struct ft_top_model *m)
         return;
     for (size_t i = 0; i < FT_TOP_MODE_COUNT; i++)
         mode_free(&m->modes[i]);
+    for (size_t i = 0; i < FT_TOP_ANSWERS; i++)
+        answer_free(&m->answers[i]);
     for (size_t i = 0; i < m->nusers; i++)
         free(m->users[i]);
     for (size_t i = 0; i < 2; i++) {
@@ -1320,6 +1431,12 @@ const struct ft_top_view *ft_top_view_of(const struct ft_top_model *m, enum ft_t
 const struct ft_top_totals *ft_top_totals(const struct ft_top_model *m)
 {
     return &m->totals;
+}
+
+const struct ft_top_leaders *ft_top_leaders(const struct ft_top_model *m)
+{
+    fresh(m, FT_TOP_LEADERS);
+    return &m->leaders;
 }
 
 bool ft_top_set_sort(struct ft_top_model *m, enum ft_top_mode mode, enum ft_top_sort key,
@@ -1484,6 +1601,16 @@ void ft_top_set_resolve(struct ft_top_model *m, bool on)
 bool ft_top_resolve_of(const struct ft_top_model *m)
 {
     return m->resolve;
+}
+
+void ft_top_set_leaders_request(struct ft_top_model *m, enum ft_leader_window window,
+                                enum ft_leader_key key)
+{
+    if (m->leaders_window == window && m->leaders_key == key)
+        return;
+    m->leaders_window = window;
+    m->leaders_key = key;
+    rebuild(m, FT_TOP_LEADERS, true);
 }
 
 size_t ft_top_selected(const struct ft_top_model *m, enum ft_top_mode mode)
