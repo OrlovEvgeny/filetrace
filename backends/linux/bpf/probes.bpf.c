@@ -14,20 +14,21 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
 {
     if (sk->sk_protocol != IPPROTO_TCP)
         return 0;
-    if (newstate != TCP_ESTABLISHED && newstate != TCP_SYN_SENT && newstate != TCP_LISTEN &&
-        newstate != TCP_CLOSE)
-        return 0;
-
     __u16 family = sk->__sk_common.skc_family;
     if (family != AF_INET && family != AF_INET6)
         return 0;
-    if (newstate == TCP_SYN_SENT && cfg.file_corr)
-        thread_dialed(sk, bpf_ktime_get_boot_ns());
-    if (newstate == TCP_CLOSE && cfg.file_corr) {
+    /* A connection that is closing has taken all it is going to. */
+    if (cfg.file_corr &&
+        (newstate == TCP_FIN_WAIT1 || newstate == TCP_LAST_ACK || newstate == TCP_CLOSE)) {
         void *map = agg_map_now();
         if (map)
             carry_close(map, (__u64)sk, CARRY_QUIET, bpf_ktime_get_boot_ns());
     }
+    if (newstate != TCP_ESTABLISHED && newstate != TCP_SYN_SENT && newstate != TCP_LISTEN &&
+        newstate != TCP_CLOSE)
+        return 0;
+    if (newstate == TCP_SYN_SENT && cfg.file_corr)
+        carry_dial(sk, bpf_get_socket_cookie(sk), bpf_ktime_get_boot_ns());
 
     struct ft_bpf_ev_sock *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e) {
@@ -136,28 +137,20 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
 
     if (!cfg.file_corr)
         return 0;
-    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
     bool tcp = proto == IPPROTO_TCP;
     if (dir == FT_BPF_TX) {
-        if (tcp) {
-            if (ts)
-                thread_sent(ts, sk, now);
-            carry_sent(map, (__u64)sk, (__u64)ret, now);
-        }
+        /* Pages spliced in by sendfile belong to the transfer that sendfile reports. */
+        if (tcp)
+            carry_sent(map, (__u64)sk, spliced ? 0 : (__u64)ret, now);
         if (!spliced)
             correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret, now);
         return 0;
     }
     if (tcp)
-        carry_heard(map, (__u64)sk, now);
-    if (ts && (handshake_receive(ts, sk, now) || carry_tolerates(ts, (__u64)sk, 0))) {
-        background_reset(ts);
-        ts->carried = 1;
-    } else if (ts) {
-        carry_close_thread(ts, now);
-        if (ts->pending || ts->bg_pending)
-            thread_reset(ts);
-    }
+        carry_received(map, (__u64)sk, now);
+    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
+    if (ts && (ts->pending || ts->bg_pending))
+        thread_reset(ts);
     return 0;
 }
 
@@ -212,30 +205,21 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
         return 0;
 
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
-    bool background = background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
-    bool side = !background && side_read(ts, &fk, (__u64)ret, 0);
-    if (background || side) {
-        thread_set_background(ts, file, inode, &fk, magic, side);
+    __u64 now = bpf_ktime_get_boot_ns();
+    if (background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk)) {
+        thread_set_background(ts, file, inode, &fk, magic);
         ts->bg_pending += (__u64)ret;
         ts->bg_unreported += (__u64)ret;
-        ts->bg_last_ns = bpf_ktime_get_boot_ns();
+        ts->bg_last_ns = now;
         ts->bg_fresh = 1;
         return 0;
     }
-    if (side_held(ts, &fk))
-        side_promote(ts, bpf_ktime_get_boot_ns());
     thread_set_file(ts, file, inode, &fk, magic);
-
-    if (!ts->pending) {
-        ts->read_start_ns = bpf_ktime_get_boot_ns();
-        ts->carried = 0;
-        ts->ep_read = 0;
-    }
-    ts->ep_read += (__u64)ret;
     ts->pending += (__u64)ret;
     ts->unreported += (__u64)ret;
-    ts->last_ns = bpf_ktime_get_boot_ns();
+    ts->last_ns = now;
     ts->fresh = 1;
+    candidate_read(ts, (__u64)ret, now);
     return 0;
 }
 

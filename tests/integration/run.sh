@@ -219,14 +219,13 @@ expect "read before a handshake: upload reported" "$(printf '%s\n' "$csv" | rows
 expect "read before a handshake: upload bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 300000
 
-# A file read after the upload and before the connection takes the upload's place, so the
-# handshake ends what either could claim, and neither is reported.
+# Two large files read before the connection: the one it took whole is the upload.
 "$workload" readhandshake "$data/upload-unlisted.bin" 300000 "$data/trust.pem" 200000 >/dev/null
 settle
 expect "read before a handshake: unlisted bundle not reported" \
     "$(ft files --path "$data/trust.pem" --format csv | rows)" 0
-expect "read before a handshake: upload after an unlisted bundle not reported" \
-    "$(ft files --path "$data/upload-unlisted.bin" --format csv | rows)" 0
+expect "read before a handshake: upload after an unlisted bundle bytes" \
+    "$(ft files --path "$data/upload-unlisted.bin" --format csv | column transfer.bytes_sent)" 300000
 
 # A bundle background by its name is so from its first read, wherever it is.
 "$workload" readhandshake "$data/upload-named.bin" 300000 "$data/ca-bundle.crt" 200000 >/dev/null
@@ -367,6 +366,56 @@ expect "first flight: first of two files bytes" \
 expect "first flight: second of two files bytes" \
     "$(ft files --path "$data/flight-b.json" --format csv | column transfer.bytes_sent)" 1500
 
+# A file streamed in pieces after the connection, its first piece read before it, goes whole.
+"$workload" readstream "$data/stream-after-dial.bin" 300000 65536 >/dev/null
+# Sent to two servers over connections opened after the read, it is reported for both; sent to
+# one while another connection makes small requests, once.
+"$workload" fanout "$data/fanout.bin" 300000 >/dev/null
+"$workload" readchatty "$data/chatty.bin" 300000 >/dev/null
+# Of two large files read before a connection, the one it took whole is reported; of two of the
+# same size, neither is.
+"$workload" readtwo "$data/two-a.bin" 300000 "$data/two-b.bin" 200000 1 >/dev/null
+"$workload" readtwo "$data/two-c.bin" 300000 "$data/two-d.bin" 200000 2 >/dev/null
+"$workload" readtwo "$data/two-e.bin" 300000 "$data/two-f.bin" 300000 1 >/dev/null
+# Replies that another thread reads end the upload, not the requests made after it.
+"$workload" readreplythread "$data/reply-thread.bin" 300000 >/dev/null
+# A file read and then sent with sendfile is reported once, as sendfile.
+"$workload" readsendfile "$data/read-then-sendfile.bin" 300000 >/dev/null
+# A line over one connection and a body of another size over a second carry neither.
+"$workload" twodials "$data/two-dials.bin" 300000 >/dev/null
+# A small file read before a plain connection that sends it whole and closes is reported.
+"$workload" readsmall "$data/small-before.json" 20000 >/dev/null
+# A small file read after a large one is what a later send over an open connection takes,
+# after a background read too, but not once the read is stale.
+"$workload" readsendother "$data/side-bg-large.bin" 300000 "$data/side-bg-small.bin" 20000 \
+    "$data/side-bg-lib.py" >/dev/null
+"$workload" readlater "$data/later-large.bin" 300000 "$data/later-small.bin" 20000 3 3000 \
+    >/dev/null
+settle
+for pair in stream-after-dial:300000 chatty:300000 two-a:300000 two-d:200000 \
+    reply-thread:300000 small-before:20000 side-bg-small:20000; do
+    name=${pair%%:*}
+    path=$(ls "$data/$name".* | head -1)
+    csv=$(ft files --path "$path" --format csv)
+    expect "dialed path, $name: rows" "$(printf '%s\n' "$csv" | rows)" 1
+    expect "dialed path, $name: bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" \
+        "${pair#*:}"
+done
+for name in two-b two-c two-e two-f two-dials side-bg-large later-large later-small; do
+    expect "dialed path, $name: not reported" \
+        "$(ft files --path "$data/$name.bin" --format csv | rows)" 0
+done
+expect "dialed path, side-bg-lib.py: not reported" \
+    "$(ft files --path "$data/side-bg-lib.py" --format csv | rows)" 0
+csv=$(ft files --path "$data/fanout.bin" --format csv)
+expect "dialed path, fan-out: rows" "$(printf '%s\n' "$csv" | rows)" 2
+expect "dialed path, fan-out: bytes" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent | sort -u | tr -d '\n')" 300000
+csv=$(ft files --path "$data/read-then-sendfile.bin" --format csv)
+expect "dialed path, read then sendfile: rows" "$(printf '%s\n' "$csv" | rows)" 1
+expect "dialed path, read then sendfile: method" \
+    "$(printf '%s\n' "$csv" | column transfer.method)" sendfile
+
 # Below 64 KB, a file read before its connection is not told from a request of its size.
 "$workload" readhandshake "$data/upload-small.json" 20000 "$data/no-bundle.crt" 0 >/dev/null
 settle
@@ -379,14 +428,14 @@ settle
 expect "read before a refused connection: upload bytes" \
     "$(ft files --path "$data/upload-refused.bin" --format csv | column transfer.bytes_sent)" 300000
 
-# The hello received on a second connection does end it, and then neither file is reported.
+# A reply on a second connection is no part of the first one's upload.
 "$workload" readrecvelsewhere "$data/upload-other.bin" 300000 "$data/ca-other.crt" 200000 \
     >/dev/null
 settle
 expect "receive on another connection: CA bundle not reported" \
     "$(ft files --path "$data/ca-other.crt" --format csv | rows)" 0
-expect "receive on another connection: upload not reported" \
-    "$(ft files --path "$data/upload-other.bin" --format csv | rows)" 0
+expect "receive on another connection: upload bytes" \
+    "$(ft files --path "$data/upload-other.bin" --format csv | column transfer.bytes_sent)" 300000
 
 # Neither is sending a sliver of what was read.
 "$workload" readlittle "$data/bundle.bin" 400000 >/dev/null
