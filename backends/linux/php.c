@@ -174,7 +174,7 @@ static struct bpf_link *attach(struct bpf_program *prog, const char *path, const
  * path is a /proc link to the file the process runs or has mapped, never a name it could
  * replace, and the open does not wait on anything that is not a regular file.
  */
-static void consider(struct ft_linux_php *php, const char *path, const char *name)
+static void consider(struct ft_linux_php *php, const char *path, const char *name, uint32_t pid)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY);
     if (fd < 0)
@@ -225,8 +225,8 @@ static void consider(struct ft_linux_php *php, const char *path, const char *nam
     }
     b->id = id;
     php->count++;
-    ft_log(FT_LOG_INFO, "probing PHP requests in %s (PHP %s)", name,
-           layout == FT_BPF_PHP_ZEND_STRING ? "8.1 or later" : "8.0 or earlier");
+    ft_log(FT_LOG_INFO, "probing PHP requests in %s, as process %" PRIu32 " runs it (PHP %s)", name,
+           pid, layout == FT_BPF_PHP_ZEND_STRING ? "8.1 or later" : "8.0 or earlier");
 }
 
 static bool starts_with(const char *s, const char *prefix)
@@ -268,7 +268,7 @@ static void consider_libraries(struct ft_linux_php *php, uint32_t pid)
         /* The mapped file itself: a mount over its directory cannot put anything else there. */
         char mapped[128];
         snprintf(mapped, sizeof(mapped), "/proc/%" PRIu32 "/map_files/%s", pid, range);
-        consider(php, mapped, file);
+        consider(php, mapped, file, pid);
     }
     fclose(f);
 }
@@ -285,7 +285,7 @@ void ft_linux_php_attach_pid(struct ft_linux_php *php, uint32_t pid)
     exe[n] = '\0';
     const char *name = base_name(exe);
     if (starts_with(name, "php") || starts_with(name, "frankenphp"))
-        consider(php, path, exe);
+        consider(php, path, exe, pid);
     else if (strcmp(name, "apache2") == 0 || starts_with(name, "httpd"))
         consider_libraries(php, pid);
 }
