@@ -27,7 +27,12 @@ set_tests_properties(unit PROPERTIES TIMEOUT 60)
 
 # The agent with made-up traffic in place of a kernel backend, for trying the
 # commands on any system.
-add_executable(ft_sim_agent sim/sim_agent.c sim/sim_backend.c)
+add_executable(ft_sim_agent
+    sim/engine.c
+    sim/scenario.c
+    sim/sim_agent.c
+    sim/sim_backend.c
+)
 target_link_libraries(ft_sim_agent PRIVATE ft_agent)
 target_include_directories(ft_sim_agent PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
