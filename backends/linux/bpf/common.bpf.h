@@ -511,10 +511,12 @@ static __always_inline __u8 listed_by_name(const unsigned char *dname, const str
         return 0;
     __u8 *named = bpf_map_lookup_elem(&background_names, name);
     __u8 kind = named ? *named : 0;
-    if (!kind) {
+    /* A background suffix outranks a strict name, as background outranks strict everywhere. */
+    if (kind != FT_BPF_LISTED_BACKGROUND) {
         struct suffix_match m = {.name = name, .len = (__u32)n - 1};
         bpf_loop(FT_BPF_BACKGROUND_SUFFIXES, suffix_step, &m, 0);
-        kind = m.kind;
+        if (!kind || m.kind == FT_BPF_LISTED_BACKGROUND)
+            kind = m.kind;
     }
     if (kind) {
         struct ft_bpf_background_key key = {.ino = fk->ino, .dev = fk->dev};
