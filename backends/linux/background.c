@@ -5,6 +5,7 @@
 
 #include <bpf/bpf.h>
 #include <dirent.h>
+#include <errno.h>
 #include <limits.h>
 #include <linux/types.h>
 #include <stdio.h>
@@ -105,22 +106,66 @@ static bool contains(const struct key_set *set, const struct ft_bpf_background_k
     return bsearch(key, set->keys, set->count, sizeof(*key), key_cmp) != nullptr;
 }
 
+static bool plain(const char *text)
+{
+    return text[0] && !strpbrk(text, "*?/");
+}
+
+/*
+ * Whether the kernel names the file by the pattern from the file's name alone; counts suffixes in
+ * the order ft_linux_background_names loads them.
+ */
+static bool kernel_named(const char *p, size_t name_len, uint32_t *suffixes)
+{
+    if (strncmp(p, "*/", 2) == 0 && plain(p + 2))
+        return strlen(p + 2) < FT_BPF_BACKGROUND_NAME;
+    if (p[0] != '*' || p[1] != '.' || !plain(p + 1) || strlen(p + 1) > FT_BPF_BACKGROUND_SUFFIX)
+        return false;
+    return (*suffixes)++ < FT_BPF_BACKGROUND_SUFFIXES && name_len < FT_BPF_BACKGROUND_NAME;
+}
+
+/* -1 when no pattern names the path, 0 when the first that does is the kernel's, 1 otherwise. */
+static int first_match(const char *const *patterns, size_t count, const char *path, size_t name_len,
+                       uint32_t *suffixes)
+{
+    for (size_t i = 0; i < count; i++) {
+        bool named = kernel_named(patterns[i], name_len, suffixes);
+        if (ft_glob_match(patterns[i], path))
+            return named ? 0 : 1;
+    }
+    return -1;
+}
+
+static void table_full(void)
+{
+    static bool warned;
+    if (!warned)
+        ft_log(FT_LOG_WARN,
+               "[correlation] the table of listed files is full (%d): a file made from now on "
+               "that a pattern names by its directory is read as any other file",
+               FT_BPF_BACKGROUND_MAX);
+    warned = true;
+}
+
 void ft_linux_background_learn(int map_fd, const struct ft_backend_config *cfg, uint64_t ino,
                                uint32_t dev, const char *path)
 {
-    uint8_t value = 0;
-    for (size_t i = 0; i < cfg->background_path_count && !value; i++) {
-        if (ft_glob_match(cfg->background_paths[i], path))
-            value = FT_BPF_BACKGROUND_LEARNED;
+    const char *slash = strrchr(path, '/');
+    size_t name_len = strlen(slash ? slash + 1 : path);
+    uint32_t suffixes = 0;
+    uint8_t value = FT_BPF_BACKGROUND_LEARNED;
+    int match =
+        first_match(cfg->background_paths, cfg->background_path_count, path, name_len, &suffixes);
+    if (match < 0) {
+        match = first_match(cfg->strict_paths, cfg->strict_path_count, path, name_len, &suffixes);
+        value |= FT_BPF_BACKGROUND_STRICT;
     }
-    for (size_t i = 0; i < cfg->strict_path_count && !value; i++) {
-        if (ft_glob_match(cfg->strict_paths[i], path))
-            value = FT_BPF_BACKGROUND_LEARNED | FT_BPF_BACKGROUND_STRICT;
-    }
-    if (value) {
-        struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
-        bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST);
-    }
+    /* What the kernel matches by name it learns into background_named, which makes room. */
+    if (match <= 0)
+        return;
+    struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
+    if (bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST) != 0 && errno == E2BIG)
+        table_full();
 }
 
 static void scan(struct key_set *set, const char *const *patterns, size_t count)
@@ -139,6 +184,8 @@ static size_t store(int map_fd, const struct key_set *set, uint8_t value)
             continue;
         if (bpf_map_update_elem(map_fd, &set->keys[i], &value, BPF_ANY) == 0)
             held++;
+        else if (errno == E2BIG)
+            table_full();
     }
     return held;
 }
@@ -178,11 +225,6 @@ size_t ft_linux_background_load(int map_fd, const struct ft_backend_config *cfg,
     free(background.keys);
     free(strict.keys);
     return held;
-}
-
-static bool plain(const char *text)
-{
-    return text[0] && !strpbrk(text, "*?/");
 }
 
 static void load_names(int names_fd, int suffixes_fd, const char *const *patterns, size_t count,
