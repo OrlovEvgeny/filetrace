@@ -90,6 +90,53 @@ settle() {
     sleep 0.5
 }
 
+# A PHP-FPM pool "ft" on a Unix socket, whose scripts each upload the file they are given.
+fpm=$(ls /usr/sbin/php-fpm* 2>/dev/null | head -1)
+php_fpm_start() {
+    mkdir -p "$work/php"
+    cat >"$work/php/upload.php" <<'PHP'
+<?php
+$server = stream_socket_server('tcp://127.0.0.1:0');
+$client = stream_socket_client('tcp://' . stream_socket_get_name($server, false));
+$peer = stream_socket_accept($server);
+$file = fopen($_SERVER['FT_FILE'], 'rb');
+while (!feof($file)) {
+    fwrite($client, fread($file, 8192));
+    fread($peer, 8192);
+}
+PHP
+    cp "$work/php/upload.php" "$work/php/other.php"
+    cat >"$work/fpm.conf" <<CONF
+[global]
+error_log = $work/fpm.log
+pid = $work/fpm.pid
+[ft]
+listen = $work/fpm.sock
+pm = static
+pm.max_children = 1
+clear_env = no
+CONF
+    rm -f "$work/fpm.sock" "$work/fpm.pid"
+    "$fpm" -R -y "$work/fpm.conf" || return 1
+    i=0
+    while [ ! -S "$work/fpm.sock" ] && [ $i -lt 50 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    settle
+}
+
+# php_request <script> <file>
+php_request() {
+    FT_FILE=$2 SCRIPT_FILENAME="$work/php/$1" SCRIPT_NAME="/$1" REQUEST_METHOD=GET \
+        cgi-fcgi -bind -connect "$work/fpm.sock" >/dev/null
+}
+
+php_fpm_stop() {
+    kill "$(cat "$work/fpm.pid")"
+    while [ -e "$work/fpm.pid" ]; do sleep 0.1; done
+}
+
 "$bin/filetrace" doctor --probes "$probes" >"$work/doctor.txt" 2>&1
 doctor=$?
 if [ $doctor -eq 3 ] || [ $doctor -eq 5 ]; then
@@ -528,6 +575,30 @@ else
     echo "SKIP: python3 is not installed; its interpreter checks did not run"
 fi
 
+# A PHP-FPM worker's transfers name the script of each request, not only the pool.
+if [ -n "$fpm" ] && command -v cgi-fcgi >/dev/null 2>&1; then
+    head -c 300000 /dev/urandom >"$data/php-upload.bin"
+    head -c 200000 /dev/urandom >"$data/php-other.bin"
+    php_fpm_start || { echo "FAIL: php-fpm did not start"; exit 1; }
+    php_request upload.php "$data/php-upload.bin"
+    php_request other.php "$data/php-other.bin"
+    settle
+    csv=$(ft files --path "$data/php-upload.bin" --format csv)
+    expect "php: request script" "$(printf '%s\n' "$csv" | column process.script)" \
+        "$work/php/upload.php"
+    expect "php: request bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 300000
+    expect "php: the worker's command line" \
+        "$(printf '%s\n' "$csv" | column process.command_line)" "php-fpm: pool ft"
+    expect "php: another request's script" \
+        "$(ft files --path "$data/php-other.bin" --format csv | column process.script)" \
+        "$work/php/other.php"
+    expect "php: files by request script" \
+        "$(ft files --script '*/other.php' --format quiet | grep -c 'php-other\.bin')" 1
+    php_fpm_stop
+else
+    echo "SKIP: php-fpm or cgi-fcgi is not installed; the PHP request checks did not run"
+fi
+
 # A sender that exits right after sending is gone before /proc can be read; its command line
 # and directory come with its exec.
 (cd "$data" && "$workload" readsend "$data/short.bin" 300000 65536) >/dev/null
@@ -658,6 +729,22 @@ expect "background: namespaced bundle not reported" \
     "$(ft files --path "$data/ns-*" --format csv | rows)" 0
 stop_agent
 expect "background agent exit code" "$?" 0
+
+# Without the PHP probes a worker's transfers name its pool.
+if [ -n "$fpm" ] && command -v cgi-fcgi >/dev/null 2>&1; then
+    printf '[process]\nphp_scripts = false\n' >"$work/no-php.toml"
+    start_agent --config "$work/no-php.toml" ||
+        { echo "FAIL: the agent did not start without PHP probes"; exit 1; }
+    head -c 300000 /dev/urandom >"$data/php-unprobed.bin"
+    php_fpm_start || { echo "FAIL: php-fpm did not start"; exit 1; }
+    php_request upload.php "$data/php-unprobed.bin"
+    settle
+    expect "php off: the pool" \
+        "$(ft files --path "$data/php-unprobed.bin" --format csv | column process.script)" pool:ft
+    php_fpm_stop
+    stop_agent
+    expect "php off agent exit code" "$?" 0
+fi
 
 # Without arguments a command line keeps only the program; the script is still named.
 if command -v perl >/dev/null 2>&1; then

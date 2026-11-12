@@ -328,6 +328,7 @@ static void prints_what_it_reads(void)
     CHECK_STR(reread->background_paths[0], defaults->background_paths[0]);
     /* Arguments are kept for the commands on this host and left out of what is exported. */
     CHECK(reread->agent.state_cfg.command_line_arguments);
+    CHECK(reread->agent.backend_cfg.php_scripts);
     CHECK(!reread->agent.otlp.command_line);
 
     free(text);
@@ -370,6 +371,20 @@ static void background_paths_default_to_shared_files(void)
     ft_config_free(cfg);
 }
 
+/* PHP binaries are probed unless the setting turns it off. */
+static void php_scripts_can_be_turned_off(void)
+{
+    struct ft_config *cfg = ft_config_new();
+    struct ft_error err = {0};
+
+    ft_config_finish(cfg);
+    CHECK(cfg->agent.backend_cfg.php_scripts);
+    CHECK_U64(load(cfg, "[process]\nphp_scripts = false\n", &err), FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK(!cfg->agent.backend_cfg.php_scripts);
+    ft_config_free(cfg);
+}
+
 void test_config(void)
 {
     reads_every_section();
@@ -377,4 +392,5 @@ void test_config(void)
     reports_what_is_wrong();
     prints_what_it_reads();
     background_paths_default_to_shared_files();
+    php_scripts_can_be_turned_off();
 }

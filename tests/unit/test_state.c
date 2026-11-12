@@ -1267,6 +1267,88 @@ static struct ft_process_strings transfer_strings(struct fixture *f, uint32_t pi
     return s;
 }
 
+static void emit_request_transfer(struct fixture *f, uint64_t sock, uint32_t pid, uint64_t ino,
+                                  uint64_t bytes, const char *script)
+{
+    struct ft_event ev = {.type = FT_EVENT_TRANSFER, .ts_ns = f->now};
+    ev.transfer.sock_id = sock;
+    ev.transfer.pid = pid;
+    ev.transfer.method = FT_METHOD_READ_SEND;
+    ev.transfer.file = file_id(ino);
+    ev.transfer.first_ns = f->now;
+    ev.transfer.bytes = bytes;
+    ev.transfer.read_bytes = bytes;
+    ev.transfer.ops = 1;
+    ev.transfer.alternations = 1;
+    ev.transfer.script = script;
+    ft_state_ingest(f->st, &ev);
+}
+
+static const char *row_script(const struct fixture *f, const char *path)
+{
+    static struct ft_process_strings s;
+    for (size_t i = 0; i < f->rows.count; i++) {
+        if (strcmp(f->rows.transfers[i].path, path) == 0) {
+            ft_row_transfer_strings(&f->rows.transfers[i], &s);
+            return s.script;
+        }
+    }
+    return "(no row)";
+}
+
+/* A PHP worker's transfers name the script of the request they were sent for, not the pool. */
+static void transfers_name_the_request_script(void)
+{
+    struct fixture f;
+    struct ft_query q;
+    struct ft_endpoint remote = endpoint(203, 0, 113, 42, 443);
+
+    fixture_open_procfs(&f, true);
+    procfs_set(PID_A, "php-fpm: pool blog", "/");
+    emit_exec(&f, PID_A, 1, "php-fpm8.4", 1000);
+    emit_file(&f, 11, "/srv/one.bin", false);
+    emit_file(&f, 12, "/srv/two.bin", false);
+    emit_file(&f, 13, "/srv/three.bin", false);
+    emit_flow(&f, SOCK_A, PID_A, FT_PROTO_TCP, remote, 4096, 0);
+    emit_request_transfer(&f, SOCK_A, PID_A, 11, 4096, "/var/www/app/one.php");
+    emit_request_transfer(&f, SOCK_A, PID_A, 12, 4096, "/var/www/app/two.php");
+    emit_request_transfer(&f, SOCK_A, PID_A, 13, 4096, nullptr);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    run_query(&f, &q);
+    CHECK_STR(row_script(&f, "/srv/one.bin"), "/var/www/app/one.php");
+    CHECK_STR(row_script(&f, "/srv/two.bin"), "/var/www/app/two.php");
+    CHECK_STR(row_script(&f, "/srv/three.bin"), "pool:blog");
+
+    ft_strlcpy(q.script, "*/two.php", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_STR(f.rows.transfers[0].path, "/srv/two.bin");
+    ft_strlcpy(q.script, "pool:*", sizeof(q.script));
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 1);
+    CHECK_STR(f.rows.transfers[0].path, "/srv/three.bin");
+
+    /* The event records keep the script of their request. */
+    struct ft_process_strings s;
+    ft_query_init(&q, FT_Q_EVENTS);
+    q.event_types = 1u << FT_REC_FILE_TRANSFER;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 3);
+    ft_row_event_strings(&f.rows.events[0], &s);
+    CHECK_STR(s.script, "/var/www/app/one.php");
+    CHECK_STR(s.command_line, "php-fpm: pool blog");
+    ft_row_event_strings(&f.rows.events[2], &s);
+    CHECK_STR(s.script, "pool:blog");
+
+    /* A later request of the same worker sending the same file names its own script. */
+    emit_request_transfer(&f, SOCK_A, PID_A, 11, 1024, "/var/www/app/again.php");
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    run_query(&f, &q);
+    CHECK_STR(row_script(&f, "/srv/one.bin"), "/var/www/app/again.php");
+    fixture_close(&f);
+}
+
 /* A program that is gone before /proc is read is still named by what its exec carried. */
 static void exec_carries_the_command_line(void)
 {
@@ -1570,6 +1652,7 @@ void test_state(void)
     confidence_threshold();
     tables_stay_bounded();
     exec_carries_the_command_line();
+    transfers_name_the_request_script();
     processes_carry_their_command_line();
     forked_workers_are_read_again();
     arguments_can_be_left_out();
