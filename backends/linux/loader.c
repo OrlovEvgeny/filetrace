@@ -812,6 +812,7 @@ static void report_losses(struct ft_backend *b, const uint64_t totals[FT_BPF_CNT
         {FT_BPF_CNT_RING_FULL, FT_LOSS_EVENT_QUEUE},
         {FT_BPF_CNT_AGG_FULL, FT_LOSS_AGGREGATION},
         {FT_BPF_CNT_SOCK_UNIDENTIFIED, FT_LOSS_SOCKET_IDENT},
+        {FT_BPF_CNT_PATH_BUSY, FT_LOSS_PATH_BUSY},
     };
 
     for (size_t i = 0; i < FT_ARRAY_LEN(losses); i++) {

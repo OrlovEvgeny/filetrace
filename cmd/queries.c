@@ -719,8 +719,8 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
         fprintf(o, "%-18s%s\n", "Dropped:", a);
         fprintf(o, "%-18s%" PRIu64 "\n", "Events/sec:", s->events_per_sec_milli / 1000);
         if (s->events_dropped) {
-            static const char *const kinds[] = {
-                "Queue overflow:", "Counter table full:", "Socket unidentified:"};
+            static const char *const kinds[] = {"Queue overflow:", "Counter table full:",
+                                                "Socket unidentified:", "Path buffer busy:"};
             for (size_t i = 0; i < FT_ARRAY_LEN(kinds); i++) {
                 if (s->loss[i]) {
                     ft_format_count(s->loss[i], a, sizeof(a));
@@ -815,13 +815,14 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
     fprintf(o, ",\"uptime_seconds\":%" PRIu64,
             (s->now_wall_ns > s->start_wall_ns ? s->now_wall_ns - s->start_wall_ns : 0) /
                 FT_NS_PER_SEC);
-    fprintf(
-        o,
-        ",\"events\":{\"received\":%" PRIu64 ",\"processed\":%" PRIu64 ",\"dropped\":%" PRIu64
-        ",\"per_second\":%" PRIu64 ".%03" PRIu64 ",\"dropped_queue_overflow\":%" PRIu64
-        ",\"dropped_counter_table_full\":%" PRIu64 ",\"dropped_socket_unidentified\":%" PRIu64 "}",
-        s->events_received, s->events_processed, s->events_dropped, s->events_per_sec_milli / 1000,
-        s->events_per_sec_milli % 1000, s->loss[0], s->loss[1], s->loss[2]);
+    fprintf(o,
+            ",\"events\":{\"received\":%" PRIu64 ",\"processed\":%" PRIu64 ",\"dropped\":%" PRIu64
+            ",\"per_second\":%" PRIu64 ".%03" PRIu64 ",\"dropped_queue_overflow\":%" PRIu64
+            ",\"dropped_counter_table_full\":%" PRIu64 ",\"dropped_socket_unidentified\":%" PRIu64
+            ",\"dropped_path_buffer_busy\":%" PRIu64 "}",
+            s->events_received, s->events_processed, s->events_dropped,
+            s->events_per_sec_milli / 1000, s->events_per_sec_milli % 1000, s->loss[0], s->loss[1],
+            s->loss[2], s->loss[3]);
     fprintf(o,
             ",\"resources\":{\"cpu_percent\":%u.%03u,\"memory_bytes\":%" PRIu64 ",\"open_fds\":%u}",
             s->cpu_milli_percent / 1000, s->cpu_milli_percent % 1000, s->rss_bytes, s->open_fds);

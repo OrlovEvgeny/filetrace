@@ -156,6 +156,8 @@ const char *ft_loss_kind_name(enum ft_loss_kind kind)
         return "counter table full";
     case FT_LOSS_SOCKET_IDENT:
         return "socket without identity";
+    case FT_LOSS_PATH_BUSY:
+        return "path buffer busy";
     default:
         return "unknown";
     }
@@ -170,6 +172,8 @@ const char *ft_loss_kind_label(enum ft_loss_kind kind)
         return "counter_table";
     case FT_LOSS_SOCKET_IDENT:
         return "socket_identity";
+    case FT_LOSS_PATH_BUSY:
+        return "path_buffer";
     default:
         return "unknown";
     }

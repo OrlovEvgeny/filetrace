@@ -88,6 +88,7 @@ enum ft_loss_kind : uint8_t {
     FT_LOSS_EVENT_QUEUE,  /* the kernel-to-userspace queue overflowed */
     FT_LOSS_AGGREGATION,  /* the in-kernel counter table was full */
     FT_LOSS_SOCKET_IDENT, /* a transfer's socket had no usable identity */
+    FT_LOSS_PATH_BUSY,    /* a file's path or a program's start went unread: its buffer was held */
     FT_LOSS_KIND_COUNT,
 };
 

@@ -312,9 +312,10 @@ struct path_scratch {
     char comps[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX];
 };
 
+/* Two per CPU: a probe can be preempted while it holds one, and another probe run meanwhile. */
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __uint(max_entries, 1);
+    __uint(max_entries, 2);
     __type(key, __u32);
     __type(value, struct path_scratch);
 } scratch SEC(".maps");
@@ -1419,14 +1420,18 @@ static __always_inline int emit_file(struct file *file, struct inode *inode,
                                      const struct file_key *fk, __u32 instance, __u64 fs_magic)
 {
     __u32 zero = 0;
+    __u32 one = 1;
     struct path_scratch *s = bpf_map_lookup_elem(&scratch, &zero);
+    /* Other probes on this CPU were preempted while using the buffers. */
+    if (s && __sync_lock_test_and_set(&s->busy, 1)) {
+        s = bpf_map_lookup_elem(&scratch, &one);
+        if (s && __sync_lock_test_and_set(&s->busy, 1)) {
+            count(FT_BPF_CNT_PATH_BUSY);
+            return -1;
+        }
+    }
     if (!s)
         return -1;
-    /* Another probe on this CPU was preempted while using the buffer. */
-    if (__sync_lock_test_and_set(&s->busy, 1)) {
-        count(FT_BPF_CNT_PATH_BUSY);
-        return -1;
-    }
 
     struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
     struct vfsmount *vfsmnt = BPF_CORE_READ(file, f_path.mnt);
