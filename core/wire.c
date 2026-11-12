@@ -108,6 +108,11 @@ size_t ft_row_event_size(const struct ft_row_event *row)
     return size;
 }
 
+size_t ft_row_leader_size(const struct ft_row_leader *row)
+{
+    return offsetof(struct ft_row_leader, text) + lead_size(row->text);
+}
+
 static const char *const record_type_names[FT_REC_TYPE_COUNT] = {
     [FT_REC_PROCESS_EXEC] = "process_exec",   [FT_REC_PROCESS_FORK] = "process_fork",
     [FT_REC_PROCESS_EXIT] = "process_exit",   [FT_REC_SOCKET_CONNECT] = "socket_connect",
