@@ -1525,5 +1525,44 @@ expect_match "watch output" "$out" 'ACTIVE FILE TRANSFERS'
 expect_match "watch output" "$out" '^PROCESSES$'
 expect_match "watch notice" "$(cat "$work/watch.err")" 'monitoring in the foreground'
 
+# Without an agent, top collects for its own session on a terminal, and no collector outlives
+# it: not when q or an interrupt ends it, nor when it is killed. The badge names the time the
+# session started once the collector has answered; before that it is the bare word.
+# top_pty <text to wait for> <key:c|signal:NAME>
+top_pty() {
+    "$workload" pty 174 44 "$1" 15 "$2" -- "$bin/filetrace" --socket "$work/none.sock" top
+}
+
+out=$(top_pty "SESSION since" key:q)
+if [ "$(field "$out" pty)" = none ]; then
+    echo "SKIP: no pseudo-terminal could be opened; the top session checks did not run"
+else
+    expect "top: shows its session" "$(field "$out" seen)" yes
+    expect "top: exit after q" "$(field "$out" status)" exit:0
+    expect_match "top: a collector for q" "$(field "$out" children)" '^[0-9]+$'
+    expect "top: no collector left after q" "$(field "$out" left)" 0
+
+    out=$(top_pty SESSION key:q)
+    expect "top: screen while starting" "$(field "$out" seen)" yes
+    expect "top: exit after q while starting" "$(field "$out" status)" exit:0
+    expect "top: no collector left after q while starting" "$(field "$out" left)" 0
+
+    out=$(top_pty "SESSION since" signal:INT)
+    expect "top: session before an interrupt" "$(field "$out" seen)" yes
+    expect "top: exit after an interrupt" "$(field "$out" status)" exit:0
+    expect_match "top: a collector for an interrupt" "$(field "$out" children)" '^[0-9]+$'
+    expect "top: no collector left after an interrupt" "$(field "$out" left)" 0
+    attach=$(field "$out" seen_ms)
+
+    out=$(top_pty "SESSION since" signal:KILL)
+    expect "top: session before a kill" "$(field "$out" seen)" yes
+    expect "top: killed" "$(field "$out" status)" signal:KILL
+    expect_match "top: a collector for a kill" "$(field "$out" children)" '^[0-9]+$'
+    expect "top: no collector left after a kill" "$(field "$out" left)" 0
+    echo "NOTE: top without an agent was collecting $attach ms and $(field "$out" seen_ms) ms" \
+        "after it started"
+    echo "NOTE: the collector of a killed top stopped $(field "$out" gone_ms) ms after it"
+fi
+
 echo "$checks checks, $failures failed"
 [ "$failures" -eq 0 ]
