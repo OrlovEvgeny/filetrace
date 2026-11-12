@@ -269,6 +269,9 @@ int ft_cmd_version(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_agent(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_config(const struct ft_cli *cli, struct ft_args *a);
 
+/* The reports of 'top': the next argument names the subject. */
+int ft_cmd_top_report(const struct ft_cli *cli, struct ft_args *a);
+
 /* Returns false when the command is unknown. */
 bool ft_help_command(FILE *out, const char *command);
 void ft_help_overview(FILE *out);

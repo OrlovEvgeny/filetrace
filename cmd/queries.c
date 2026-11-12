@@ -578,7 +578,7 @@ int ft_cmd_transfers(const struct ft_cli *cli, struct ft_args *a)
     return transfer_command(cli, a, "transfers", FT_VIEW_TRANSFERS, true);
 }
 
-int ft_cmd_top(const struct ft_cli *cli, struct ft_args *a)
+int ft_cmd_top_report(const struct ft_cli *cli, struct ft_args *a)
 {
     static const uint32_t common =
         FT_QO_PID | FT_QO_PROCESS | FT_QO_PROTOCOL | FT_QO_TIME | FT_QO_LIMIT | FT_QO_OUTPUT;
