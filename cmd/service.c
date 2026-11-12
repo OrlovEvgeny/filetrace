@@ -4,6 +4,7 @@
 #include "filetrace/format.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -83,6 +84,12 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s, int w
         signal(SIGINT, SIG_IGN);
         /* A session closed while the probes attach ends the collector with this signal. */
         signal(SIGTERM, SIG_DFL);
+        /* A screen owns the terminal: what the collector logs must not be written over it. */
+        int null = wait_ms > 0 ? open("/dev/null", O_WRONLY) : -1;
+        if (null >= 0) {
+            dup2(null, STDOUT_FILENO);
+            dup2(null, STDERR_FILENO);
+        }
         if (ft_cli_collector_config(cli))
             cfg = *ft_cli_collector_config(cli);
         else
