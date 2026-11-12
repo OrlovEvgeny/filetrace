@@ -186,7 +186,7 @@ static __always_inline void claim_charge(void *map, struct sock *sk, struct sock
     if (t->claim_carried) {
         __u64 sock = (__u64)sk;
         struct carry *c = t->carrying ? bpf_map_lookup_elem(&carries, &sock) : NULL;
-        if (c && c->kind == CARRY_FLIGHT && c->tid == t->claim_tid)
+        if (c && c->kind != CARRY_DIALED && c->tid == t->claim_tid)
             carry_add(c, take, t->claim_read, t->claim_fresh, t->claim_script, now);
         return;
     }
@@ -438,6 +438,7 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
+            carry_episode_end(ts, now);
             thread_reset(ts);
             ts->received++;
         }
@@ -720,6 +721,7 @@ int BPF_KPROBE(ft_skb_consume_udp, struct sock *sk, struct sk_buff *skb, int len
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
+            carry_episode_end(ts, now);
             thread_reset(ts);
             ts->received++;
         }

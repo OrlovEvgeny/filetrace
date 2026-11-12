@@ -422,6 +422,40 @@ csv=$(ft files --path "$data/read-then-sendfile.bin" --format csv)
 expect "dialed path, read then sendfile: rows" "$(printf '%s\n' "$csv" | rows)" 1
 expect "dialed path, read then sendfile: method" \
     "$(printf '%s\n' "$csv" | column transfer.method)" sendfile
+# A small file read for a reply over a connection that has heard from its peer is reported only
+# when the reply was about the file and a head: not a configuration or a .env read for every
+# request and answered with something else, whether smaller or larger, once or many times.
+"$workload" respond 300 20000 1 "$data/reply-env1.bin" 1500 >/dev/null
+"$workload" respond 300 20000 30 "$data/reply-env30.bin" 1500 >/dev/null
+"$workload" respond 0 413 8 "$data/reply-cfg413.bin" 4096 >/dev/null
+"$workload" respond 0 1500 8 "$data/reply-cfg1500.bin" 4096 >/dev/null
+# Small files sent with a head are reported whole, one or several over one connection.
+"$workload" respond 300 0 1 "$data/reply-1k.bin" 1024 >/dev/null
+"$workload" respond 300 0 1 "$data/reply-4k.bin" 4096 >/dev/null
+"$workload" respond 300 0 1 "$data/reply-60k.bin" 61440 >/dev/null
+"$workload" respond 300 0 1 "$data/reply-ka-a.bin" 2048 "$data/reply-ka-b.bin" 8192 \
+    "$data/reply-ka-c.bin" 30000 >/dev/null
+"$workload" respond 300 0 3 "$data/reply-ka-same.bin" 4096 >/dev/null
+# From 64 KB on a read is reported as it goes, by the thresholds alone.
+"$workload" respond 300 0 1 "$data/reply-63k.bin" 64512 >/dev/null
+"$workload" respond 300 0 1 "$data/reply-64k.bin" 65536 >/dev/null
+"$workload" respond 0 5000 1 "$data/reply-63k-other.bin" 64512 >/dev/null
+"$workload" respond 0 5000 1 "$data/reply-64k-other.bin" 65536 >/dev/null
+# A thread serving two connections ends a reply on one when it hears from the other.
+"$workload" respondtwo "$data/reply-loop.bin" 4096 0 >/dev/null
+"$workload" respondtwo "$data/reply-loop-cfg.bin" 4096 413 >/dev/null
+settle
+for name in env1 env30 cfg413 cfg1500 63k-other loop-cfg; do
+    expect "reply after a small read, $name: not reported" \
+        "$(ft files --path "$data/reply-$name.bin" --format csv | rows)" 0
+done
+for pair in 1k:1024 4k:4096 60k:61440 ka-a:2048 ka-b:8192 ka-c:30000 ka-same:12288 \
+    63k:64512 64k:65536 64k-other:5000 loop:4096; do
+    csv=$(ft files --path "$data/reply-${pair%%:*}.bin" --format csv)
+    expect "reply of a file, ${pair%%:*}: rows" "$(printf '%s\n' "$csv" | rows)" 1
+    expect "reply of a file, ${pair%%:*}: bytes" \
+        "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "${pair#*:}"
+done
 
 # Below 64 KB, a file read before its connection is not told from a request of its size.
 "$workload" readhandshake "$data/upload-small.json" 20000 "$data/no-bundle.crt" 0 >/dev/null

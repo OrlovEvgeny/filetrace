@@ -574,6 +574,85 @@ static void scenario_read_keepalive(const char *path, size_t size, size_t next)
     stop_sink(&sink);
 }
 
+static size_t arg_size(const char *text);
+
+/*
+ * respond <head> <reply> <rounds> <path> <bytes> [<path> <bytes>...]: answers requests over a
+ * connection that has heard from its peer, as a server does. For each request it reads a file
+ * whole and sends a head of that many bytes and then, with reply 0, the file, or else that many
+ * bytes from memory; the next request ends the reply.
+ */
+static void scenario_respond(size_t head, size_t reply, size_t rounds, char **files, int nfiles)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char *header = calloc(1, head ? head : 1);
+    char *body = calloc(1, reply ? reply : 1);
+    if (!header || !body)
+        die("malloc");
+
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    for (size_t r = 0; r < rounds; r++) {
+        for (int i = 0; i + 1 < nfiles; i += 2) {
+            size_t size = arg_size(files[i + 1]);
+            char *contents = read_whole_file(files[i], size);
+            send_all(sock, header, head);
+            if (reply)
+                send_all(sock, body, reply);
+            else
+                send_all(sock, contents, size);
+            hear(sock);
+            free(contents);
+        }
+    }
+    close(sock);
+    free(header);
+    free(body);
+    report("respond", files[0], 0, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * respondtwo <path> <bytes> <reply>: one thread serves two connections, as an event loop does.
+ * It replies on the first as respond does, then hears a request on the second, and then sends
+ * more on the first without hearing from it.
+ */
+static void scenario_respond_two(const char *path, size_t size, size_t reply)
+{
+    struct sink one = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    struct sink two = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char header[300] = {0};
+    char *body = calloc(1, reply ? reply : 1);
+    char *more = calloc(1, 20000);
+    if (!body || !more)
+        die("malloc");
+
+    int a = connect_sink(&one);
+    int b = connect_sink(&two);
+    send_all(a, "hello\n", 6);
+    hear(a);
+    send_all(b, "hello\n", 6);
+    hear(b);
+    char *contents = read_whole_file(path, size);
+    send_all(a, header, sizeof(header));
+    if (reply)
+        send_all(a, body, reply);
+    else
+        send_all(a, contents, size);
+    send_all(b, "hello\n", 6);
+    hear(b);
+    send_all(a, more, 20000);
+    close(b);
+    close(a);
+    free(contents);
+    free(body);
+    free(more);
+    report("respondtwo", path, size, one.port);
+    stop_sink(&two);
+    stop_sink(&one);
+}
+
 /*
  * readstream <path> <bytes> <first>: reads the first bytes of the file, connects, then sends them
  * and the rest in pieces as it reads them. readsniff sends a request head instead of the first
@@ -1472,6 +1551,11 @@ int main(int argc, char **argv)
         scenario_read_small(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readreplythread") == 0 && argc == 4)
         scenario_read_reply_thread(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "respond") == 0 && argc >= 7)
+        scenario_respond(arg_size(argv[2]), arg_size(argv[3]), arg_size(argv[4]), argv + 5,
+                         argc - 5);
+    else if (strcmp(name, "respondtwo") == 0 && argc == 5)
+        scenario_respond_two(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readmemory") == 0 && argc == 5)
         scenario_read_memory(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readrefused") == 0 && argc == 4)
