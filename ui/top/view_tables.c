@@ -93,8 +93,8 @@ static const struct column_spec transfer_columns[] = {
 };
 
 static const struct squeeze transfer_squeezes[] = {
-    {COL_CONF, 0}, {COL_USER, 0},   {COL_PROGRESS, 0},
-    {COL_AGE, 0},  {COL_SCRIPT, 0}, {COL_DESTINATION, 18},
+    {COL_CONF, 0},   {COL_USER, 0},         {COL_PROGRESS, 0}, {COL_AGE, 0},
+    {COL_SCRIPT, 0}, {COL_DESTINATION, 18}, {COL_SENT, 0},
 };
 
 static const struct column_spec process_columns[] = {
