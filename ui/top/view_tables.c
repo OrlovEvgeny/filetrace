@@ -1066,6 +1066,18 @@ static void draw_empty(struct ft_top_draw *d, enum ft_top_mode mode, struct ft_r
         ft_strlcpy(text, nothing[mode], sizeof(text));
     ft_canvas_text_cut(d->canvas, rows.x + 1, rows.y, rows.w - 1, ft_top_fg(FT_COLOR_DIM, false),
                        text, FT_CUT_END);
+
+    /* A screen that collects by itself starts empty: say that it is watching, and since when. */
+    bool unfiltered = !(filter && filter[0]) && !(search && search[0]);
+    if (d->ui->session_only && d->ui->since_wall_ns && unfiltered && rows.h > 1) {
+        char since[32];
+        ft_top_since_text(d->ui->since_wall_ns, ft_top_totals(d->model)->now_wall_ns, true, since,
+                          sizeof(since));
+        snprintf(text, sizeof(text), "Watching since %s: what is sent from now on shows here.",
+                 since);
+        ft_canvas_text_cut(d->canvas, rows.x + 1, rows.y + 1, rows.w - 1,
+                           ft_top_fg(FT_COLOR_DIM, false), text, FT_CUT_END);
+    }
 }
 
 void ft_top_draw_table(struct ft_top_draw *d, enum ft_top_mode mode, struct ft_rect header,

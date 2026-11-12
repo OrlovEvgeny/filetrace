@@ -551,6 +551,25 @@ static void data_source(void)
     for (int y = l.table.y; y < l.table.y + l.table.h; y++)
         shown |= row_has(c, y, "Starting the collector: attaching the kernel probes… 3s");
     CHECK(shown);
+
+    /* Once it runs, an empty table says that the screen is watching. */
+    bool nothing = false;
+    bool watching = false;
+    ui.starting = false;
+    ui.since_wall_ns = 1'700'000'000 * SECOND;
+    ft_top_draw(&d);
+    for (int y = l.table.y; y < l.table.y + l.table.h; y++) {
+        nothing |= row_has(c, y, "No file transfers in progress.");
+        watching |= row_has(c, y, "what is sent from now on shows here.");
+    }
+    CHECK(nothing);
+    CHECK(watching);
+    ui.session_only = false;
+    watching = false;
+    ft_top_draw(&d);
+    for (int y = l.table.y; y < l.table.y + l.table.h; y++)
+        watching |= row_has(c, y, "what is sent from now on shows here.");
+    CHECK(!watching);
     ft_canvas_destroy(c);
     ft_top_model_destroy(empty);
 }
