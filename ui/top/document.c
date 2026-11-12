@@ -638,10 +638,41 @@ size_t ft_top_write_csv(const struct ft_top_model *m, enum ft_top_mode mode, FIL
     return 0;
 }
 
+static void section_members(struct writer *w, const struct ft_top_section *section)
+{
+    put_text(w, "group", section->title);
+    put_uint(w, "rows", section->rows);
+    put_uint(w, "processes", section->processes);
+    put_uint(w, "files", section->files);
+    put_uint(w, "destinations", section->destinations);
+    put_uint(w, "rate", section->rate);
+}
+
+/* The heading above a row, which the row names as its group. */
+static const char *group_above(const struct ft_top_model *m, enum ft_top_mode mode, size_t index)
+{
+    for (size_t i = index + 1; i-- > 0;) {
+        const struct ft_top_row *r = ft_top_row_at(m, mode, i);
+
+        if (r && r->kind == FT_TOP_ROW_SECTION)
+            return r->section->title;
+    }
+    return nullptr;
+}
+
 void ft_top_row_json(const struct ft_top_model *m, enum ft_top_mode mode, size_t index, FILE *out)
 {
-    (void)m;
-    (void)mode;
-    (void)index;
-    (void)out;
+    const struct ft_top_row *r = ft_top_row_at(m, mode, index);
+    struct writer w = {.out = out, .indent = true};
+    struct view view = view_of(m, mode);
+
+    if (!r)
+        return;
+    open_container(&w, nullptr, '{');
+    if (r->kind == FT_TOP_ROW_SECTION)
+        section_members(&w, r->section);
+    else
+        write_row(&w, &view, r, view.grouped ? group_above(m, mode, index) : nullptr);
+    close_container(&w, '}');
+    free(w.clean);
 }
