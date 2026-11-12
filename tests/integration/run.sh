@@ -701,6 +701,12 @@ slow_flight=$!
 cut_reply=$!
 "$workload" cutreply "$data/cut-other.cfg" 50000 40000 >/dev/null &
 cut_other=$!
+# A small file sent in pieces is reported when they follow closely, and not when the window of
+# the first has passed: half a small file is not told from a reply half its size.
+"$workload" pieces "$data/pieces-close.json" 5000 2 1000 >/dev/null &
+pieces_close=$!
+"$workload" pieces "$data/pieces-apart.json" 5000 2 5000 >/dev/null &
+pieces_apart=$!
 # A file made where a deleted file was is not taken for it: requests sent after reading the new
 # file are not the old one's, and the new file sent is reported under its own path.
 (
@@ -742,7 +748,12 @@ expect "reply with another thread's bytes on the connection not reported" \
 expect "body long after a small file's read not reported" \
     "$(ft files --path "$data/client.conf" --format csv | rows)" 0
 wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply" "$cut_other" "$reused" \
-    ${stall_send:+"$stall_send"}
+    "$pieces_close" "$pieces_apart" ${stall_send:+"$stall_send"}
+settle
+expect "small file in pieces a second apart: bytes" \
+    "$(ft files --path "$data/pieces-close.json" --format csv | column transfer.bytes_sent)" 5000
+expect "small file in pieces five seconds apart: not reported" \
+    "$(ft files --path "$data/pieces-apart.json" --format csv | rows)" 0
 grep -q 'reused=1' "$work/reused.out" "$work/reused-sent.out" ||
     echo "NOTE: this filesystem gave no new file the inode number of a deleted one"
 expect "requests after reading a file made where a deleted one was: not reported" \

@@ -1512,6 +1512,29 @@ static void scenario_tail(const char *path, size_t size, size_t append, size_t r
 }
 
 /*
+ * pieces <path> <bytes> <pieces> <milliseconds>: over a connection that has heard from its peer,
+ * reads the file and sends it in pieces with a pause between them, then closes.
+ */
+static void scenario_pieces(const char *path, size_t size, size_t pieces, size_t pause_ms)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    size_t step = (size + pieces - 1) / pieces;
+    for (size_t from = 0; from < size; from += step) {
+        if (from)
+            usleep((useconds_t)(pause_ms * 1000));
+        send_all(sock, contents + from, size - from < step ? size - from : step);
+    }
+    sleep(1);
+    close(sock);
+    free(contents);
+    report("pieces", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * holdopen <path> <bytes> <body bytes> <seconds>: over a connection that has heard from its peer,
  * reads the file and sends a body that starts with it, then keeps the connection open, never
  * hearing again.
@@ -2574,6 +2597,8 @@ int main(int argc, char **argv)
         scenario_read_hello(argv[2], arg_size(argv[3]), false);
     else if (strcmp(name, "smallupload") == 0 && argc == 4)
         scenario_read_hello(argv[2], arg_size(argv[3]), true);
+    else if (strcmp(name, "pieces") == 0 && argc == 6)
+        scenario_pieces(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "rereadhello") == 0 && argc == 4)
         scenario_reread_hello(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "rereadput") == 0 && argc == 4)
