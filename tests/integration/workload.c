@@ -1967,6 +1967,74 @@ static void scenario_read_hello(const char *path, size_t size, bool upload)
 }
 
 /*
+ * rereadhello <path> <bytes>: reads the file and sends a hello the size of a TLS ClientHello on a
+ * connection whose peer answers late; reads the file again and does the same on a second one.
+ * Each connection then hears its answer and sends a request, as a client reads its CA file per
+ * connection.
+ */
+static void scenario_reread_hello(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_LATE);
+    make_file(path, size);
+    char *contents = malloc(size);
+    char hello[1750] = {0};
+    char request[600] = {0};
+    if (!contents)
+        die("malloc");
+    int file = open_file(path);
+    int socks[2];
+    for (int i = 0; i < 2; i++) {
+        if (pread(file, contents, size, 0) != (ssize_t)size)
+            die("pread");
+        socks[i] = connect_sink(&sink);
+        send_all(socks[i], hello, sizeof(hello));
+    }
+    for (int i = 0; i < 2; i++) {
+        hear(socks[i]);
+        send_all(socks[i], request, sizeof(request));
+        hear(socks[i]);
+        close(socks[i]);
+    }
+    close(file);
+    free(contents);
+    report("rereadhello", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * rereadput <path> <bytes>: puts the file to three servers in turn, reading it again for each, a
+ * request head and the file in one send, and hears each answer with the connection kept open; then
+ * closes them.
+ */
+static void scenario_reread_put(const char *path, size_t size)
+{
+    struct sink sinks[3];
+    for (int i = 0; i < 3; i++)
+        sinks[i] = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    make_file(path, size);
+    size_t head = 200;
+    char *request = calloc(1, head + size);
+    if (!request)
+        die("malloc");
+    int file = open_file(path);
+    int socks[3];
+    for (int i = 0; i < 3; i++) {
+        socks[i] = connect_sink(&sinks[i]);
+        if (pread(file, request + head, size, 0) != (ssize_t)size)
+            die("pread");
+        send_all(socks[i], request, head + size);
+        hear(socks[i]);
+    }
+    for (int i = 0; i < 3; i++)
+        close(socks[i]);
+    close(file);
+    free(request);
+    report("rereadput", path, size, sinks[0].port);
+    for (int i = 0; i < 3; i++)
+        stop_sink(&sinks[i]);
+}
+
+/*
  * readrefused <path> <bytes>: like readhandshake without a bundle, but the first connection is
  * refused, as a client's first address can be, and the file goes out over the second.
  */
@@ -2506,6 +2574,10 @@ int main(int argc, char **argv)
         scenario_read_hello(argv[2], arg_size(argv[3]), false);
     else if (strcmp(name, "smallupload") == 0 && argc == 4)
         scenario_read_hello(argv[2], arg_size(argv[3]), true);
+    else if (strcmp(name, "rereadhello") == 0 && argc == 4)
+        scenario_reread_hello(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "rereadput") == 0 && argc == 4)
+        scenario_reread_put(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readlookup") == 0 && argc == 4)
         scenario_read_lookup(argv[2], arg_size(argv[3]), true);
     else if (strcmp(name, "readnotify") == 0 && argc == 4)

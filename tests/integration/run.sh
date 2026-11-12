@@ -640,6 +640,19 @@ for name in e f; do
         "$(ft files --path "$data/flight-$name.json" --format csv | column transfer.bytes_sent)" 5000
 done
 
+# A thread that reads its file again leaves its first flights to their own connections: a hello
+# sent after each read is not the file, and a small file put to one connection after another,
+# each answered and kept open, is reported for each once they close.
+"$workload" rereadhello "$data/reread-ca.pem" 1200 >/dev/null
+"$workload" rereadput "$data/reread-status.json" 3000 >/dev/null
+settle
+expect "re-read before each hello: file not reported" \
+    "$(ft files --path "$data/reread-ca.pem" --format csv | rows)" 0
+csv=$(ft files --path "$data/reread-status.json" --format csv)
+expect "re-read for each put: rows" "$(printf '%s\n' "$csv" | rows)" 3
+expect "re-read for each put: bytes" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent | sort -u | tr -d '\n')" 3000
+
 # A first flight that one large send takes past a handshake is judged by what went when it holds
 # a small file: a large upload does not carry a token read after the connection, nor a large
 # request the configuration read before it.
