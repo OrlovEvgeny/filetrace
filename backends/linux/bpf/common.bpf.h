@@ -587,7 +587,9 @@ static __always_inline bool sock_flown(__u64 sk, __u64 sending)
 enum carry_end {
     CARRY_QUIET, /* the socket closed, or the flight grew past what a handshake sends */
     CARRY_AGAIN, /* the connection went on after the peer answered */
-    CARRY_NEXT,  /* another file's bytes follow in the same unanswered flight */
+    CARRY_NEXT,  /* another file, connection or thread took the window's place */
+    CARRY_REPLY, /* the thread heard from the window's own peer */
+    CARRY_AGED,  /* the correlation window passed with nothing to end it */
 };
 
 static __always_inline bool same_file(const struct file_ref *a, const struct file_ref *b)
@@ -687,14 +689,20 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     __u64 whole = c->size && c->size < read ? c->size : read;
     bool by_volume = !flight || c->held;
     bool file = false;
-    if (c->sends && by_volume)
+    if (c->sends && by_volume) {
         file = c->held ? held_matches(c->wire, whole) : volume_matches(c->wire, whole);
+        /* Short of the file and not answered by its own peer, it goes as the base rule took it. */
+        if (!file && end != CARRY_REPLY && c->wire * 10 < whole * 9) {
+            carry_report(map, c, &c->file, c->sent, c->read);
+            return;
+        }
+    }
     /* Within a flight, all of a file that went before another one's bytes is a part. */
     else if (c->sends)
         file = end != CARRY_NEXT || (c->read && c->sent >= c->read);
 
     if (file) {
-        carry_report(map, c, &c->file, by_volume ? whole : c->sent, c->read);
+        carry_report(map, c, &c->file, by_volume && whole < c->sent ? whole : c->sent, c->read);
         return;
     }
     dial_charged(sk, &c->file, -(__s64)c->sent);
@@ -851,7 +859,7 @@ static __always_inline void carry_received(void *map, __u64 sk, __u64 now)
 {
     struct carry *c = bpf_map_lookup_elem(&carries, &sk);
     if (c && c->kind == CARRY_EPISODE && c->tid != (__u32)bpf_get_current_pid_tgid())
-        carry_close(map, sk, CARRY_QUIET, now);
+        carry_close(map, sk, CARRY_NEXT, now);
 
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (!d)
@@ -869,14 +877,15 @@ static __always_inline void carry_received(void *map, __u64 sk, __u64 now)
 }
 
 /* Ends the thread's reply: it heard from a peer, or turned to another file or connection. */
-static __always_inline void carry_episode_end(struct thread_state *ts, __u64 now)
+static __always_inline void carry_episode_end(struct thread_state *ts, __u64 now,
+                                              enum carry_end end)
 {
     __u64 sk = ts->episode_sock;
     struct carry *c = sk ? bpf_map_lookup_elem(&carries, &sk) : NULL;
     void *map = agg_map_now();
     ts->episode_sock = 0;
     if (c && map && c->kind == CARRY_EPISODE && c->tid == (__u32)bpf_get_current_pid_tgid())
-        carry_close(map, sk, CARRY_QUIET, now);
+        carry_close(map, sk, end, now);
 }
 
 /* Brings the dialed window's copy of a candidate up to date, or adds it in a free place. */
@@ -1042,7 +1051,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         }
         /* A first flight turns into a reply as it is sent, and the reply ends as it is heard. */
         if (c->kind == CARRY_EPISODE && ts->episode_sock != sk) {
-            carry_episode_end(ts, now);
+            carry_episode_end(ts, now, CARRY_NEXT);
             ts->episode_sock = sk;
         }
         return c;
@@ -1057,7 +1066,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     else
         return NULL;
     if (kind == CARRY_EPISODE)
-        carry_episode_end(ts, now);
+        carry_episode_end(ts, now, CARRY_NEXT);
 
     if (bpf_map_update_elem(&carries, &sk, &carry_zero, BPF_NOEXIST)) {
         *skip = true;
@@ -1170,7 +1179,7 @@ static __always_inline void file_again(struct thread_state *ts, const struct fil
 {
     if (ts->episode_sock && !ts->pending && ts->file.ino == fk->ino && ts->file.dev == fk->dev &&
         ts->gen == fk->gen)
-        carry_episode_end(ts, now);
+        carry_episode_end(ts, now, CARRY_NEXT);
 }
 
 /* Pseudo filesystems whose regular files are kernel state, not stored data. */
@@ -1407,7 +1416,7 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
 {
     ts->file_size = FT_READ(inode, i_size);
     if (ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen) {
-        carry_episode_end(ts, bpf_ktime_get_boot_ns());
+        carry_episode_end(ts, bpf_ktime_get_boot_ns(), CARRY_NEXT);
         ts->file.ino = fk->ino;
         ts->file.dev = fk->dev;
         ts->file.instance = 0;

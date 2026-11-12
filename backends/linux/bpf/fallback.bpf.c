@@ -406,7 +406,7 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
-            carry_episode_end(ts, now);
+            carry_episode_end(ts, now, ts->episode_sock == (__u64)sk ? CARRY_REPLY : CARRY_NEXT);
             thread_reset(ts);
             ts->received++;
         }
@@ -693,7 +693,7 @@ int BPF_KPROBE(ft_skb_consume_udp, struct sock *sk, struct sk_buff *skb, int len
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
-            carry_episode_end(ts, now);
+            carry_episode_end(ts, now, CARRY_NEXT);
             thread_reset(ts);
             ts->received++;
         }
