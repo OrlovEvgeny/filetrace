@@ -24,10 +24,22 @@
 #define MAX_BINARIES 64
 #define MAX_SKIPPED 256
 #define SCRIPT_SLOTS 4096
+#define MAX_SYMBOL_BYTES (8u << 20)
+
+/*
+ * A binary as probes see it. Uprobes attach to the file underneath overlayfs, which every
+ * container of an image shares, while each container's overlay gives it a device of its own;
+ * the inode number, size and time are the real file's.
+ */
+struct php_identity {
+    uint64_t ino;
+    uint64_t size;
+    int64_t mtime_sec;
+    int64_t mtime_nsec;
+};
 
 struct php_binary {
-    dev_t dev;
-    ino_t ino;
+    struct php_identity id;
     struct bpf_link *start;
     struct bpf_link *end;
 };
@@ -38,10 +50,8 @@ struct ft_linux_php {
     int known_scripts_fd;
     struct php_binary binaries[MAX_BINARIES];
     size_t count;
-    struct {
-        dev_t dev;
-        ino_t ino;
-    } skipped[MAX_SKIPPED]; /* inodes looked at that are not PHP, or that refused the probe */
+    bool full_logged;
+    struct php_identity skipped[MAX_SKIPPED]; /* not PHP, or refused the probe */
     size_t skipped_count;
     struct ft_script_names *names;
 };
@@ -81,7 +91,8 @@ static int php_layout(const char *path)
             dynsym->sh_entsize != sizeof(Elf64_Sym))
             continue;
         const Elf64_Shdr *dynstr = &sections[dynsym->sh_link];
-        if (dynsym->sh_size > (64u << 20) || dynstr->sh_size > (64u << 20) || !dynstr->sh_size)
+        if (dynsym->sh_size > MAX_SYMBOL_BYTES || dynstr->sh_size > MAX_SYMBOL_BYTES ||
+            !dynstr->sh_size)
             break;
         syms = malloc(dynsym->sh_size);
         names = malloc(dynstr->sh_size + 1);
@@ -118,25 +129,30 @@ done:
     return layout;
 }
 
-static bool known(const struct ft_linux_php *php, dev_t dev, ino_t ino)
+static bool same(const struct php_identity *a, const struct php_identity *b)
+{
+    return a->ino == b->ino && a->size == b->size && a->mtime_sec == b->mtime_sec &&
+           a->mtime_nsec == b->mtime_nsec;
+}
+
+static bool known(const struct ft_linux_php *php, const struct php_identity *id)
 {
     for (size_t i = 0; i < php->count; i++) {
-        if (php->binaries[i].dev == dev && php->binaries[i].ino == ino)
+        if (same(&php->binaries[i].id, id))
             return true;
     }
     for (size_t i = 0; i < php->skipped_count; i++) {
-        if (php->skipped[i].dev == dev && php->skipped[i].ino == ino)
+        if (same(&php->skipped[i], id))
             return true;
     }
     return false;
 }
 
-static void skip(struct ft_linux_php *php, dev_t dev, ino_t ino)
+static void skip(struct ft_linux_php *php, const struct php_identity *id)
 {
     size_t slot =
-        php->skipped_count < MAX_SKIPPED ? php->skipped_count++ : (size_t)(ino % MAX_SKIPPED);
-    php->skipped[slot].dev = dev;
-    php->skipped[slot].ino = ino;
+        php->skipped_count < MAX_SKIPPED ? php->skipped_count++ : (size_t)(id->ino % MAX_SKIPPED);
+    php->skipped[slot] = *id;
 }
 
 static struct bpf_link *attach(struct bpf_program *prog, const char *path, const char *func,
@@ -153,24 +169,46 @@ static struct bpf_link *attach(struct bpf_program *prog, const char *path, const
     return libbpf_get_error(link) ? nullptr : link;
 }
 
-/* Probes the PHP binary at path, which names it as some process sees it; once per inode. */
-static void consider(struct ft_linux_php *php, const char *path)
+/*
+ * Probes the PHP binary that path leads to, once per file; name is how the process knows it.
+ * path is a /proc link to the file the process runs or has mapped, never a name it could
+ * replace, and the open does not wait on anything that is not a regular file.
+ */
+static void consider(struct ft_linux_php *php, const char *path, const char *name)
 {
-    /* Held open, the binary stays reachable after the process that named it exits. */
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY);
     if (fd < 0)
         return;
     struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || known(php, st.st_dev, st.st_ino)) {
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return;
+    }
+    struct php_identity id = {
+        .ino = (uint64_t)st.st_ino,
+        .size = (uint64_t)st.st_size,
+        .mtime_sec = (int64_t)st.st_mtim.tv_sec,
+        .mtime_nsec = (int64_t)st.st_mtim.tv_nsec,
+    };
+    if (known(php, &id)) {
         close(fd);
         return;
     }
 
+    /* Held open, the binary stays reachable after the process that named it exits. */
     char held[32];
     snprintf(held, sizeof(held), "/proc/self/fd/%d", fd);
     int layout = php_layout(held);
-    if (!layout || php->count == MAX_BINARIES) {
-        skip(php, st.st_dev, st.st_ino);
+    if (!layout) {
+        skip(php, &id);
+        close(fd);
+        return;
+    }
+    if (php->count == MAX_BINARIES) {
+        if (!php->full_logged)
+            ft_log(FT_LOG_WARN, "already probing %d PHP binaries; %s and later ones are not probed",
+                   MAX_BINARIES, name);
+        php->full_logged = true;
         close(fd);
         return;
     }
@@ -179,16 +217,15 @@ static void consider(struct ft_linux_php *php, const char *path)
     b->end = b->start ? attach(php->end_prog, held, "php_request_shutdown", true, 0) : nullptr;
     close(fd);
     if (!b->start || !b->end) {
-        ft_log(FT_LOG_WARN, "cannot probe the PHP binary %s: %s", path,
+        ft_log(FT_LOG_WARN, "cannot probe the PHP binary %s: %s", name,
                ft_linux_last_libbpf_message());
         bpf_link__destroy(b->start);
-        skip(php, st.st_dev, st.st_ino);
+        skip(php, &id);
         return;
     }
-    b->dev = st.st_dev;
-    b->ino = st.st_ino;
+    b->id = id;
     php->count++;
-    ft_log(FT_LOG_INFO, "probing PHP requests in %s (PHP %s)", path,
+    ft_log(FT_LOG_INFO, "probing PHP requests in %s (PHP %s)", name,
            layout == FT_BPF_PHP_ZEND_STRING ? "8.1 or later" : "8.0 or earlier");
 }
 
@@ -215,19 +252,23 @@ static void consider_libraries(struct ft_linux_php *php, uint32_t pid)
     if (!f)
         return;
     while (fgets(line, sizeof(line), f)) {
-        char *file = strchr(line, '/');
-        if (!file)
+        char range[64];
+        char perms[8];
+        int file_at = 0;
+        if (sscanf(line, "%63s %7s %*s %*s %*s %n", range, perms, &file_at) != 2 || !file_at ||
+            !strchr(perms, 'x'))
             continue;
+        char *file = line + file_at;
         file[strcspn(file, "\n")] = '\0';
         const char *name = base_name(file);
-        if (!(starts_with(name, "libphp") || starts_with(name, "mod_php")) ||
+        if (file[0] != '/' || !(starts_with(name, "libphp") || starts_with(name, "mod_php")) ||
             strcmp(file, last) == 0)
             continue;
         ft_strlcpy(last, file, sizeof(last));
-        char root[PATH_MAX + 64];
-        if ((size_t)snprintf(root, sizeof(root), "/proc/%" PRIu32 "/root%s", pid, file) <
-            sizeof(root))
-            consider(php, root);
+        /* The mapped file itself: a mount over its directory cannot put anything else there. */
+        char mapped[128];
+        snprintf(mapped, sizeof(mapped), "/proc/%" PRIu32 "/map_files/%s", pid, range);
+        consider(php, mapped, file);
     }
     fclose(f);
 }
@@ -244,7 +285,7 @@ void ft_linux_php_attach_pid(struct ft_linux_php *php, uint32_t pid)
     exe[n] = '\0';
     const char *name = base_name(exe);
     if (starts_with(name, "php") || starts_with(name, "frankenphp"))
-        consider(php, path);
+        consider(php, path, exe);
     else if (strcmp(name, "apache2") == 0 || starts_with(name, "httpd"))
         consider_libraries(php, pid);
 }

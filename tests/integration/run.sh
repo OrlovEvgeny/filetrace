@@ -599,6 +599,14 @@ else
     echo "SKIP: php-fpm or cgi-fcgi is not installed; the PHP request checks did not run"
 fi
 
+# A web server whose maps name a library that a mount has since replaced with a FIFO does not
+# hold up the agent: the library is opened as it is mapped, not by its name.
+mkdir -p "$work/fifolib"
+cp "$workload" "$work/apache2"
+"$work/apache2" fifolib "$work/fifolib" >/dev/null
+expect "fifo in place of a library: agent answers" \
+    "$(timeout 5 "$bin/filetrace" --socket "$sock" agent status >/dev/null 2>&1; echo $?)" 0
+
 # A sender that exits right after sending is gone before /proc can be read; its command line
 # and directory come with its exec.
 (cd "$data" && "$workload" readsend "$data/short.bin" 300000 65536) >/dev/null

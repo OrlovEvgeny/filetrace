@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sendfile.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -417,6 +418,41 @@ static void scenario_ns_read(const char *dir, const char *mount_point, const cha
     printf("scenario=nsread pid=%d path=%s\n", (int)getpid(), path);
 }
 
+/*
+ * fifolib <dir>: maps dir/libphp-ft.so as code, then in a mount namespace of its own leaves a
+ * FIFO at that path, and forks: what a web server's maps name is not what is at the path.
+ */
+static void scenario_fifo_lib(const char *dir)
+{
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/libphp-ft.so", dir);
+    make_file(path, 65536);
+    int fd = open_file(path);
+    void *code = mmap(nullptr, 65536, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0);
+    if (code == MAP_FAILED)
+        die("mmap");
+    close(fd);
+
+    if (unshare(CLONE_NEWNS) != 0)
+        die("unshare");
+    if (mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0)
+        die("mount private");
+    if (mount("tmpfs", dir, "tmpfs", 0, nullptr) != 0)
+        die("mount tmpfs");
+    if (mkfifo(path, 0644) != 0)
+        die("mkfifo");
+
+    pid_t child = fork();
+    if (child < 0)
+        die("fork");
+    if (child == 0) {
+        sleep(2);
+        _exit(0);
+    }
+    waitpid(child, nullptr, 0);
+    printf("scenario=fifolib pid=%d child=%d\n", (int)getpid(), (int)child);
+}
+
 /* readlittle <path> <bytes>: sends only a sliver of what it read */
 static void scenario_read_little(const char *path, size_t size)
 {
@@ -742,6 +778,8 @@ int main(int argc, char **argv)
         scenario_read_recv_elsewhere(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "readbundle") == 0 && argc == 6)
         scenario_read_bundle(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "fifolib") == 0 && argc == 3)
+        scenario_fifo_lib(argv[2]);
     else if (strcmp(name, "read") == 0 && argc == 3)
         scenario_read(argv[2]);
     else if (strcmp(name, "nsread") == 0 && argc == 5)
