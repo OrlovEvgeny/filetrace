@@ -52,7 +52,7 @@
 # is reported only when a send takes all that was read of it. A file counts
 # once a pattern names it: when the agent starts, every 30 seconds, and after
 # the first read of its path, also inside a container. [] turns this off.
-# background_paths = ["/etc/ssl/certs/*", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/*", "/etc/pki/ca-trust/extracted/*", "/etc/ca-certificates/extracted/*", "/usr/share/ca-certificates/*", "/etc/ssl/openssl.cnf", "/etc/pki/tls/openssl.cnf", "/usr/lib/ssl/openssl.cnf", "/etc/hosts", "/etc/host.conf", "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/passwd", "/etc/group", "/usr/share/zoneinfo/*", "/etc/localtime", "*/cacert.pem", "*/cacerts", "*/ca-bundle.crt", "*/ca-certificates.crt", "*.pyc", "*.py", "*.rb", "*.js", "*.jar"]
+# background_paths = ["/etc/ssl/certs/*", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/*", "/etc/pki/ca-trust/extracted/*", "/etc/ca-certificates/extracted/*", "/usr/share/ca-certificates/*", "/usr/local/share/ca-certificates/*", "/etc/pki/ca-trust/source/*", "/usr/share/pki/ca-trust-source/*", "/etc/pki/trust/*", "/usr/share/pki/trust/*", "/etc/ca-certificates/trust-source/*", "/etc/ssl/openssl.cnf", "/etc/pki/tls/openssl.cnf", "/usr/lib/ssl/openssl.cnf", "/etc/hosts", "/etc/host.conf", "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/passwd", "/etc/group", "/usr/share/zoneinfo/*", "/etc/localtime", "*/cacert.pem", "*/cacerts", "*/ca-bundle.crt", "*/ca-certificates.crt", "*.pyc", "*.py", "*.rb", "*.js", "*.mjs", "*.cjs", "*.node", "*.jar", "*.class", "*.pm", "*.pl", "*.php", "*.so", "*.so.*", "*.mo"]
 
 # Entries per table; the least recently used go first.
 [limits]

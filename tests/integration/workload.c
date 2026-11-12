@@ -329,10 +329,11 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
 /*
  * readsendother <path> <bytes> <other> <other bytes>: over a connection that has already heard
  * from its peer, reads the file whole and sends nothing of it, as a checksum pass does, then
- * reads the other file and sends that.
+ * reads the other file and sends that. readloadsend sends the first file, as a program that
+ * loads a module between reading its upload and sending it.
  */
 static void scenario_read_send_other(const char *path, size_t size, const char *other,
-                                     size_t other_size)
+                                     size_t other_size, bool send_first)
 {
     struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
@@ -352,7 +353,10 @@ static void scenario_read_send_other(const char *path, size_t size, const char *
     int up = open_file(other);
     if (read(up, upload, other_size) != (ssize_t)other_size)
         die("read");
-    send_all(sock, upload, other_size);
+    if (send_first)
+        send_all(sock, contents, size);
+    else
+        send_all(sock, upload, other_size);
     close(sock);
     close(up);
     close(file);
@@ -1195,7 +1199,9 @@ int main(int argc, char **argv)
         scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
                                 BUNDLE_AFTER_HELLO);
     else if (strcmp(name, "readsendother") == 0 && argc == 6)
-        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), false);
+    else if (strcmp(name, "readloadsend") == 0 && argc == 6)
+        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), true);
     else if (strcmp(name, "exchange") == 0 && argc == 6)
         scenario_exchange(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "readhello") == 0 && argc == 4)

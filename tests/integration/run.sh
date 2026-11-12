@@ -270,6 +270,23 @@ expect "side read sent elsewhere: small bytes" \
 expect "side read sent elsewhere: large read before a small one not reported" \
     "$(ft files --path "$data/checksummed-too.bin" --format csv | rows)" 0
 
+# A module or library loaded between an upload's read and its send does not take its place,
+# and is not what was sent. A versioned library counts from the read after its first.
+head -c 4096 /dev/zero >"$data/libfake.so.3"
+"$workload" read "$data/libfake.so.3" >/dev/null
+settle
+"$workload" readloadsend "$data/upload-pm.bin" 20000 "$data/Extra.pm" 5647 >/dev/null
+"$workload" readloadsend "$data/upload-so.bin" 20000 "$data/_queue.cpython-313.so" 832 >/dev/null
+"$workload" readloadsend "$data/upload-so3.bin" 20000 "$data/libfake.so.3" 4096 >/dev/null
+settle
+for name in pm so so3; do
+    expect "module loaded before the send, $name: upload bytes" \
+        "$(ft files --path "$data/upload-$name.bin" --format csv | column transfer.bytes_sent)" 20000
+done
+expect "module loaded before the send: modules not reported" \
+    "$(ft files --path "$data/Extra.pm" --format csv | rows)$(ft files --path "$data/_queue*" \
+        --format csv | rows)$(ft files --path "$data/libfake*" --format csv | rows)" 000
+
 # A compiled module loaded before an upload from memory is not what was uploaded.
 "$workload" readmemory "$data/idna.cpython-313.pyc" 25000 300000 >/dev/null
 settle

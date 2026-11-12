@@ -11,7 +11,7 @@
 #define FT_BPF_BACKGROUND_MAX 16384
 #define FT_BPF_BACKGROUND_NAME 64 /* longest file name, with its NUL, that a pattern can name */
 #define FT_BPF_BACKGROUND_NAMES 64
-#define FT_BPF_BACKGROUND_SUFFIXES 8
+#define FT_BPF_BACKGROUND_SUFFIXES 32
 #define FT_BPF_BACKGROUND_SUFFIX 16
 
 enum ft_bpf_event_kind {

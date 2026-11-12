@@ -5,7 +5,7 @@
 
 #include <stdio.h>
 
-#define FT_CONFIG_MAX_PATTERNS 32
+#define FT_CONFIG_MAX_PATTERNS 64
 #define FT_CONFIG_MAX_WARNINGS 16
 
 /* Never copied: agent points into the structure itself. */

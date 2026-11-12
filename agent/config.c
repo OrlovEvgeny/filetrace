@@ -17,8 +17,8 @@ const char *ft_config_default_path(void)
 }
 
 /* Files that programs read on their way to a connection: trust stores, resolver and account
- * databases, time zones, and the bundles and compiled modules that libraries load wherever
- * they are installed. */
+ * databases, time zones, message catalogs, and the bundles, modules and shared libraries that
+ * interpreters and libraries load wherever they are installed. */
 static const char *const default_background_paths[] = {
     "/etc/ssl/certs/*",
     "/etc/ssl/cert.pem",
@@ -26,6 +26,12 @@ static const char *const default_background_paths[] = {
     "/etc/pki/ca-trust/extracted/*",
     "/etc/ca-certificates/extracted/*",
     "/usr/share/ca-certificates/*",
+    "/usr/local/share/ca-certificates/*",
+    "/etc/pki/ca-trust/source/*",
+    "/usr/share/pki/ca-trust-source/*",
+    "/etc/pki/trust/*",
+    "/usr/share/pki/trust/*",
+    "/etc/ca-certificates/trust-source/*",
     "/etc/ssl/openssl.cnf",
     "/etc/pki/tls/openssl.cnf",
     "/usr/lib/ssl/openssl.cnf",
@@ -46,7 +52,17 @@ static const char *const default_background_paths[] = {
     "*.py",
     "*.rb",
     "*.js",
+    "*.mjs",
+    "*.cjs",
+    "*.node",
     "*.jar",
+    "*.class",
+    "*.pm",
+    "*.pl",
+    "*.php",
+    "*.so",
+    "*.so.*",
+    "*.mo",
 };
 
 static_assert(FT_ARRAY_LEN(default_background_paths) <= FT_CONFIG_MAX_PATTERNS);
