@@ -1056,21 +1056,15 @@ static void event_line(struct ft_canvas *c, int x, int y, int width, const char 
 void ft_top_draw_overlay(struct ft_top_draw *d, struct ft_rect r)
 {
     const struct ft_top_text *t = &d->ui->overlay_text;
-    int visible = r.h - 1;
+    size_t visible = r.h > 1 ? (size_t)(r.h - 1) : 0;
     char position[64] = "";
 
     if (r.w < 4 || r.h < 1)
         return;
     struct ft_rect clip = ft_canvas_clip(d->canvas, r);
-    size_t first = t->scroll;
-    size_t last_start = t->count > (size_t)(visible > 0 ? visible : 0)
-                            ? t->count - (size_t)(visible > 0 ? visible : 0)
-                            : 0;
-    if (first > last_start)
-        first = last_start;
-    size_t shown = visible > 0 ? t->count - first : 0;
-    if (shown > (size_t)(visible > 0 ? visible : 0))
-        shown = (size_t)visible;
+    size_t last_first = t->count > visible ? t->count - visible : 0;
+    size_t first = t->scroll < last_first ? t->scroll : last_first;
+    size_t shown = t->count - first < visible ? t->count - first : visible;
     if (t->count)
         snprintf(position, sizeof(position), "lines %zu–%zu of %zu   Esc close", first + 1,
                  first + shown, t->count);
@@ -1079,7 +1073,7 @@ void ft_top_draw_overlay(struct ft_top_draw *d, struct ft_rect r)
     title_bar(d, (struct ft_rect){r.x, r.y, r.w, 1}, t->title, "", "", position);
     close_hit(d, r);
 
-    if (t->count == 0 && visible > 0)
+    if (t->count == 0)
         ft_canvas_text(d->canvas, r.x + 1, r.y + 1, r.w - 2, dim(), "Nothing to show.");
     for (size_t i = 0; i < shown; i++) {
         const char *line = t->lines[first + i];
