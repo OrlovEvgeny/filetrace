@@ -263,7 +263,8 @@ static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
     if (!t)
         return false;
     tcp_settle_tx(map, (struct sock *)sk, t, now);
-    return t->claim_kind != 0;
+    /* A send that returned leaves its claim; one still waiting for room is being taken. */
+    return t->claim_kind && FT_READ((struct sock *)sk, sk_write_pending) > 0;
 }
 
 /* Returns whether the receiver has consumed anything since the socket was last looked at. */
