@@ -6,11 +6,14 @@
 #define FT_MISSING_BACKEND                                                                         \
     "collection on macOS needs an Endpoint Security system extension, "                            \
     "which this build does not include"
+#define FT_SYSTEM "macOS"
 #elif defined(__FreeBSD__)
 #define FT_MISSING_BACKEND                                                                         \
     "collection on FreeBSD needs a DTrace backend, which this build does not include"
+#define FT_SYSTEM "FreeBSD"
 #else
 #define FT_MISSING_BACKEND "this build has no collection backend for this operating system"
+#define FT_SYSTEM "this system"
 #endif
 
 static void diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *out)
@@ -31,7 +34,9 @@ static struct ft_backend *open_backend(const struct ft_backend_config *cfg,
 {
     (void)cfg;
     (void)sink;
-    ft_error_set(err, FT_EXIT_UNSUPPORTED, "Monitoring is unavailable: " FT_MISSING_BACKEND ".");
+    ft_error_set(err, FT_EXIT_UNSUPPORTED,
+                 "Nothing can be collected on " FT_SYSTEM ": filetrace reads the Linux kernel. "
+                 "Run it on a Linux host, kernel 6.1 or later.");
     return nullptr;
 }
 

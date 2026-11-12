@@ -85,6 +85,12 @@ says "top files takes --limit" 4 "" top files --limit 1
 says "files takes --script" 4 "" files --script 'pool:*'
 says "processes takes --script" 4 "" processes --script=/srv/app/export.py
 says "events takes --script" 4 "" events --script 'module:*'
+# Without an agent, top collects by itself where the kernel allows it.
+if [ "$(uname -s)" = Darwin ]; then
+    says "top says what to do on macOS" 5 \
+        "Nothing can be collected on macOS: filetrace reads the Linux kernel. Run it on a Linux host, kernel 6.1 or later." \
+        top --once
+fi
 
 printf '%d checks, %d failed\n' "$checks" "$failures"
 [ "$failures" -eq 0 ]
