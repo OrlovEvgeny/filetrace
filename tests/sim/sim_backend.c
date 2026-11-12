@@ -10,7 +10,9 @@ constexpr uint64_t STEP_NS = 50 * FT_NS_PER_MS;
 constexpr uint64_t FLUSH_NS = 250 * FT_NS_PER_MS;
 constexpr uint64_t MAX_LAG_NS = 5 * FT_NS_PER_SEC;
 constexpr uint64_t HISTORY_STEPS = 300;
-constexpr uint64_t HISTORY_STEP_MAX_NS = 60 * FT_NS_PER_SEC;
+constexpr uint64_t HISTORY_STEP_MAX_NS = 30 * FT_NS_PER_SEC;
+/* The last part of the history is simulated as finely as the present, which rates are read from. */
+constexpr uint64_t HISTORY_FINE_NS = 10 * FT_NS_PER_SEC;
 /* Left between the start of the monotonic clock and the first simulated event. */
 constexpr uint64_t HISTORY_HEADROOM_NS = 10 * FT_NS_PER_SEC;
 constexpr uint64_t QUEUED_EVENT_BYTES = 112;
@@ -91,6 +93,26 @@ static void catch_up(struct ft_backend *b)
     }
 }
 
+/* Simulates the time up to the start of the fine part in a few hundred steps. */
+static void make_history(struct ft_backend *b, uint64_t until_ns)
+{
+    uint64_t from = ft_sim_engine_now(b->engine);
+
+    if (until_ns < from + HISTORY_FINE_NS + STEP_NS)
+        return;
+
+    uint64_t span = until_ns - HISTORY_FINE_NS - from;
+    uint64_t step = span / HISTORY_STEPS;
+    if (step < STEP_NS)
+        step = STEP_NS;
+    if (step > HISTORY_STEP_MAX_NS)
+        step = HISTORY_STEP_MAX_NS;
+    uint64_t steps = (span + step - 1) / step;
+    step = span / steps;
+    for (uint64_t i = 0; i < steps; i++)
+        ft_sim_engine_run(b->engine, ft_sim_engine_now(b->engine) + step, step);
+}
+
 static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
                                        const struct ft_sink *sink, struct ft_error *err)
 {
@@ -127,15 +149,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         return nullptr;
     }
 
-    if (history) {
-        uint64_t step = history / HISTORY_STEPS;
-        if (step < STEP_NS)
-            step = STEP_NS;
-        if (step > HISTORY_STEP_MAX_NS)
-            step = HISTORY_STEP_MAX_NS;
-        while (ft_sim_engine_now(b->engine) + step <= now)
-            ft_sim_engine_run(b->engine, ft_sim_engine_now(b->engine) + step, step);
-    }
+    make_history(b, now);
     catch_up(b);
     b->queued_seen = ft_sim_engine_queued_events(b->engine);
     return b;
