@@ -473,6 +473,11 @@ static void process_lifecycle(void)
     CHECK_U64(f.rows.count, 1);
     CHECK_U64(f.rows.processes[0].pid, PID_A);
 
+    /* A parent that only forks is listed on request, for drawing the tree above its children. */
+    q.flags = FT_QF_INCLUDE_IDLE;
+    run_query(&f, &q);
+    CHECK_U64(f.rows.count, 3);
+
     /* The same PID with a different start time is a different process. */
     emit_exec(&f, PID_B, 1, "curl", 9000);
     uint32_t reused = PID_B;

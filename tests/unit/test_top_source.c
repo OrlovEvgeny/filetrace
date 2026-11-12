@@ -452,6 +452,7 @@ static void check_rows_and_order(void)
     CHECK_U64(processes.limit, 0);
     CHECK_U64(processes.min_bytes, 0);
     CHECK(!(processes.flags & FT_QF_INCLUDE_CHILDREN));
+    CHECK(processes.flags & FT_QF_INCLUDE_IDLE);
     CHECK_U64(processes.pid, 77);
     CHECK_U64(processes.method, FT_METHOD_ANY);
 

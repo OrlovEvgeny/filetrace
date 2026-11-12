@@ -271,7 +271,8 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
 
     for (struct ft_process *p = ft_table_first(st->processes); p;
          p = ft_table_next(st->processes, p)) {
-        if (p->q_tx == 0 && p->q_rx == 0 && p->q_connections == 0)
+        bool idle = p->q_tx == 0 && p->q_rx == 0 && p->q_connections == 0;
+        if (idle && !(q->flags & FT_QF_INCLUDE_IDLE))
             continue;
         if (q->pid && q->pid != p->pid)
             continue;

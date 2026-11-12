@@ -221,6 +221,7 @@ static int fetch_live(struct ft_top_source *src, struct ft_error *err)
 
     /* No limit, no minimum and no FT_QF_INCLUDE_CHILDREN: a row holds one process's own figures. */
     ft_query_init(q, FT_Q_PROCESSES);
+    q->flags |= FT_QF_INCLUDE_IDLE;
     scope_process(q, scope);
     return ask(src, &(struct sink){.rows = &f->processes}, nullptr, err);
 }

@@ -52,8 +52,9 @@ enum ft_query_flag : uint32_t {
     FT_QF_DELETED = 1u << 3,         /* transfers: only files with no remaining links */
     FT_QF_INCLUDE_CHILDREN = 1u << 4,
     FT_QF_HAS_UID = 1u << 5,
-    FT_QF_PATH_REGEX = 1u << 6, /* path is a POSIX extended regular expression */
-    FT_QF_FOLLOW = 1u << 7,     /* events: keep sending them as they are recorded */
+    FT_QF_PATH_REGEX = 1u << 6,   /* path is a POSIX extended regular expression */
+    FT_QF_FOLLOW = 1u << 7,       /* events: keep sending them as they are recorded */
+    FT_QF_INCLUDE_IDLE = 1u << 8, /* processes: also those that never used the network */
 };
 
 enum ft_sort : uint16_t {
