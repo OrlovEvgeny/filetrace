@@ -587,26 +587,23 @@ int ft_cmd_top_report(const struct ft_cli *cli, struct ft_args *a)
         TOP_FILES,
         TOP_DESTINATIONS,
         TOP_CONNECTIONS
-    } what = TOP_PROCESSES;
-    const char *subject = ft_args_peek(a);
+    } what;
+    const char *subject = ft_args_take(a);
     struct ft_query_args qa;
 
-    if (subject && subject[0] != '-') {
-        if (strcmp(subject, "processes") == 0)
-            what = TOP_PROCESSES;
-        else if (strcmp(subject, "files") == 0)
-            what = TOP_FILES;
-        else if (strcmp(subject, "destinations") == 0)
-            what = TOP_DESTINATIONS;
-        else if (strcmp(subject, "connections") == 0)
-            what = TOP_CONNECTIONS;
-        else
-            return ft_usage_error("top",
-                                  "unknown subject '%s' (expected processes, files, "
-                                  "destinations or connections)",
-                                  subject);
-        ft_args_take(a);
-    }
+    if (strcmp(subject, "processes") == 0)
+        what = TOP_PROCESSES;
+    else if (strcmp(subject, "files") == 0)
+        what = TOP_FILES;
+    else if (strcmp(subject, "destinations") == 0)
+        what = TOP_DESTINATIONS;
+    else if (strcmp(subject, "connections") == 0)
+        what = TOP_CONNECTIONS;
+    else
+        return ft_usage_error("top",
+                              "unknown subject '%s' (expected processes, files, "
+                              "destinations or connections)",
+                              subject);
 
     switch (what) {
     case TOP_PROCESSES:
