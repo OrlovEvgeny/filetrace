@@ -186,12 +186,14 @@ enum ft_bpf_listed {
 };
 
 /*
- * A listed pattern that names files wherever they are, by name ("*" "/" name) or by ending
- * ("*" ".ext"): the kernel can tell such a file the first time a thread reads it.
+ * A listed pattern that names files wherever they are, by name ("*" "/" name), by ending
+ * ("*" ".ext") or by a part of the name ("*" ".so." "*"): the kernel can tell such a file the
+ * first time a thread reads it.
  */
 struct ft_bpf_background_suffix {
     __u32 len;
-    __u32 kind; /* enum ft_bpf_listed */
+    __u16 kind;   /* enum ft_bpf_listed */
+    __u16 inside; /* the text may stand anywhere in the name, not only at its end */
     char text[FT_BPF_BACKGROUND_SUFFIX];
 };
 

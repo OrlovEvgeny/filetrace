@@ -112,24 +112,49 @@ static bool plain(const char *text)
 }
 
 /*
+ * The length of the text after the leading "*" of a pattern that names a file by the end of its
+ * name ("*.ext") or by a part of it ("*text*", then *inside), or 0.
+ */
+static size_t name_part(const char *p, bool *inside)
+{
+    size_t n = strlen(p);
+    *inside = n > 2 && p[0] == '*' && p[n - 1] == '*';
+    size_t len = *inside ? n - 2 : n - 1;
+    if (p[0] != '*' || len == 0 || (!*inside && p[1] != '.'))
+        return 0;
+    for (size_t i = 1; i <= len; i++) {
+        if (strchr("*?/", p[i]))
+            return 0;
+    }
+    return len;
+}
+
+/*
  * Whether the kernel names the file by the pattern from the file's name alone; counts suffixes in
  * the order ft_linux_background_names loads them.
  */
-static bool kernel_named(const char *p, size_t name_len, uint32_t *suffixes)
+static bool kernel_named(const char *p, const char *name, uint32_t *suffixes)
 {
     if (strncmp(p, "*/", 2) == 0 && plain(p + 2))
         return strlen(p + 2) < FT_BPF_BACKGROUND_NAME;
-    if (p[0] != '*' || p[1] != '.' || !plain(p + 1) || strlen(p + 1) > FT_BPF_BACKGROUND_SUFFIX)
+    bool inside;
+    size_t part = name_part(p, &inside);
+    if (!part || part > FT_BPF_BACKGROUND_SUFFIX)
         return false;
-    return (*suffixes)++ < FT_BPF_BACKGROUND_SUFFIXES && name_len < FT_BPF_BACKGROUND_NAME;
+    if ((*suffixes)++ >= FT_BPF_BACKGROUND_SUFFIXES || strlen(name) >= FT_BPF_BACKGROUND_NAME)
+        return false;
+    /* The part the path matched may stand in a directory's name, which the kernel does not see. */
+    char text[FT_BPF_BACKGROUND_SUFFIX + 1] = {0};
+    memcpy(text, p + 1, part);
+    return !inside || strstr(name, text);
 }
 
 /* -1 when no pattern names the path, 0 when the first that does is the kernel's, 1 otherwise. */
-static int first_match(const char *const *patterns, size_t count, const char *path, size_t name_len,
-                       uint32_t *suffixes)
+static int first_match(const char *const *patterns, size_t count, const char *path,
+                       const char *name, uint32_t *suffixes)
 {
     for (size_t i = 0; i < count; i++) {
-        bool named = kernel_named(patterns[i], name_len, suffixes);
+        bool named = kernel_named(patterns[i], name, suffixes);
         if (ft_glob_match(patterns[i], path))
             return named ? 0 : 1;
     }
@@ -151,13 +176,13 @@ void ft_linux_background_learn(int map_fd, const struct ft_backend_config *cfg, 
                                uint32_t dev, const char *path)
 {
     const char *slash = strrchr(path, '/');
-    size_t name_len = strlen(slash ? slash + 1 : path);
+    const char *name = slash ? slash + 1 : path;
     uint32_t suffixes = 0;
     uint8_t value = FT_BPF_BACKGROUND_LEARNED;
     int match =
-        first_match(cfg->background_paths, cfg->background_path_count, path, name_len, &suffixes);
+        first_match(cfg->background_paths, cfg->background_path_count, path, name, &suffixes);
     if (match < 0) {
-        match = first_match(cfg->strict_paths, cfg->strict_path_count, path, name_len, &suffixes);
+        match = first_match(cfg->strict_paths, cfg->strict_path_count, path, name, &suffixes);
         value |= FT_BPF_BACKGROUND_STRICT;
     }
     /* What the kernel matches by name it learns into background_named, which makes room. */
@@ -233,10 +258,10 @@ static void load_names(int names_fd, int suffixes_fd, const char *const *pattern
     for (size_t i = 0; i < count; i++) {
         const char *p = patterns[i];
         bool named = strncmp(p, "*/", 2) == 0 && plain(p + 2);
-        bool suffixed = p[0] == '*' && p[1] == '.' && plain(p + 1);
+        bool inside;
+        size_t part = name_part(p, &inside);
         if ((named && strlen(p + 2) >= FT_BPF_BACKGROUND_NAME) ||
-            (suffixed &&
-             (strlen(p + 1) > FT_BPF_BACKGROUND_SUFFIX || *suffixes >= FT_BPF_BACKGROUND_SUFFIXES)))
+            (part && (part > FT_BPF_BACKGROUND_SUFFIX || *suffixes >= FT_BPF_BACKGROUND_SUFFIXES)))
             ft_log(
                 FT_LOG_WARN,
                 "[correlation] \"%s\" names a file from its second read only: the kernel matches "
@@ -248,10 +273,11 @@ static void load_names(int names_fd, int suffixes_fd, const char *const *pattern
             memcpy(name, p + 2, strlen(p + 2));
             if (bpf_map_update_elem(names_fd, name, &kind, BPF_NOEXIST) == 0)
                 (*held)++;
-        } else if (suffixed && strlen(p + 1) <= FT_BPF_BACKGROUND_SUFFIX &&
+        } else if (part && part <= FT_BPF_BACKGROUND_SUFFIX &&
                    *suffixes < FT_BPF_BACKGROUND_SUFFIXES) {
-            struct ft_bpf_background_suffix suffix = {.len = (uint32_t)strlen(p + 1), .kind = kind};
-            memcpy(suffix.text, p + 1, suffix.len);
+            struct ft_bpf_background_suffix suffix = {
+                .len = (uint32_t)part, .kind = kind, .inside = inside};
+            memcpy(suffix.text, p + 1, part);
             if (bpf_map_update_elem(suffixes_fd, suffixes, &suffix, BPF_ANY) == 0) {
                 (*suffixes)++;
                 (*held)++;

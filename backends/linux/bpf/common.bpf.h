@@ -497,6 +497,34 @@ struct suffix_match {
     __u8 kind;
 };
 
+static __always_inline bool text_at(const char *name, __u32 at, const char *text, __u32 len)
+{
+    for (__u32 i = 0; i < FT_BPF_BACKGROUND_SUFFIX; i++) {
+        if (i >= len)
+            return true;
+        if (name[(at + i) & (FT_BPF_BACKGROUND_NAME - 1)] != text[i])
+            return false;
+    }
+    return true;
+}
+
+struct part_scan {
+    const char *name;
+    __u32 last;
+    __u32 len;
+    char text[FT_BPF_BACKGROUND_SUFFIX];
+    bool found;
+};
+
+static long part_step(__u32 at, void *arg)
+{
+    struct part_scan *p = arg;
+    if (at > p->last)
+        return 1;
+    p->found = text_at(p->name, at, p->text, p->len);
+    return p->found;
+}
+
 static long suffix_step(__u32 index, void *arg)
 {
     struct suffix_match *m = arg;
@@ -505,17 +533,15 @@ static long suffix_step(__u32 index, void *arg)
         return 1;
     if (s->len > m->len || s->len > FT_BPF_BACKGROUND_SUFFIX)
         return 0;
-    __u32 from = m->len - s->len;
-    for (__u32 i = 0; i < FT_BPF_BACKGROUND_SUFFIX; i++) {
-        if (i >= s->len) {
-            m->kind = (__u8)s->kind;
-            return 1;
-        }
-        if (m->name[(from + i) & (FT_BPF_BACKGROUND_NAME - 1)] != s->text[i])
-            return 0;
-    }
-    m->kind = (__u8)s->kind;
-    return 1;
+    struct part_scan p = {.name = m->name, .last = m->len - s->len, .len = s->len};
+    __builtin_memcpy(p.text, s->text, sizeof(p.text));
+    if (s->inside)
+        bpf_loop(FT_BPF_BACKGROUND_NAME, part_step, &p, 0);
+    else
+        p.found = text_at(p.name, p.last, p.text, p.len);
+    if (p.found)
+        m->kind = (__u8)s->kind;
+    return p.found;
 }
 
 /*
