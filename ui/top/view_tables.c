@@ -1055,6 +1055,8 @@ static void draw_empty(struct ft_top_draw *d, enum ft_top_mode mode, struct ft_r
     const char *search = ft_top_search_of(d->model, mode);
     char text[640];
 
+    if (d->ui->starting)
+        return;
     if (filter && filter[0])
         snprintf(text, sizeof(text), "No %s match the filter. Esc clears it.", nouns[mode]);
     else if (search && search[0])

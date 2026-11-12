@@ -377,6 +377,7 @@ void ft_top_draw_leaders_bar(struct ft_top_draw *d, struct ft_rect r, int x)
         {.gap = 3, .labels = true, .short_by = false},
         {.gap = 3, .labels = true, .short_by = true},
         {.gap = 2, .labels = false, .short_by = true},
+        {.gap = 1, .labels = false, .short_by = true},
     };
     struct span_text t;
     int right = r.x + r.w;
