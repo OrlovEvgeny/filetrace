@@ -114,6 +114,7 @@ struct thread_state {
     struct file_ref file;
     __u32 gen;
     __u32 forgotten; /* value of forgotten_files when the instance was resolved */
+    __u64 inode;     /* the in-memory inode the thread read the file through */
     __u64 pending;
     __u64 unreported;
     __u64 last_ns;
@@ -145,11 +146,21 @@ struct {
     __type(value, struct thread_state);
 } threads SEC(".maps");
 
+/*
+ * A file's instance, and the in-memory inode it was given to: 0 once that inode was evicted with
+ * the file still linked, for the inode that reads it back to take it up.
+ */
+struct known_file {
+    __u32 instance;
+    __u32 pad;
+    __u64 inode;
+};
+
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 16384);
     __type(key, struct file_key);
-    __type(value, __u32);
+    __type(value, struct known_file);
 } known_files SEC(".maps");
 
 /*
@@ -1528,26 +1539,75 @@ int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct li
     return 0;
 }
 
-/* Returns the instance of the file, reporting its path the first time; 0 if that failed. */
+/*
+ * Returns the instance of the file, reporting its path the first time; 0 if that failed. Another
+ * live inode with the same identity is a deleted file whose inode number went to this new one.
+ */
 static __always_inline __u32 file_instance(struct file *file, struct inode *inode,
                                            const struct file_key *fk, __u64 fs_magic)
 {
-    __u32 *known = bpf_map_lookup_elem(&known_files, fk);
-    if (known)
-        return *known;
+    struct known_file *known = bpf_map_lookup_elem(&known_files, fk);
+    if (known && known->inode == (__u64)inode)
+        return known->instance;
+    if (known && !known->inode) {
+        known->inode = (__u64)inode;
+        return known->instance;
+    }
 
-    __u32 instance = __sync_fetch_and_add(&last_file_instance, 1) + 1;
-    if (emit_file(file, inode, fk, instance, fs_magic))
+    struct known_file fresh = {
+        .instance = __sync_fetch_and_add(&last_file_instance, 1) + 1,
+        .inode = (__u64)inode,
+    };
+    if (emit_file(file, inode, fk, fresh.instance, fs_magic))
         return 0;
-    if (bpf_map_update_elem(&known_files, fk, &instance, BPF_NOEXIST) == -EEXIST) {
+    if (known) {
+        bpf_map_update_elem(&known_files, fk, &fresh, BPF_ANY);
+        __sync_fetch_and_add(&forgotten_files, 1);
+        return fresh.instance;
+    }
+    if (bpf_map_update_elem(&known_files, fk, &fresh, BPF_NOEXIST) == -EEXIST) {
         known = bpf_map_lookup_elem(&known_files, fk);
         if (known)
-            return *known;
+            return known->instance;
     }
-    return instance;
+    return fresh.instance;
 }
 
-/* Points the thread at the file it is about to read, starting over if that is another file. */
+/*
+ * Lets go of the thread's file when the file about to be read carries the same identity through
+ * another inode, or after a file was deleted, and is not known as the same file: a deleted
+ * file's inode number went to a new file. Before the read is classified, which would otherwise
+ * take the kind of the file the thread held.
+ */
+static __always_inline void thread_file_reused(struct thread_state *ts, struct inode *inode,
+                                               const struct file_key *fk, __u64 now)
+{
+    if (ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen)
+        return;
+    if (ts->inode == (__u64)inode && ts->forgotten == forgotten_files)
+        return;
+    struct known_file *known = bpf_map_lookup_elem(&known_files, fk);
+    if (known && known->instance == ts->file.instance &&
+        (known->inode == (__u64)inode || !known->inode))
+        return;
+    carry_episode_end(ts, now, CARRY_NEXT);
+    thread_reset(ts);
+#pragma unroll
+    for (__u32 i = 0; i < CARRY_CANDIDATES; i++) {
+        if (ts->cands[i].size && same_file(&ts->cands[i].file, &ts->file))
+            ts->cands[i].size = 0;
+    }
+    ts->file.ino = 0;
+    ts->file.dev = 0;
+    ts->file.instance = 0;
+    ts->gen = 0;
+    ts->file_strict = 0;
+}
+
+/*
+ * Points the thread at the file it is about to read, starting over if that is another file.
+ * thread_file_reused comes first.
+ */
 static __always_inline void thread_set_file(struct thread_state *ts, struct file *file,
                                             struct inode *inode, const struct file_key *fk,
                                             __u64 fs_magic)
@@ -1561,8 +1621,8 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
         ts->gen = fk->gen;
         thread_reset(ts);
     }
-    /* A deleted file's inode number may have been given to this one since. */
-    if (ts->forgotten != forgotten_files) {
+    if (ts->inode != (__u64)inode || ts->forgotten != forgotten_files) {
+        ts->inode = (__u64)inode;
         ts->forgotten = forgotten_files;
         ts->file.instance = 0;
     }
@@ -1570,10 +1630,13 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
         ts->file.instance = file_instance(file, inode, fk, fs_magic);
 }
 
-/* A deleted file is gone for good once its inode is destroyed. */
+/*
+ * A deleted file is gone for good once its inode is destroyed; a linked one keeps its instance
+ * for the inode that reads it back.
+ */
 static __always_inline void forget_file(struct inode *inode)
 {
-    if ((FT_READ(inode, i_mode) & S_IFMT) != S_IFREG || FT_READ(inode, i_nlink))
+    if ((FT_READ(inode, i_mode) & S_IFMT) != S_IFREG)
         return;
 
     struct super_block *sb = FT_READ(inode, i_sb);
@@ -1582,7 +1645,15 @@ static __always_inline void forget_file(struct inode *inode)
         .dev = FT_READ(sb, s_dev),
         .gen = FT_READ(inode, i_generation),
     };
-    if (!bpf_map_delete_elem(&known_files, &fk))
+    struct known_file *known = bpf_map_lookup_elem(&known_files, &fk);
+    /* The identity went to a newer inode, whose entry this is. */
+    bool own = known && (known->inode == (__u64)inode || !known->inode);
+    if (FT_READ(inode, i_nlink)) {
+        if (own)
+            known->inode = 0;
+        return;
+    }
+    if (own && !bpf_map_delete_elem(&known_files, &fk))
         __sync_fetch_and_add(&forgotten_files, 1);
 
     /* The inode number can be given to an unrelated file next. */

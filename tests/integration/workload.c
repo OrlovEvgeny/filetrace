@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <limits.h>
 #include <sched.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -1367,6 +1368,49 @@ static void scenario_stream_after(const char *kept, size_t kept_size, const char
 }
 
 /*
+ * readasks <path> <bytes> <first> <second> [reused|reusedsend]: reads the file whole, connects,
+ * and sends two requests from memory, hearing the answer to each, then closes. reused: first
+ * reads a 70000-byte file, deletes it and makes the file at once, so that it may take the
+ * deleted file's inode number, and reports whether it did; reads it after the correlation
+ * window. reusedsend: the same, with the file itself as the first request.
+ */
+static void scenario_read_asks(const char *path, size_t size, size_t first, size_t second,
+                               bool reused, bool send_file)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char *request = calloc(1, first > second ? first : second);
+    if (!request)
+        die("malloc");
+    ino_t deleted = 0;
+    if (reused) {
+        char before[PATH_MAX];
+        struct stat st;
+        snprintf(before, sizeof(before), "%s.deleted", path);
+        free(read_whole_file(before, 70000));
+        if (stat(before, &st) != 0 || unlink(before) != 0)
+            die(before);
+        deleted = st.st_ino;
+        make_file(path, size);
+        if (stat(path, &st) != 0)
+            die(path);
+        printf("reused=%d\n", st.st_ino == deleted);
+        usleep(2600 * 1000);
+    }
+    char *contents = read_whole_file(path, size);
+    int sock = connect_sink(&sink);
+    send_all(sock, send_file ? contents : request, send_file ? size : first);
+    hear(sock);
+    send_all(sock, request, second);
+    hear(sock);
+    usleep(300 * 1000);
+    close(sock);
+    free(contents);
+    free(request);
+    report("readasks", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * metricfirst <path> <bytes>: over a connection that has heard from its peer, reads the file,
  * sends a datagram to a metrics daemon, then a response head and the file, and hears the answer.
  */
@@ -2503,6 +2547,10 @@ int main(int argc, char **argv)
         scenario_serve_strict(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "streamafter") == 0 && argc == 6)
         scenario_stream_after(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "readasks") == 0 && (argc == 6 || argc == 7))
+        scenario_read_asks(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]),
+                           argc == 7 && strncmp(argv[6], "reused", 6) == 0,
+                           argc == 7 && strcmp(argv[6], "reusedsend") == 0);
     else if (strcmp(name, "metricfirst") == 0 && argc == 4)
         scenario_metric_first(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "tail") == 0 && argc == 6)

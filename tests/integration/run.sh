@@ -688,6 +688,13 @@ slow_flight=$!
 cut_reply=$!
 "$workload" cutreply "$data/cut-other.cfg" 50000 40000 >/dev/null &
 cut_other=$!
+# A file made where a deleted file was is not taken for it: requests sent after reading the new
+# file are not the old one's, and the new file sent is reported under its own path.
+(
+    "$workload" readasks "$data/reused.py" 14000 5000 200 reused >"$work/reused.out"
+    "$workload" readasks "$data/reused-sent.py" 14000 0 200 reusedsend >"$work/reused-sent.out"
+) &
+reused=$!
 # Kprobes see a send as it starts: a send the peer is slow to take keeps its window open. Where
 # a send is seen as it returns, one that returns after the correlation window has passed since
 # the read is not associated with it.
@@ -721,8 +728,14 @@ expect "reply with another thread's bytes on the connection not reported" \
     "$(ft files --path "$data/token.txt" --format csv | rows)" 0
 expect "body long after a small file's read not reported" \
     "$(ft files --path "$data/client.conf" --format csv | rows)" 0
-wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply" "$cut_other" \
+wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply" "$cut_other" "$reused" \
     ${stall_send:+"$stall_send"}
+grep -q 'reused=1' "$work/reused.out" "$work/reused-sent.out" ||
+    echo "NOTE: this filesystem gave no new file the inode number of a deleted one"
+expect "requests after reading a file made where a deleted one was: not reported" \
+    "$(ft files --path "$data/reused.py" --format csv | rows)" 0
+expect "file made where a deleted one was, sent: bytes" \
+    "$(ft files --path "$data/reused-sent.py" --format csv | column transfer.bytes_sent)" 14000
 
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.

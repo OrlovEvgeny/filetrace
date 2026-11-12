@@ -146,12 +146,13 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
         .gen = BPF_CORE_READ(inode, i_generation),
     };
     struct task_struct *task = (void *)bpf_get_current_task();
+    __u64 now = bpf_ktime_get_boot_ns();
+    thread_file_reused(ts, inode, &fk, now);
     __u8 listed = listed_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
     if (listed == FT_BPF_LISTED_BACKGROUND) {
         ts->reading = 0;
         return 0;
     }
-    __u64 now = bpf_ktime_get_boot_ns();
     file_again(ts, &fk, now);
     thread_set_file(ts, file, inode, &fk, magic);
     ts->file_strict = listed == FT_BPF_LISTED_STRICT;

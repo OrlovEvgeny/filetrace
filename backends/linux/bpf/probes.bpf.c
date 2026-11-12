@@ -213,6 +213,7 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
 
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
     __u64 now = bpf_ktime_get_boot_ns();
+    thread_file_reused(ts, inode, &fk, now);
     __u8 listed = listed_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
     if (listed == FT_BPF_LISTED_BACKGROUND)
         return 0;
