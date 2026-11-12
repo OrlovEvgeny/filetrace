@@ -10,13 +10,26 @@
 #include <string.h>
 
 constexpr size_t MAX_DEPTH = 8;
+constexpr size_t PREFIX_MAX = 48;
+
+/* What a CSV line holds: the values of a row, the names of the columns, or nothing at all. */
+enum cells : uint8_t {
+    CELLS_VALUES,
+    CELLS_NAMES,
+    CELLS_BLANK,
+};
 
 struct writer {
     FILE *out;
+    bool csv;
     bool indent;
     size_t depth;
-    bool has[MAX_DEPTH]; /* the container at each depth holds an element */
-    char *clean;         /* a copy of the text being written, valid UTF-8 */
+    bool has[MAX_DEPTH]; /* JSON: the container at each depth holds an element */
+    enum cells cells;    /* CSV */
+    size_t columns;      /* CSV: written on this line */
+    char prefix[PREFIX_MAX];
+    size_t prefix_at[MAX_DEPTH];
+    char *clean; /* a copy of the text being written, valid UTF-8 */
     size_t clean_size;
 };
 
@@ -78,9 +91,56 @@ static const char *valid_utf8(struct writer *w, const char *s)
     return w->clean;
 }
 
-/* An absent value is null, never an empty string. */
+/* A column: nested members are named after their objects, "remote.address". */
+static void cell(struct writer *w, const char *name, const char *text)
+{
+    if (w->columns++ > 0)
+        fputc(',', w->out);
+    switch (w->cells) {
+    case CELLS_NAMES: {
+        char full[PREFIX_MAX + 48];
+
+        snprintf(full, sizeof(full), "%s%s", w->prefix, name);
+        ft_csv_field(w->out, full);
+        break;
+    }
+    case CELLS_VALUES:
+        if (text && text[0])
+            ft_csv_field(w->out, valid_utf8(w, text));
+        break;
+    case CELLS_BLANK:
+        break;
+    }
+}
+
+static void begin_object(struct writer *w, const char *name)
+{
+    if (!w->csv) {
+        open_container(w, name, '{');
+        return;
+    }
+    size_t at = strlen(w->prefix);
+
+    w->prefix_at[w->depth++] = at;
+    snprintf(w->prefix + at, sizeof(w->prefix) - at, "%s.", name);
+}
+
+static void end_object(struct writer *w)
+{
+    if (!w->csv) {
+        close_container(w, '}');
+        return;
+    }
+    w->prefix[w->prefix_at[--w->depth]] = '\0';
+}
+
+/* An absent value is null in JSON, never an empty string, and an empty cell in CSV. */
 static void put_text(struct writer *w, const char *name, const char *s)
 {
+    if (w->csv) {
+        cell(w, name, s);
+        return;
+    }
     element(w, name);
     if (s && s[0])
         ft_json_string(w->out, valid_utf8(w, s));
@@ -90,12 +150,23 @@ static void put_text(struct writer *w, const char *name, const char *s)
 
 static void put_uint(struct writer *w, const char *name, uint64_t value)
 {
+    if (w->csv) {
+        char text[24];
+
+        snprintf(text, sizeof(text), "%" PRIu64, value);
+        cell(w, name, text);
+        return;
+    }
     element(w, name);
     fprintf(w->out, "%" PRIu64, value);
 }
 
 static void put_null(struct writer *w, const char *name)
 {
+    if (w->csv) {
+        cell(w, name, nullptr);
+        return;
+    }
     element(w, name);
     fputs("null", w->out);
 }
@@ -110,6 +181,10 @@ static void put_known(struct writer *w, const char *name, uint64_t value, bool k
 
 static void put_bool(struct writer *w, const char *name, bool value)
 {
+    if (w->csv) {
+        cell(w, name, value ? "true" : "false");
+        return;
+    }
     element(w, name);
     fputs(value ? "true" : "false", w->out);
 }
@@ -126,8 +201,13 @@ static void put_number(struct writer *w, const char *name, double value)
         len--;
     if (text[len - 1] == '.')
         len--;
+    text[len] = '\0';
+    if (w->csv) {
+        cell(w, name, text);
+        return;
+    }
     element(w, name);
-    fprintf(w->out, "%.*s", len, text);
+    fputs(text, w->out);
 }
 
 static void put_time(struct writer *w, const char *name, uint64_t wall_ns)
@@ -139,13 +219,56 @@ static void put_time(struct writer *w, const char *name, uint64_t wall_ns)
         return;
     }
     ft_format_time_rfc3339(wall_ns, text, sizeof(text));
+    if (w->csv) {
+        cell(w, name, text);
+        return;
+    }
     element(w, name);
     ft_json_string(w->out, text);
+}
+
+/* Items for one CSV cell, joined by commas. */
+struct list {
+    char *text;
+    size_t len;
+    size_t size;
+};
+
+static void list_add(struct list *l, const char *item)
+{
+    size_t add = strlen(item) + 1;
+
+    if (l->len + add + 1 > l->size) {
+        size_t size = (l->len + add + 1) * 2;
+        char *grown = realloc(l->text, size);
+        if (!grown)
+            return;
+        l->text = grown;
+        l->size = size;
+    }
+    l->len += (size_t)snprintf(l->text + l->len, l->size - l->len, "%s%s", l->len ? "," : "", item);
+}
+
+static void put_list(struct writer *w, const char *name, const struct list *l)
+{
+    cell(w, name, l->text);
 }
 
 /* A list of numbers on one line. */
 static void put_uints(struct writer *w, const char *name, const uint64_t *values, size_t count)
 {
+    if (w->csv) {
+        struct list l = {0};
+        char text[24];
+
+        for (size_t i = 0; i < count; i++) {
+            snprintf(text, sizeof(text), "%" PRIu64, values[i]);
+            list_add(&l, text);
+        }
+        put_list(w, name, &l);
+        free(l.text);
+        return;
+    }
     element(w, name);
     fputc('[', w->out);
     for (size_t i = 0; i < count; i++)
@@ -240,6 +363,7 @@ static void write_view(struct writer *w, const struct ft_top_model *m, enum ft_t
 }
 
 struct view {
+    enum ft_top_mode mode;
     bool grouped;
     bool tree;
     enum ft_leader_key key; /* what a row of Leaders stands for */
@@ -248,6 +372,7 @@ struct view {
 static struct view view_of(const struct ft_top_model *m, enum ft_top_mode mode)
 {
     return (struct view){
+        .mode = mode,
         .grouped = grouping(m, mode) != FT_TOP_GROUP_NONE,
         .tree = in_tree(m, mode),
         .key = mode == FT_TOP_LEADERS ? ft_top_leaders(m)->key : FT_LEADER_FILE,
@@ -269,7 +394,7 @@ static void put_remote(struct writer *w, const struct ft_top_transfer *t)
     address[0] = '\0';
     if (known)
         ft_addr_format(&t->remote, address, sizeof(address));
-    open_container(w, "remote", '{');
+    begin_object(w, "remote");
     put_text(w, "address", address);
     put_known(w, "port", t->remote.port, t->remote.port != 0);
     if (known)
@@ -277,7 +402,7 @@ static void put_remote(struct writer *w, const struct ft_top_transfer *t)
     else
         put_null(w, "public");
     put_text(w, "host", d && d->host_state == FT_TOP_HOST_NAMED ? d->host : nullptr);
-    close_container(w, '}');
+    end_object(w);
 }
 
 static void transfer_members(struct writer *w, const struct ft_top_transfer *t)
@@ -332,15 +457,32 @@ static void process_members(struct writer *w, const struct ft_top_process *p)
     put_text(w, "method", method_text(p->method));
 }
 
-static void fold_members(struct writer *w, const struct ft_top_fold *f)
+static void put_pids(struct writer *w, const char *name, const struct ft_top_fold *f)
 {
-    put_text(w, "process", f->title);
-    put_uint(w, "count", f->count);
-    element(w, "pids");
+    struct list l = {0};
+    char text[16];
+
+    if (w->csv) {
+        for (size_t i = 0; i < f->count; i++) {
+            snprintf(text, sizeof(text), "%" PRIu32, f->members[i]->pid);
+            list_add(&l, text);
+        }
+        put_list(w, name, &l);
+        free(l.text);
+        return;
+    }
+    element(w, name);
     fputc('[', w->out);
     for (size_t i = 0; i < f->count; i++)
         fprintf(w->out, "%s%" PRIu32, i ? (w->indent ? ", " : ",") : "", f->members[i]->pid);
     fputc(']', w->out);
+}
+
+static void fold_members(struct writer *w, const struct ft_top_fold *f)
+{
+    put_text(w, "process", f->title);
+    put_uint(w, "count", f->count);
+    put_pids(w, "pids", f);
     put_uint(w, "rate", f->rate);
     put_uint(w, "total", f->total);
     put_uint(w, "files", f->files);
@@ -364,17 +506,20 @@ static void destination_members(struct writer *w, const struct ft_top_destinatio
     put_uints(w, "trend", d->trend, FT_TOP_TREND);
 }
 
-static void file_members(struct writer *w, const struct ft_top_file *f)
+/* An array of objects in JSON; in CSV just the names, in one cell. */
+static void put_file_senders(struct writer *w, const struct ft_top_file *f)
 {
-    bool file_known = f->dev != 0 || f->ino != 0;
+    struct list names = {0};
 
-    put_text(w, "file", f->path_known ? f->path : nullptr);
-    put_known(w, "device", f->dev, file_known);
-    put_known(w, "inode", f->ino, file_known);
-    put_known(w, "size", f->size, f->size != 0);
-    put_uint(w, "rate", f->rate);
-    put_uint(w, "active", f->active);
-    put_uint(w, "destinations", f->destinations);
+    if (w->csv) {
+        for (size_t i = 0; i < f->nsenders; i++) {
+            const struct ft_top_process *p = f->by_sender[i].process;
+            list_add(&names, p ? p->name : "");
+        }
+        put_list(w, "senders", &names);
+        free(names.text);
+        return;
+    }
     open_container(w, "senders", '[');
     for (size_t i = 0; i < f->nsenders; i++) {
         const struct ft_top_sender *s = &f->by_sender[i];
@@ -386,32 +531,109 @@ static void file_members(struct writer *w, const struct ft_top_file *f)
         close_container(w, '}');
     }
     close_container(w, ']');
+}
+
+static void file_members(struct writer *w, const struct ft_top_file *f)
+{
+    bool file_known = f->dev != 0 || f->ino != 0;
+
+    put_text(w, "file", f->path_known ? f->path : nullptr);
+    put_known(w, "device", f->dev, file_known);
+    put_known(w, "inode", f->ino, file_known);
+    put_known(w, "size", f->size, f->size != 0);
+    put_uint(w, "rate", f->rate);
+    put_uint(w, "active", f->active);
+    put_uint(w, "destinations", f->destinations);
+    put_file_senders(w, f);
     put_text(w, "method", method_text(f->method));
     put_number(w, "public_share", f->public_share);
     put_bool(w, "deleted", f->deleted);
 }
 
-/* A tree row carries its depth and is a process, a fold of siblings or a transfer. */
-static void tree_row(struct writer *w, const struct ft_top_row *r)
+/* What a row is read from; the column names and the cells a row leaves blank take empty ones. */
+struct entities {
+    const struct ft_top_transfer *transfer;
+    const struct ft_top_process *process;
+    const struct ft_top_destination *destination;
+    const struct ft_top_file *file;
+    const struct ft_top_leader *leader;
+    const struct ft_top_fold *fold;
+};
+
+static struct entities entities_of(const struct ft_top_row *r)
 {
-    put_uint(w, "depth", r->depth);
+    static const struct ft_top_transfer no_transfer;
+    static const struct ft_top_process no_process;
+    static const struct ft_top_destination no_destination;
+    static const struct ft_top_file no_file;
+    static const struct ft_row_leader no_row;
+    static const struct ft_top_leader no_leader = {.row = &no_row};
+    static const struct ft_top_fold no_fold;
+    struct entities e = {&no_transfer, &no_process, &no_destination,
+                         &no_file,     &no_leader,  &no_fold};
+
+    if (!r)
+        return e;
     switch (r->kind) {
+    case FT_TOP_ROW_TRANSFER:
+        e.transfer = r->transfer;
+        break;
     case FT_TOP_ROW_PROCESS:
-        process_members(w, r->process);
+        e.process = r->process;
+        break;
+    case FT_TOP_ROW_DESTINATION:
+        e.destination = r->destination;
+        break;
+    case FT_TOP_ROW_FILE:
+        e.file = r->file;
+        break;
+    case FT_TOP_ROW_LEADER:
+        e.leader = r->leader;
         break;
     case FT_TOP_ROW_FOLD:
-        open_container(w, "fold", '{');
-        fold_members(w, r->fold);
-        close_container(w, '}');
-        break;
-    case FT_TOP_ROW_TRANSFER:
-        open_container(w, "transfer", '{');
-        transfer_members(w, r->transfer);
-        close_container(w, '}');
+        e.fold = r->fold;
         break;
     default:
         break;
     }
+    return e;
+}
+
+/* JSON leaves out a part a row lacks; CSV keeps its columns, empty. */
+static bool begin_part(struct writer *w, bool present, enum cells *before)
+{
+    *before = w->cells;
+    if (present)
+        return true;
+    if (!w->csv)
+        return false;
+    if (w->cells == CELLS_VALUES)
+        w->cells = CELLS_BLANK;
+    return true;
+}
+
+/* A tree row carries its depth and is a process, a fold of siblings or a transfer. */
+static void tree_row(struct writer *w, const struct ft_top_row *r, const struct entities *e)
+{
+    enum ft_top_row_kind kind = r ? r->kind : FT_TOP_ROW_SECTION;
+    enum cells before;
+
+    put_uint(w, "depth", r ? r->depth : 0);
+    if (begin_part(w, kind == FT_TOP_ROW_PROCESS, &before))
+        process_members(w, e->process);
+    w->cells = before;
+    if (begin_part(w, kind == FT_TOP_ROW_FOLD, &before)) {
+        begin_object(w, "fold");
+        fold_members(w, e->fold);
+        end_object(w);
+    }
+    w->cells = before;
+    if (begin_part(w, kind == FT_TOP_ROW_TRANSFER, &before)) {
+        begin_object(w, "transfer");
+        transfer_members(w, e->transfer);
+        end_object(w);
+    }
+    w->cells = before;
 }
 
 static const char *const key_names[FT_LEADER_KEY_COUNT] = {
@@ -420,6 +642,28 @@ static const char *const key_names[FT_LEADER_KEY_COUNT] = {
     [FT_LEADER_EXTENSION] = "extension",
     [FT_LEADER_DESTINATION] = "destination",
 };
+
+static void put_leader_senders(struct writer *w, const struct ft_row_leader *row)
+{
+    struct list names = {0};
+
+    if (w->csv) {
+        for (size_t i = 0; i < FT_LEADER_SENDERS && row->senders[i].name[0]; i++)
+            list_add(&names, row->senders[i].name);
+        put_list(w, "senders", &names);
+        free(names.text);
+        return;
+    }
+    open_container(w, "senders", '[');
+    for (size_t i = 0; i < FT_LEADER_SENDERS && row->senders[i].name[0]; i++) {
+        open_container(w, nullptr, '{');
+        put_text(w, "name", row->senders[i].name);
+        put_uint(w, "bytes", row->senders[i].bytes);
+        put_uint(w, "transfers", row->senders[i].transfers);
+        close_container(w, '}');
+    }
+    close_container(w, ']');
+}
 
 /* The ranking's own text is named after what it ranks; a destination has its address and host. */
 static void leader_members(struct writer *w, const struct ft_top_leader *l, enum ft_leader_key key)
@@ -450,15 +694,7 @@ static void leader_members(struct writer *w, const struct ft_top_leader *l, enum
     put_uint(w, "destinations", row->destinations);
     if (key != FT_LEADER_FILE)
         put_uint(w, "files", row->files);
-    open_container(w, "senders", '[');
-    for (size_t i = 0; i < FT_LEADER_SENDERS && row->senders[i].name[0]; i++) {
-        open_container(w, nullptr, '{');
-        put_text(w, "name", row->senders[i].name);
-        put_uint(w, "bytes", row->senders[i].bytes);
-        put_uint(w, "transfers", row->senders[i].transfers);
-        close_container(w, '}');
-    }
-    close_container(w, ']');
+    put_leader_senders(w, row);
     put_bool(w, "more_senders", (row->flags & FT_LEADER_MORE_SENDERS) != 0);
     put_text(w, "method", method_text(row->method));
     put_text(w, "confidence", ft_confidence_name((enum ft_confidence)row->confidence));
@@ -469,30 +705,33 @@ static void leader_members(struct writer *w, const struct ft_top_leader *l, enum
         put_bool(w, "deleted", (row->flags & FT_LEADER_DELETED) != 0);
 }
 
+/* A row of the view; without a row, the columns of the view. */
 static void write_row(struct writer *w, const struct view *view, const struct ft_top_row *r,
                       const char *group)
 {
+    struct entities e = entities_of(r);
+
     if (view->tree) {
-        tree_row(w, r);
+        tree_row(w, r, &e);
         return;
     }
     if (view->grouped)
         put_text(w, "group", group);
-    switch (r->kind) {
-    case FT_TOP_ROW_TRANSFER:
-        transfer_members(w, r->transfer);
+    switch (view->mode) {
+    case FT_TOP_TRANSFERS:
+        transfer_members(w, e.transfer);
         break;
-    case FT_TOP_ROW_PROCESS:
-        process_members(w, r->process);
+    case FT_TOP_PROCESSES:
+        process_members(w, e.process);
         break;
-    case FT_TOP_ROW_DESTINATION:
-        destination_members(w, r->destination);
+    case FT_TOP_DESTINATIONS:
+        destination_members(w, e.destination);
         break;
-    case FT_TOP_ROW_FILE:
-        file_members(w, r->file);
+    case FT_TOP_FILES:
+        file_members(w, e.file);
         break;
-    case FT_TOP_ROW_LEADER:
-        leader_members(w, r->leader, view->key);
+    case FT_TOP_LEADERS:
+        leader_members(w, e.leader, view->key);
         break;
     default:
         break;
@@ -632,10 +871,31 @@ size_t ft_top_write_document(const struct ft_top_model *m, enum ft_top_mode mode
 
 size_t ft_top_write_csv(const struct ft_top_model *m, enum ft_top_mode mode, FILE *out)
 {
-    (void)m;
-    (void)mode;
-    (void)out;
-    return 0;
+    struct writer w = {.out = out, .csv = true, .cells = CELLS_NAMES};
+    struct view view = view_of(m, mode);
+    size_t count = ft_top_row_count(m, mode);
+    const char *group = nullptr;
+    size_t written = 0;
+
+    write_row(&w, &view, nullptr, nullptr);
+    fputc('\n', out);
+    w.cells = CELLS_VALUES;
+    for (size_t i = 0; i < count; i++) {
+        const struct ft_top_row *r = ft_top_row_at(m, mode, i);
+
+        if (!r)
+            continue;
+        if (r->kind == FT_TOP_ROW_SECTION) {
+            group = r->section->title;
+            continue;
+        }
+        w.columns = 0;
+        write_row(&w, &view, r, group);
+        fputc('\n', out);
+        written++;
+    }
+    free(w.clean);
+    return written;
 }
 
 static void section_members(struct writer *w, const struct ft_top_section *section)
