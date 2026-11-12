@@ -3,6 +3,16 @@
 
 #include "backends/backend.h"
 
+struct ft_sim_options {
+    const char *scenario;
+    uint64_t seed;
+    uint64_t history_ns; /* past activity generated before the agent serves */
+    uint32_t transfers;  /* concurrent transfers of the storm scenario */
+};
+
+/* Takes effect when the backend is opened. */
+void ft_sim_configure(const struct ft_sim_options *opt);
+
 const struct ft_backend_ops *ft_sim_backend(void);
 
 #endif
