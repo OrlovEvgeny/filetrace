@@ -244,6 +244,8 @@ struct tcp_sock {
     u32 copied_seq;
     u32 rcv_nxt;
     u32 write_seq;
+    u64 bytes_received;
+    u64 bytes_sent;
 };
 
 struct sk_buff {

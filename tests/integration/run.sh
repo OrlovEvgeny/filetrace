@@ -237,10 +237,50 @@ expect "read before a handshake: bundle by name not reported" \
     "$(ft files --path "$data/ca-bundle.crt" --format csv | rows)" 0
 
 # A compiled module loaded before an upload from memory is not what was uploaded.
-"$workload" readmemory "$data/idna.cpython-313.pyc" 300000 >/dev/null
+"$workload" readmemory "$data/idna.cpython-313.pyc" 25000 300000 >/dev/null
 settle
 expect "upload from memory: module read before it not reported" \
     "$(ft files --path "$data/idna.cpython-313.pyc" --format csv | rows)" 0
+
+# Nor is any other file read before the connection, when what went over it does not match the
+# file's size: neither with the hello, as a TLS client sends it, nor with the body after it.
+"$workload" readmemory "$data/partitions.json" 25000 300000 >/dev/null
+"$workload" readmemory "$data/model.bin" 200000 300000 >/dev/null
+"$workload" readmemory "$data/model-large.bin" 400000 300000 >/dev/null
+settle
+expect "upload from memory: small file read before it not reported" \
+    "$(ft files --path "$data/partitions.json" --format csv | rows)" 0
+expect "upload from memory: smaller file read before it not reported" \
+    "$(ft files --path "$data/model.bin" --format csv | rows)" 0
+expect "upload from memory: larger file read before it not reported" \
+    "$(ft files --path "$data/model-large.bin" --format csv | rows)" 0
+
+# Nor when the connection only makes a few small requests, each answered.
+"$workload" exchange "$data/settings.bin" 8192 4 452 >/dev/null
+"$workload" exchange "$data/dataset.bin" 300000 4 2000 >/dev/null
+settle
+expect "requests after a read: small file not reported" \
+    "$(ft files --path "$data/settings.bin" --format csv | rows)" 0
+expect "requests after a read: large file not reported" \
+    "$(ft files --path "$data/dataset.bin" --format csv | rows)" 0
+
+# A file read between the connection and its first bytes is not what a small first flight is,
+# when more follows the answer: a CA file a client reads before its TLS hello. A small upload
+# that is all a fresh connection sends is reported once the connection closes.
+"$workload" readhello "$data/internal-ca.pem" 1111 >/dev/null
+"$workload" smallupload "$data/small-upload.json" 2000 >/dev/null
+settle
+expect "first flight: CA file read before the hello not reported" \
+    "$(ft files --path "$data/internal-ca.pem" --format csv | rows)" 0
+csv=$(ft files --path "$data/small-upload.json" --format csv)
+expect "first flight: small upload reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "first flight: small upload bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 2000
+
+# Below 64 KB, a file read before its connection is not told from a request of its size.
+"$workload" readhandshake "$data/upload-small.json" 20000 "$data/no-bundle.crt" 0 >/dev/null
+settle
+expect "read before a handshake: small upload not reported" \
+    "$(ft files --path "$data/upload-small.json" --format csv | rows)" 0
 
 # So does the handshake of a second connection when the first one was refused.
 "$workload" readrefused "$data/upload-refused.bin" 300000 >/dev/null

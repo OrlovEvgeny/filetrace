@@ -21,6 +21,8 @@ struct sock_track {
     __u8 claim_kind; /* enum ft_bpf_agg_kind, or 0 */
     __u8 claim_fresh;
     __u8 claim_background; /* the claim was made for the thread's background file */
+    __u8 claim_carried;    /* the claim's bytes go to the socket's carry window */
+    __u8 carrying;         /* the socket has a carry window open */
     __u32 claim_script;    /* the PHP request of the thread that made the claim, or 0 */
     __u32 claim_tgid;
     __u32 claim_tid;
@@ -50,12 +52,6 @@ static __always_inline struct sock_track *track(struct sock *sk)
     struct sock_track init = {.id = __sync_fetch_and_add(&last_sock_id, 1) + 1};
     bpf_map_update_elem(&socks, &key, &init, BPF_NOEXIST);
     return bpf_map_lookup_elem(&socks, &key);
-}
-
-static __always_inline void *agg_map_now(void)
-{
-    __u32 zero = 0;
-    return bpf_map_lookup_elem(&agg, &zero);
 }
 
 static __always_inline void flow_add(void *map, struct sock *sk, __u64 id, __u32 tgid,
@@ -118,8 +114,10 @@ static __always_inline void read_sync(struct thread_state *ts)
         ts->bg_fresh = 1;
         return;
     }
-    if (!ts->pending)
+    if (!ts->pending) {
         ts->read_start_ns = ts->read_ns;
+        ts->carried = 0;
+    }
     ts->pending += delta;
     ts->unreported += delta;
     ts->last_ns = ts->read_ns;
@@ -186,12 +184,17 @@ static __always_inline __u32 tcp_rx_seq(struct sock *sk)
     return copied;
 }
 
-static __always_inline void claim_settle(void *map, struct sock_track *t, __u64 sent, __u64 now)
+/* Adds what a claim took to the counters, or to the socket's window when the claim is carried. */
+static __always_inline void claim_charge(void *map, struct sock *sk, struct sock_track *t,
+                                         __u64 take, __u64 now)
 {
-    if (!t->claim_kind)
+    if (t->claim_carried) {
+        __u64 sock = (__u64)sk;
+        struct carry *c = t->carrying ? bpf_map_lookup_elem(&carries, &sock) : NULL;
+        if (c && c->tid == t->claim_tid)
+            carry_add(c, take, t->claim_read, t->claim_fresh, t->claim_script, now);
         return;
-
-    __u64 take = sent < t->claim_bytes ? sent : t->claim_bytes;
+    }
     struct ft_bpf_agg_key key = {
         .cookie = t->id,
         .tgid = t->claim_tgid,
@@ -212,12 +215,23 @@ static __always_inline void claim_settle(void *map, struct sock_track *t, __u64 
             v->transfer.script = t->claim_script;
         v->last_ns = now;
     }
+}
+
+static __always_inline void claim_settle(void *map, struct sock *sk, struct sock_track *t,
+                                         __u64 sent, __u64 now)
+{
+    if (!t->claim_kind)
+        return;
+
+    __u64 take = sent < t->claim_bytes ? sent : t->claim_bytes;
+    claim_charge(map, sk, t, take, now);
     t->claim_bytes -= take;
     t->claim_read = 0;
     t->claim_fresh = 0;
     if (!t->claim_bytes) {
         t->claim_kind = 0;
         t->claim_background = 0;
+        t->claim_carried = 0;
     }
 }
 
@@ -238,7 +252,18 @@ static __always_inline void tcp_settle_tx(void *map, struct sock *sk, struct soc
         return;
 
     tcp_flow_add(map, sk, t->id, t->tx_tgid ? t->tx_tgid : t->rx_tgid, FT_BPF_TX, delta, now);
-    claim_settle(map, t, delta, now);
+    if (t->carrying)
+        carry_wire((__u64)sk, delta);
+    claim_settle(map, sk, t, delta, now);
+}
+
+static __always_inline void carry_settle(void *map, __u64 sk, __u64 now)
+{
+    struct sock_track *t = bpf_map_lookup_elem(&socks, &sk);
+    if (!t)
+        return;
+    tcp_settle_tx(map, (struct sock *)sk, t, now);
+    t->carrying = 0;
 }
 
 /* Returns whether the receiver has consumed anything since the socket was last looked at. */
@@ -295,6 +320,7 @@ static __always_inline void claim_release(struct sock_track *t, struct thread_st
     }
     t->claim_kind = 0;
     t->claim_background = 0;
+    t->claim_carried = 0;
     t->claim_bytes = 0;
     t->claim_read = 0;
     t->claim_fresh = 0;
@@ -326,6 +352,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     if (!ts)
         return 0;
     read_sync(ts);
+    carry_flight_send(ts, (__u64)sk, now);
     if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
         foreground_reset(ts);
 
@@ -335,6 +362,13 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     t->claim_received = ts->received;
     t->claim_script = ts->script;
     if (ts->pending) {
+        bool carried = carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), now) != NULL;
+        if (!carried && ts->carried) {
+            t->claim_kind = 0;
+            return 0;
+        }
+        t->claim_carried = carried;
+        t->carrying |= carried;
         t->claim_file = ts->file;
         t->claim_bytes = ts->pending;
         t->claim_read = ts->unreported;
@@ -388,7 +422,9 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
                            t->claim_received == ts->received;
             if ((ts->pending || claimed) && !ts->displaced && handshake_socket(ts, sk, now)) {
                 background_reset(ts);
+                ts->carried = 1;
             } else {
+                carry_close_thread(ts, now);
                 thread_reset(ts);
                 ts->received++;
             }
@@ -434,6 +470,7 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         t->tx_live = 1;
         t->rx_live = 1;
         t->claim_kind = 0;
+        t->claim_carried = 0;
         break;
     case TCP_FIN_WAIT1:
     case TCP_LAST_ACK:
@@ -441,11 +478,15 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         if (!t->tx_tgid && !t->rx_tgid)
             t->tx_tgid = tgid;
         tcp_settle_tx(map, sk, t, now);
+        if (t->carrying && cfg.file_corr)
+            carry_close(map, (__u64)sk, false, now);
         t->tx_live = 0;
         break;
     case TCP_CLOSE:
         /* A disconnect rewrites both positions right after this. */
         tcp_settle_tx(map, sk, t, now);
+        if (t->carrying && cfg.file_corr)
+            carry_close(map, (__u64)sk, false, now);
         t->tx_live = 0;
         break;
     case TCP_LISTEN:
@@ -481,6 +522,7 @@ int BPF_KPROBE(ft_sock_destruct, struct sock *sk)
 {
     __u64 key = (__u64)sk;
     bpf_map_delete_elem(&socks, &key);
+    bpf_map_delete_elem(&carries, &key);
     return 0;
 }
 
@@ -537,6 +579,7 @@ int BPF_KPROBE(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out
 
     t->claim_kind = FT_BPF_AGG_SENDFILE;
     t->claim_background = 0;
+    t->claim_carried = 0;
     t->claim_script = ts ? ts->script : 0;
     t->claim_file = (struct file_ref){.ino = fk.ino, .dev = fk.dev, .instance = instance};
     t->claim_bytes = len < left ? len : left;
@@ -621,7 +664,7 @@ static __always_inline int udp_sent(struct sk_buff *skb)
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
-            correlate_send(map, t->id, tgid, len - headers, now);
+            correlate_send(map, 0, t->id, tgid, len - headers, now);
         }
     }
     return 0;
@@ -664,6 +707,7 @@ int BPF_KPROBE(ft_skb_consume_udp, struct sock *sk, struct sk_buff *skb, int len
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
+            carry_close_thread(ts, now);
             thread_reset(ts);
             ts->received++;
         }

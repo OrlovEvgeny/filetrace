@@ -64,8 +64,13 @@ struct sink {
     int port;
 };
 
-/* With greet, the sink sends one line to each peer before discarding its input. */
-static struct sink start_sink(int type, bool ipv6, bool greet)
+enum sink_mode {
+    SINK_DISCARD, /* reads and discards what each peer sends */
+    SINK_GREET,   /* sends one line to each peer first */
+    SINK_ANSWER,  /* answers each read with one line, as a server answers requests */
+};
+
+static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
 {
     struct sink s = {0};
     int fd = socket(ipv6 ? AF_INET6 : AF_INET, type, 0);
@@ -96,10 +101,12 @@ static struct sink start_sink(int type, bool ipv6, bool greet)
             int c = accept(fd, nullptr, nullptr);
             if (c < 0)
                 _exit(0);
-            if (greet && write(c, "hello\n", 6) != 6)
+            if (mode == SINK_GREET && write(c, "hello\n", 6) != 6)
                 _exit(1);
-            while (read(c, buf, sizeof(buf)) > 0)
-                continue;
+            while (read(c, buf, sizeof(buf)) > 0) {
+                if (mode == SINK_ANSWER && write(c, "hello\n", 6) != 6)
+                    _exit(1);
+            }
             close(c);
         }
     }
@@ -182,7 +189,7 @@ static void report(const char *scenario, const char *path, size_t bytes, int por
 /* sendfile <path> <bytes> [ipv6] */
 static void scenario_sendfile(const char *path, size_t size, bool ipv6)
 {
-    struct sink sink = start_sink(SOCK_STREAM, ipv6, false);
+    struct sink sink = start_sink(SOCK_STREAM, ipv6, SINK_DISCARD);
     make_file(path, size);
 
     int file = open_file(path);
@@ -199,7 +206,7 @@ static void scenario_steady(const char *path, size_t size, size_t seconds)
 {
     constexpr size_t SLICES_PER_SECOND = 20;
     struct timespec pause = {.tv_nsec = 1'000'000'000 / SLICES_PER_SECOND};
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     size_t slices = seconds ? seconds * SLICES_PER_SECOND : 1;
 
     make_file(path, size);
@@ -220,7 +227,7 @@ static void scenario_steady(const char *path, size_t size, size_t seconds)
 /* readsend <path> <bytes> <chunk> */
 static void scenario_readsend(const char *path, size_t size, size_t chunk)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     make_file(path, size);
 
     int file = open_file(path);
@@ -235,7 +242,7 @@ static void scenario_readsend(const char *path, size_t size, size_t chunk)
 /* readthenrecv <path> <bytes>: hears from the peer between the read and an unrelated send */
 static void scenario_read_then_recv(const char *path, size_t size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, true);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
 
     int sock = connect_sink(&sink);
@@ -266,7 +273,7 @@ static void scenario_read_then_recv(const char *path, size_t size)
 static void scenario_read_handshake(const char *path, size_t size, const char *bundle,
                                     size_t bundle_size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, true);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
 
     char *contents = malloc(size);
@@ -300,24 +307,26 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
 }
 
 /*
- * readmemory <path> <bytes>: reads the file, then connects, trades a hello each way and sends
- * that many bytes from memory, as a client that loads a module or a bundle before it uploads.
+ * readmemory <path> <file bytes> <body bytes>: reads the file, then connects, sends a hello the
+ * size of a TLS ClientHello with a post-quantum key share, hears one back and sends the body
+ * from memory, as a client that loads a module, a service model or a bundle before it uploads.
  */
-static void scenario_read_memory(const char *path, size_t size)
+static void scenario_read_memory(const char *path, size_t file_size, size_t size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, true);
-    make_file(path, 25000);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    make_file(path, file_size);
 
-    char *contents = malloc(25000);
+    char *contents = malloc(file_size);
     char *body = calloc(1, size);
+    char hello[1566] = {0};
     char greeting[6];
     if (!contents || !body)
         die("malloc");
     int file = open_file(path);
-    if (read(file, contents, 25000) != 25000)
+    if (read(file, contents, file_size) != (ssize_t)file_size)
         die("read");
     int sock = connect_sink(&sink);
-    send_all(sock, "hello\n", 6);
+    send_all(sock, hello, sizeof(hello));
     if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
         die("recv");
     send_all(sock, body, size);
@@ -330,12 +339,82 @@ static void scenario_read_memory(const char *path, size_t size)
 }
 
 /*
+ * exchange <path> <file bytes> <requests> <request bytes>: reads the file, then connects and
+ * makes small requests, each answered, as a program that reads its configuration and then
+ * talks to an API.
+ */
+static void scenario_exchange(const char *path, size_t file_size, size_t requests, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    make_file(path, file_size);
+
+    char *contents = malloc(file_size);
+    char *request = calloc(1, size);
+    char answer[6];
+    if (!contents || !request)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, file_size) != (ssize_t)file_size)
+        die("read");
+    int sock = connect_sink(&sink);
+    for (size_t i = 0; i < requests; i++) {
+        send_all(sock, request, size);
+        if (recv(sock, answer, sizeof(answer), MSG_WAITALL) != (ssize_t)sizeof(answer))
+            die("recv");
+    }
+    close(sock);
+    close(file);
+    free(contents);
+    free(request);
+    report("exchange", path, file_size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * readhello <path> <bytes> <upload>: connects, reads the file, then sends a hello the size of a
+ * TLS ClientHello and hears one back, as curl reads --cacert. Then it sends a request; with
+ * upload the request is the file, and the connection closes after the answer.
+ */
+static void scenario_read_hello(const char *path, size_t size, bool upload)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    make_file(path, size);
+
+    char *contents = malloc(size);
+    char hello[1566] = {0};
+    char request[600] = {0};
+    char answer[6];
+    if (!contents)
+        die("malloc");
+    int sock = connect_sink(&sink);
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    if (upload)
+        send_all(sock, contents, size);
+    else
+        send_all(sock, hello, sizeof(hello));
+    if (recv(sock, answer, sizeof(answer), MSG_WAITALL) != (ssize_t)sizeof(answer))
+        die("recv");
+    if (!upload) {
+        send_all(sock, request, sizeof(request));
+        if (recv(sock, answer, sizeof(answer), MSG_WAITALL) != (ssize_t)sizeof(answer))
+            die("recv");
+    }
+    close(sock);
+    close(file);
+    free(contents);
+    report("readhello", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * readrefused <path> <bytes>: like readhandshake without a bundle, but the first connection is
  * refused, as a client's first address can be, and the file goes out over the second.
  */
 static void scenario_read_refused(const char *path, size_t size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, true);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
 
     /* A port that was just free on the sink's address, with nothing listening on it now. */
@@ -378,8 +457,8 @@ static void scenario_read_refused(const char *path, size_t size)
 static void scenario_read_recv_elsewhere(const char *path, size_t size, const char *bundle,
                                          size_t bundle_size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
-    struct sink other = start_sink(SOCK_STREAM, false, true);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    struct sink other = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
     make_file(bundle, bundle_size);
 
@@ -418,7 +497,7 @@ static void scenario_read_recv_elsewhere(const char *path, size_t size, const ch
 static void scenario_read_bundle(const char *path, size_t size, const char *bundle,
                                  size_t bundle_size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     make_file(path, size);
     make_file(bundle, bundle_size);
 
@@ -446,7 +525,7 @@ static void scenario_read_bundle(const char *path, size_t size, const char *bund
 /* upload <path> <chunk>: sends a file that already exists, in reads of chunk bytes */
 static void scenario_upload(const char *path, size_t chunk)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     int file = open_file(path);
     int sock = connect_sink(&sink);
     read_send(sock, file, chunk);
@@ -532,7 +611,7 @@ static void scenario_fifo_lib(const char *dir)
 /* readlittle <path> <bytes>: sends only a sliver of what it read */
 static void scenario_read_little(const char *path, size_t size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     make_file(path, size);
 
     int sock = connect_sink(&sink);
@@ -553,7 +632,7 @@ static void scenario_read_little(const char *path, size_t size)
 /* fdreuse <dir> <count> <base-bytes>: descriptors are closed per file, so their numbers repeat */
 static void scenario_fd_reuse(const char *dir, size_t count, size_t base)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     char path[4096];
 
     for (size_t i = 0; i < count; i++) {
@@ -574,7 +653,7 @@ static void scenario_fd_reuse(const char *dir, size_t count, size_t base)
 /* rename <path> <new-path> <bytes>: renamed halfway through the transfer */
 static void scenario_rename(const char *path, const char *renamed, size_t size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     make_file(path, size);
 
     int file = open_file(path);
@@ -592,7 +671,7 @@ static void scenario_rename(const char *path, const char *renamed, size_t size)
 /* unlink <path> <bytes>: sent after the last directory entry is removed */
 static void scenario_unlink(const char *path, size_t size)
 {
-    struct sink sink = start_sink(SOCK_STREAM, false, false);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     make_file(path, size);
 
     int file = open_file(path);
@@ -788,7 +867,7 @@ static void scenario_partial_sendfile(const char *path, size_t size)
 /* udp <bytes> [ipv6]: unconnected datagram socket */
 static void scenario_udp(size_t size, bool ipv6)
 {
-    struct sink sink = start_sink(SOCK_DGRAM, ipv6, false);
+    struct sink sink = start_sink(SOCK_DGRAM, ipv6, SINK_DISCARD);
     int sock = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
     char datagram[1000];
     size_t sent = 0;
@@ -850,8 +929,14 @@ int main(int argc, char **argv)
         scenario_read_then_recv(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readhandshake") == 0 && argc == 6)
         scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
-    else if (strcmp(name, "readmemory") == 0 && argc == 4)
-        scenario_read_memory(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "exchange") == 0 && argc == 6)
+        scenario_exchange(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
+    else if (strcmp(name, "readhello") == 0 && argc == 4)
+        scenario_read_hello(argv[2], arg_size(argv[3]), false);
+    else if (strcmp(name, "smallupload") == 0 && argc == 4)
+        scenario_read_hello(argv[2], arg_size(argv[3]), true);
+    else if (strcmp(name, "readmemory") == 0 && argc == 5)
+        scenario_read_memory(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readrefused") == 0 && argc == 4)
         scenario_read_refused(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readrecvelsewhere") == 0 && argc == 6)

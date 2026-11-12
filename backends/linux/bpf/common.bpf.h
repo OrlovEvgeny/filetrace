@@ -118,7 +118,11 @@ struct thread_state {
     __u64 dialed_ns;
     __u64 last_sent; /* the TCP socket the thread sent on last */
     __u64 last_sent_ns;
-    __u8 displaced; /* the file was read while another's bytes were still unsent */
+    __u8 displaced;    /* the file was read while another's bytes were still unsent */
+    __u8 carried;      /* the read crossed a connection's setup: only that connection may send it */
+    __u64 file_size;   /* the file's size at its last read */
+    __u64 carry_sock;  /* the socket of the thread's window of a connection it dialed */
+    __u64 flight_sock; /* the socket of the thread's window of a first flight */
     struct file_ref bg_file;
     __u32 bg_gen;
     __u32 bg_forgotten;
@@ -141,6 +145,52 @@ struct {
     __type(key, struct file_key);
     __type(value, __u32);
 } known_files SEC(".maps");
+
+/*
+ * Charges that cannot be told from what a connection opens with, held back until they can:
+ * - DIALED: the thread opened the connection after it began reading the file, so what went
+ *   over it is a handshake and a request head besides the file, if the file went at all. The
+ *   charges are reported only if the connection took about as much as the file.
+ * - FLIGHT: the socket had heard nothing from its peer, so the bytes may be a TLS ClientHello
+ *   or the first request of a conversation. The charges are dropped if that first flight was
+ *   small and the thread sent again after the peer answered.
+ */
+enum carry_kind {
+    CARRY_DIALED = 1,
+    CARRY_FLIGHT = 2,
+};
+
+struct carry {
+    __u64 cookie;
+    __u32 tgid;
+    __u32 tid;
+    struct file_ref file;
+    __u32 script;
+    __u32 sends;
+    __u32 alternations;
+    __u8 kind;
+    __u64 first_ns;
+    __u64 last_ns;
+    __u64 wire; /* what the connection took while the window was open */
+    __u64 sent; /* of that, charged to the file */
+    __u64 read; /* of the file, before those charges */
+    __u64 size; /* the file's size at its last read */
+};
+
+/* Keyed by the address of the kernel socket. */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u64);
+    __type(value, struct carry);
+} carries SEC(".maps");
+
+/* Below this size a file read before a connection matches the size of too many requests. */
+#define CARRY_FLOOR (64 * 1024)
+/* What a connection takes besides the file: a handshake, a client certificate, a request head. */
+#define CARRY_SLACK (8 * 1024)
+/* A first flight this large is no handshake and no request without a body. */
+#define CARRY_FLIGHT_MAX (4 * 1024)
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -202,6 +252,12 @@ struct {
     __type(key, __u32);
     __type(value, struct exec_scratch);
 } exec_scratch SEC(".maps");
+
+static __always_inline void *agg_map_now(void)
+{
+    __u32 zero = 0;
+    return bpf_map_lookup_elem(&agg, &zero);
+}
 
 static __always_inline void count(__u32 idx)
 {
@@ -470,12 +526,187 @@ static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
     *fresh = 0;
 }
 
+/* Brings what the socket took up to date before its window is judged. */
+static __always_inline void carry_settle(void *map, __u64 sk, __u64 now);
+
+static __always_inline bool sock_heard(__u64 sk)
+{
+    return BPF_CORE_READ((struct tcp_sock *)sk, bytes_received) != 0;
+}
+
+/* Whether the socket has sent more than a first flight that is only a handshake or a request. */
+static __always_inline bool sock_flown(__u64 sk)
+{
+    return BPF_CORE_READ((struct tcp_sock *)sk, bytes_sent) >= CARRY_FLIGHT_MAX;
+}
+
+static __always_inline void carry_report(void *map, const struct carry *c, __u64 sent)
+{
+    struct ft_bpf_agg_key key = {
+        .cookie = c->cookie,
+        .tgid = c->tgid,
+        .kind = FT_BPF_AGG_READ_SEND,
+        .file = {.ino = c->file.ino, .dev = c->file.dev, .instance = c->file.instance},
+    };
+    struct ft_bpf_agg_val init = {.first_ns = c->first_ns};
+    struct ft_bpf_agg_val *v = agg_slot(map, &key, &init);
+    if (v) {
+        __sync_fetch_and_add(&v->transfer.sent_bytes, sent);
+        __sync_fetch_and_add(&v->transfer.read_bytes, c->read);
+        __sync_fetch_and_add(&v->transfer.sends, c->sends);
+        __sync_fetch_and_add(&v->transfer.alternations, c->alternations);
+        if (c->script)
+            v->transfer.script = c->script;
+        v->last_ns = c->last_ns;
+    }
+}
+
+/* Reports a window's charges, or drops them; again: the thread sent after the peer answered. */
+static __always_inline void carry_judge(void *map, const struct carry *c, bool again)
+{
+    if (!c->sends)
+        return;
+    if (c->kind == CARRY_FLIGHT) {
+        if (!again || c->wire >= CARRY_FLIGHT_MAX)
+            carry_report(map, c, c->sent);
+        return;
+    }
+    __u64 whole = c->size && c->size < c->read ? c->size : c->read;
+    if (whole >= CARRY_FLOOR && c->wire >= whole && c->wire - whole <= CARRY_SLACK + whole / 128)
+        carry_report(map, c, c->sent < whole ? c->sent : whole);
+}
+
+/* Closes the window on a socket and judges it. */
+static __always_inline void carry_close(void *map, __u64 sk, bool again, __u64 now)
+{
+    carry_settle(map, sk, now);
+    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    if (!c)
+        return;
+    carry_judge(map, c, again);
+    bpf_map_delete_elem(&carries, &sk);
+}
+
+/* Closes a window of the current thread held in one of its slots. */
+static __always_inline void carry_close_slot(__u64 *slot, bool again, __u64 now)
+{
+    __u64 sk = *slot;
+    if (!sk)
+        return;
+    *slot = 0;
+    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    void *map = agg_map_now();
+    if (c && map && c->tid == (__u32)bpf_get_current_pid_tgid())
+        carry_close(map, sk, again, now);
+}
+
+/* Closes the window of the connection the thread dialed after its read, if one is open. */
+static __always_inline void carry_close_thread(struct thread_state *ts, __u64 now)
+{
+    carry_close_slot(&ts->carry_sock, false, now);
+}
+
+/*
+ * Judges the thread's first-flight window at its next send on that socket: once the peer has
+ * answered, or once the flight has grown past what a handshake sends.
+ */
+static __always_inline void carry_flight_send(struct thread_state *ts, __u64 sk, __u64 now)
+{
+    if (ts->flight_sock != sk)
+        return;
+    if (sock_heard(sk))
+        carry_close_slot(&ts->flight_sock, true, now);
+    else if (sock_flown(sk))
+        carry_close_slot(&ts->flight_sock, false, now);
+}
+
+/*
+ * The window a send of the thread's read belongs in: the one open on the socket for the same
+ * file, or a new one when the thread dialed the socket after it began the read, or when the
+ * socket has heard nothing yet. NULL when the send is charged as it is.
+ */
+static __always_inline struct carry *carry_window(struct thread_state *ts, __u64 sk, __u64 cookie,
+                                                  __u32 tgid, __u64 now)
+{
+    __u32 tid = (__u32)bpf_get_current_pid_tgid();
+
+    if (!sk)
+        return NULL;
+    if (ts->carry_sock == sk || ts->flight_sock == sk) {
+        struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+        if (c && c->tid == tid && c->file.ino == ts->file.ino && c->file.dev == ts->file.dev &&
+            c->file.instance == ts->file.instance) {
+            c->size = ts->file_size;
+            return c;
+        }
+        /* Another file's bytes follow the first ones in the flight. */
+        if (ts->flight_sock == sk)
+            carry_close_slot(&ts->flight_sock, true, now);
+    }
+
+    __u8 kind;
+    if (ts->dialed == sk && ts->dialed_ns >= ts->read_start_ns)
+        kind = CARRY_DIALED;
+    else if (!sock_heard(sk) && !sock_flown(sk))
+        kind = CARRY_FLIGHT;
+    else
+        return NULL;
+    if (kind == CARRY_DIALED) {
+        carry_close_thread(ts, now);
+        if (ts->flight_sock == sk)
+            carry_close_slot(&ts->flight_sock, true, now);
+    } else {
+        carry_close_slot(&ts->flight_sock, false, now);
+    }
+
+    struct carry init = {
+        .cookie = cookie,
+        .tgid = tgid,
+        .tid = tid,
+        .file = ts->file,
+        .kind = kind,
+        .first_ns = now,
+        .size = ts->file_size,
+    };
+    if (bpf_map_update_elem(&carries, &sk, &init, BPF_ANY))
+        return NULL;
+    if (kind == CARRY_DIALED) {
+        ts->carry_sock = sk;
+        ts->carried = 1;
+    } else {
+        ts->flight_sock = sk;
+    }
+    return bpf_map_lookup_elem(&carries, &sk);
+}
+
+/* Counts what the socket took while its window is open. */
+static __always_inline void carry_wire(__u64 sk, __u64 bytes)
+{
+    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
+    if (c)
+        __sync_fetch_and_add(&c->wire, bytes);
+}
+
+/* Holds a charge in the window instead of the counters. */
+static __always_inline void carry_add(struct carry *c, __u64 sent, __u64 read, __u8 fresh,
+                                      __u32 script, __u64 now)
+{
+    __sync_fetch_and_add(&c->sent, sent);
+    __sync_fetch_and_add(&c->read, read);
+    __sync_fetch_and_add(&c->sends, 1);
+    __sync_fetch_and_add(&c->alternations, fresh);
+    if (script)
+        c->script = script;
+    c->last_ns = now;
+}
+
 /*
  * Attributes a send to the file this thread just read, up to what of it is still unsent, or,
- * when no such read accounts for it, to the background file the thread read last.
+ * when no such read accounts for it, to the background file the thread read last. A send over
+ * a connection opened after the read began is held in that connection's window.
  */
-static __always_inline void correlate_send(void *map, __u64 cookie, __u32 tgid, __u64 sent,
-                                           __u64 now)
+static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __u32 tgid,
+                                           __u64 sent, __u64 now)
 {
     struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
     if (!ts)
@@ -483,6 +714,20 @@ static __always_inline void correlate_send(void *map, __u64 cookie, __u32 tgid, 
     if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
         foreground_reset(ts);
     if (ts->pending) {
+        struct carry *c = carry_window(ts, sk, cookie, tgid, now);
+        if (c) {
+            __u64 take = sent < ts->pending ? sent : ts->pending;
+            carry_add(c, take, ts->unreported, ts->fresh, ts->script, now);
+            ts->pending -= take;
+            ts->unreported = 0;
+            ts->fresh = 0;
+            ts->last_ns = now;
+            background_reset(ts);
+            return;
+        }
+        /* Only the connection the read was carried to can send it. */
+        if (ts->carried)
+            return;
         charge_send(map, cookie, tgid, &ts->file, 0, ts->script, sent, &ts->pending,
                     &ts->unreported, &ts->fresh, now);
         ts->last_ns = now;
@@ -732,7 +977,9 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
                                             struct inode *inode, const struct file_key *fk,
                                             __u64 fs_magic)
 {
+    ts->file_size = FT_READ(inode, i_size);
     if (ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen) {
+        carry_close_thread(ts, bpf_ktime_get_boot_ns());
         /* What a loader reads of a library, its first 832 bytes, is no candidate to displace. */
         ts->displaced = ts->pending >= 1024;
         ts->file.ino = fk->ino;

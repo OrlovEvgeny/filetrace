@@ -4,6 +4,11 @@
 
 #include "common.bpf.h"
 
+/* Sends are counted as they return, so a window is always up to date. */
+static __always_inline void carry_settle(void *map, __u64 sk, __u64 now)
+{
+}
+
 SEC("tp_btf/inet_sock_set_state")
 int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
 {
@@ -18,6 +23,11 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         return 0;
     if (newstate == TCP_SYN_SENT && cfg.file_corr)
         thread_dialed(sk, bpf_ktime_get_boot_ns());
+    if (newstate == TCP_CLOSE && cfg.file_corr) {
+        void *map = agg_map_now();
+        if (map)
+            carry_close(map, (__u64)sk, false, bpf_ktime_get_boot_ns());
+    }
 
     struct ft_bpf_ev_sock *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e) {
@@ -126,20 +136,23 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
 
     if (!cfg.file_corr)
         return 0;
+    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
     if (dir == FT_BPF_TX) {
-        if (BPF_CORE_READ(sock, sk, sk_protocol) == IPPROTO_TCP) {
-            struct thread_state *ts =
-                bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
-            if (ts)
-                thread_sent(ts, BPF_CORE_READ(sock, sk), now);
+        bool tcp = proto == IPPROTO_TCP;
+        if (ts && tcp) {
+            thread_sent(ts, sk, now);
+            carry_flight_send(ts, (__u64)sk, now);
         }
         if (!spliced)
-            correlate_send(map, key.cookie, key.tgid, (__u64)ret, now);
-    } else {
-        struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
-        if (ts && handshake_receive(ts, BPF_CORE_READ(sock, sk), now))
-            background_reset(ts);
-        else if (ts && (ts->pending || ts->bg_pending))
+            correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret, now);
+        if (ts && tcp && (ts->carry_sock == (__u64)sk || ts->flight_sock == (__u64)sk))
+            carry_wire((__u64)sk, (__u64)ret);
+    } else if (ts && handshake_receive(ts, sk, now)) {
+        background_reset(ts);
+        ts->carried = 1;
+    } else if (ts) {
+        carry_close_thread(ts, now);
+        if (ts->pending || ts->bg_pending)
             thread_reset(ts);
     }
     return 0;
@@ -206,8 +219,10 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
     }
     thread_set_file(ts, file, inode, &fk, magic);
 
-    if (!ts->pending)
+    if (!ts->pending) {
         ts->read_start_ns = bpf_ktime_get_boot_ns();
+        ts->carried = 0;
+    }
     ts->pending += (__u64)ret;
     ts->unreported += (__u64)ret;
     ts->last_ns = bpf_ktime_get_boot_ns();
