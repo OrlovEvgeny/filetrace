@@ -561,7 +561,8 @@ static __always_inline __u64 carried_whole(const struct carried_file *k)
 
 /*
  * Reports the file a dialed connection carried: the one candidate it took whole, give or take
- * a handshake, a client certificate and a request head. With none or two, nothing is.
+ * a handshake, a client certificate and a request head, or a first piece read to look at the
+ * file and not sent. With none or two, nothing is.
  */
 static __always_inline void carry_judge_dialed(void *map, const struct carry *c)
 {
@@ -571,8 +572,8 @@ static __always_inline void carry_judge_dialed(void *map, const struct carry *c)
 #pragma unroll
     for (__u32 i = 0; i < CARRY_CANDIDATES; i++) {
         __u64 whole = carried_whole(&c->cands[i]);
-        if (!c->cands[i].size || whole < CARRY_FLOOR || c->wire < whole ||
-            c->wire - whole > CARRY_SLACK + whole / 128)
+        if (!c->cands[i].size || whole < CARRY_FLOOR || c->wire + whole / 64 < whole ||
+            c->wire > whole + CARRY_SLACK + whole / 128)
             continue;
         matches++;
         match = i;

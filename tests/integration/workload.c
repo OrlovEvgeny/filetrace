@@ -576,19 +576,24 @@ static void scenario_read_keepalive(const char *path, size_t size, size_t next)
 
 /*
  * readstream <path> <bytes> <first>: reads the first bytes of the file, connects, then sends them
- * and the rest in pieces as it reads them.
+ * and the rest in pieces as it reads them. readsniff sends a request head instead of the first
+ * bytes, which it only looked at.
  */
-static void scenario_read_stream(const char *path, size_t size, size_t first)
+static void scenario_read_stream(const char *path, size_t size, size_t first, bool sniff)
 {
     struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
     make_file(path, size);
     char buf[16384];
+    char request[300] = {0};
     int file = open_file(path);
     char *head = malloc(first);
     if (!head || read(file, head, first) != (ssize_t)first)
         die("read");
     int sock = connect_sink(&sink);
-    send_all(sock, head, first);
+    if (sniff)
+        send_all(sock, request, sizeof(request));
+    else
+        send_all(sock, head, first);
     ssize_t n;
     while ((n = read(file, buf, sizeof(buf))) > 0)
         send_all(sock, buf, (size_t)n);
@@ -1446,7 +1451,9 @@ int main(int argc, char **argv)
     else if (strcmp(name, "readkeepalive") == 0 && argc == 5)
         scenario_read_keepalive(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readstream") == 0 && argc == 5)
-        scenario_read_stream(argv[2], arg_size(argv[3]), arg_size(argv[4]));
+        scenario_read_stream(argv[2], arg_size(argv[3]), arg_size(argv[4]), false);
+    else if (strcmp(name, "readsniff") == 0 && argc == 5)
+        scenario_read_stream(argv[2], arg_size(argv[3]), arg_size(argv[4]), true);
     else if (strcmp(name, "readlater") == 0 && argc == 8)
         scenario_read_later(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
                             arg_size(argv[6]), arg_size(argv[7]));
