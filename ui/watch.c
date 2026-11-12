@@ -555,9 +555,9 @@ static void frame_draw(const struct frame *next, const struct frame *shown, bool
         const char *line = next->lines[i];
         if (i < shown->count && strcmp(line, shown->lines[i]) == 0)
             continue;
-        printf("\033[%zu;1H", i + 1);
+        /* Erased first: after a line as wide as the terminal the erase would take its last cell. */
+        printf("\033[%zu;1H\033[K", i + 1);
         write_line(line, styled);
-        fputs("\033[K", stdout);
     }
     for (size_t i = next->count; i < shown->count; i++)
         printf("\033[%zu;1H\033[K", i + 1);
