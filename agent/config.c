@@ -17,7 +17,8 @@ const char *ft_config_default_path(void)
 }
 
 /* Files that programs read on their way to a connection and that nobody sends by reading them:
- * trust stores, resolver files, time zones, locale data and interpreter configuration. */
+ * trust stores, resolver files, time zones, locale data, interpreter configuration, compiled
+ * modules and the data files that libraries load whole as they start. */
 static const char *const default_background_paths[] = {
     "/etc/ssl/certs/*",
     "/etc/ssl/cert.pem",
@@ -41,21 +42,30 @@ static const char *const default_background_paths[] = {
     "/etc/resolv.conf",
     "/etc/nsswitch.conf",
     "/etc/gai.conf",
+    "/etc/mime.types",
     "/usr/share/zoneinfo/*",
     "/etc/localtime",
     "/usr/lib/locale/*",
     "*.mo",
+    "*.pyc",
     "*/cacert.pem",
     "*/cacerts",
     "*/ca-bundle.crt",
     "*/ca-certificates.crt",
+    "*/endpoints.json",
+    "*/partitions.json",
+    "*/sdk-default-configuration.json",
+    "*/service-2.json",
+    "*/service-2.json.gz",
+    "*/endpoint-rule-set-1.json",
+    "*/endpoint-rule-set-1.json.gz",
 };
 
 /* Files that programs load as they run and that people also send: account databases, source
- * and compiled modules, shared libraries. */
+ * modules, shared libraries. */
 static const char *const default_strict_paths[] = {
-    "/etc/passwd", "/etc/group", "*.pyc",   "*.py", "*.rb", "*.js",  "*.mjs", "*.cjs",
-    "*.node",      "*.jar",      "*.class", "*.pm", "*.pl", "*.php", "*.so",  "*.so.*",
+    "/etc/passwd", "/etc/group", "*.py", "*.rb", "*.js",  "*.mjs", "*.cjs",  "*.node",
+    "*.jar",       "*.class",    "*.pm", "*.pl", "*.php", "*.so",  "*.so.*",
 };
 
 static_assert(FT_ARRAY_LEN(default_background_paths) <= FT_CONFIG_MAX_PATTERNS);
