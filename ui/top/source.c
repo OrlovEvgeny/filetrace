@@ -440,6 +440,8 @@ static uint64_t refresh(struct ft_top_source *src)
 
     if (code != FT_EXIT_OK)
         fail(src, &err);
+    else
+        src->session->answered = true;
     f->took_ns = ft_clock_mono_ns() - f->mono_ns;
     publish(src);
     return served;
