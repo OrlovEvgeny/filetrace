@@ -142,6 +142,7 @@ struct thread_state {
     __u64 strict_read_ns;
     __u64 strict_datagrams;     /* what datagrams took since the strict file was read */
     __u64 strict_datagram_sock; /* the cookie of the socket that took them */
+    __u8 strict_datagram_file;  /* they carried the strict file: what follows is charged */
 };
 
 struct {
@@ -454,6 +455,7 @@ static __always_inline void strict_reset(struct thread_state *ts)
     ts->strict_fresh = 0;
     ts->strict_datagrams = 0;
     ts->strict_datagram_sock = 0;
+    ts->strict_datagram_file = 0;
 }
 
 static __always_inline void thread_reset(struct thread_state *ts)
@@ -1177,12 +1179,17 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
             if (ts->strict_datagram_sock != cookie) {
                 ts->strict_datagram_sock = cookie;
                 ts->strict_datagrams = 0;
+                ts->strict_datagram_file = 0;
             }
             ts->strict_datagrams += sent;
-            if (strict_matches(ts->strict_datagrams, ts->strict_pending)) {
-                charge_send(map, cookie, tgid, &ts->strict_file, 0, ts->script, ts->strict_pending,
+            if (ts->strict_datagram_file) {
+                charge_send(map, cookie, tgid, &ts->strict_file, 0, ts->script, sent,
                             &ts->strict_pending, &ts->strict_unreported, &ts->strict_fresh, now);
-                ts->strict_datagrams = 0;
+            } else if (strict_matches(ts->strict_datagrams, ts->strict_pending)) {
+                charge_send(map, cookie, tgid, &ts->strict_file, 0, ts->script,
+                            ts->strict_datagrams, &ts->strict_pending, &ts->strict_unreported,
+                            &ts->strict_fresh, now);
+                ts->strict_datagram_file = 1;
             }
         }
         return;
