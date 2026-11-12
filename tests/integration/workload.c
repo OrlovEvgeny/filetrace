@@ -300,6 +300,36 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
 }
 
 /*
+ * readmemory <path> <bytes>: reads the file, then connects, trades a hello each way and sends
+ * that many bytes from memory, as a client that loads a module or a bundle before it uploads.
+ */
+static void scenario_read_memory(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, true);
+    make_file(path, 25000);
+
+    char *contents = malloc(25000);
+    char *body = calloc(1, size);
+    char greeting[6];
+    if (!contents || !body)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, 25000) != 25000)
+        die("read");
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
+        die("recv");
+    send_all(sock, body, size);
+    close(sock);
+    close(file);
+    free(contents);
+    free(body);
+    report("readmemory", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * readrefused <path> <bytes>: like readhandshake without a bundle, but the first connection is
  * refused, as a client's first address can be, and the file goes out over the second.
  */
@@ -820,6 +850,8 @@ int main(int argc, char **argv)
         scenario_read_then_recv(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readhandshake") == 0 && argc == 6)
         scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "readmemory") == 0 && argc == 4)
+        scenario_read_memory(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readrefused") == 0 && argc == 4)
         scenario_read_refused(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readrecvelsewhere") == 0 && argc == 6)

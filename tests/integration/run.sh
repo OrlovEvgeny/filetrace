@@ -219,6 +219,29 @@ expect "read before a handshake: upload reported" "$(printf '%s\n' "$csv" | rows
 expect "read before a handshake: upload bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 300000
 
+# A file read after the upload and before the connection takes the upload's place, so the
+# handshake ends what either could claim, and neither is reported.
+"$workload" readhandshake "$data/upload-unlisted.bin" 300000 "$data/trust.pem" 200000 >/dev/null
+settle
+expect "read before a handshake: unlisted bundle not reported" \
+    "$(ft files --path "$data/trust.pem" --format csv | rows)" 0
+expect "read before a handshake: upload after an unlisted bundle not reported" \
+    "$(ft files --path "$data/upload-unlisted.bin" --format csv | rows)" 0
+
+# A bundle background by its name is so from its first read, wherever it is.
+"$workload" readhandshake "$data/upload-named.bin" 300000 "$data/ca-bundle.crt" 200000 >/dev/null
+settle
+expect "read before a handshake: upload after a bundle by name bytes" \
+    "$(ft files --path "$data/upload-named.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "read before a handshake: bundle by name not reported" \
+    "$(ft files --path "$data/ca-bundle.crt" --format csv | rows)" 0
+
+# A compiled module loaded before an upload from memory is not what was uploaded.
+"$workload" readmemory "$data/idna.cpython-313.pyc" 300000 >/dev/null
+settle
+expect "upload from memory: module read before it not reported" \
+    "$(ft files --path "$data/idna.cpython-313.pyc" --format csv | rows)" 0
+
 # So does the handshake of a second connection when the first one was refused.
 "$workload" readrefused "$data/upload-refused.bin" 300000 >/dev/null
 settle
