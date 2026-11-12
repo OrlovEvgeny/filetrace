@@ -291,6 +291,7 @@ struct ft_row_stats {
     char backend[48];
     char mode[16];
     char version[48];
+    uint64_t leaders_bytes; /* memory of the rankings of the most sent files; 0 when off */
 };
 
 struct ft_row_capability {

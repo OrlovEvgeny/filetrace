@@ -767,6 +767,10 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
         usage_line(o, "Flows:", &s->flows);
         usage_line(o, "Files:", &s->files);
         usage_line(o, "Transfers:", &s->transfers);
+        if (s->leaders_bytes) {
+            ft_format_bytes(s->leaders_bytes, a, sizeof(a));
+            fprintf(o, "%-18s%s\n", "File rankings:", a);
+        }
         if (s->candidates_rejected) {
             ft_format_count(s->candidates_rejected, a, sizeof(a));
             fprintf(o, "%-18s%s below the inference thresholds\n", "Candidates:", a);
@@ -824,9 +828,10 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
     fprintf(o,
             ",\"collector\":{\"event_queue_bytes\":%" PRIu64 ",\"event_queue_peak_bytes\":%" PRIu64
             ",\"candidates_below_threshold\":%" PRIu64 ",\"event_log_bytes\":%" PRIu64
-            ",\"event_log_events\":%" PRIu64 ",\"event_log_discarded\":%" PRIu64 ",",
+            ",\"event_log_events\":%" PRIu64 ",\"event_log_discarded\":%" PRIu64
+            ",\"file_rankings_bytes\":%" PRIu64 ",",
             s->queue_bytes, s->queue_peak_bytes, s->candidates_rejected, s->event_log_bytes,
-            s->event_log_records, s->event_log_discarded);
+            s->event_log_records, s->event_log_discarded, s->leaders_bytes);
     usage_json(o, "processes", &s->processes, false);
     usage_json(o, "sockets", &s->sockets, false);
     usage_json(o, "flows", &s->flows, false);

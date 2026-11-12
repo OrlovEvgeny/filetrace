@@ -1025,6 +1025,7 @@ void ft_state_fill_stats(struct ft_state *st, uint64_t now_ns, struct ft_row_sta
     row->flows = table_usage(st->flows);
     row->files = table_usage(st->files);
     row->transfers = table_usage(st->transfers);
+    row->leaders_bytes = ft_leaders_memory(st->leaders);
     for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++) {
         if (!st->logs[i])
             continue;
