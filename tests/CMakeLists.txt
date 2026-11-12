@@ -35,6 +35,10 @@ add_executable(ft_sim_agent
 )
 target_link_libraries(ft_sim_agent PRIVATE ft_agent)
 target_include_directories(ft_sim_agent PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME sim
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/sim/sim_test.sh
+            $<TARGET_FILE:ft_sim_agent> $<TARGET_FILE:filetrace>)
+set_tests_properties(sim PROPERTIES TIMEOUT 30)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(ft_workload integration/workload.c)
