@@ -1,6 +1,7 @@
 #include "filetrace/state.h"
 
 #include "filetrace/format.h"
+#include "filetrace/leaders.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,7 @@ void ft_state_config_defaults(struct ft_state_config *cfg)
         .max_transfers = 16384,
         .max_metric_series = 2048,
         .event_log_bytes = 1024 * 1024,
+        .leader_entries = 512,
         .inferred_min_bytes = 1024,
         .inferred_min_permille = 50,
         .min_confidence = FT_CONF_INFERRED,
@@ -106,6 +108,11 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
         st->logs[i] = ft_evlog_create(cfg->event_log_bytes / 8 * eighths[i]);
         ok = ok && st->logs[i];
     }
+    if (cfg->leader_entries) {
+        st->leaders =
+            ft_leaders_create(&(struct ft_leaders_config){.entries = cfg->leader_entries});
+        ok = ok && st->leaders;
+    }
     if (!ok) {
         ft_state_destroy(st);
         return nullptr;
@@ -127,6 +134,7 @@ void ft_state_destroy(struct ft_state *st)
     ft_table_destroy(st->transfers);
     for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++)
         ft_evlog_destroy(st->logs[i]);
+    ft_leaders_destroy(st->leaders);
     ft_series_destroy(st->series);
     free(st->record);
     free(st->process_text);
@@ -426,24 +434,54 @@ static bool ingest_file(struct ft_state *st, const struct ft_event *ev)
     return !f->excluded;
 }
 
+static void rank_transfer(struct ft_state *st, const struct ft_transfer *t,
+                          const struct ft_process *p, enum ft_confidence conf, uint64_t bytes,
+                          bool started, uint64_t ts_ns)
+{
+    const struct ft_file *f = ft_table_find(st->files, &t->file);
+    const struct ft_socket *s = ft_table_find(st->sockets, &t->sock_id);
+    struct ft_leader_sample sample = {
+        .ts_ns = ts_ns,
+        .file = t->file,
+        .path = f ? f->path : nullptr,
+        .file_size = f ? f->size : 0,
+        .deleted = f && f->deleted,
+        .sender = t->comm,
+        .script = t->script ? t->script : p->script,
+        .method = t->method,
+        .confidence = conf,
+        .bytes = bytes,
+        .started = started,
+    };
+    if (s)
+        sample.remote = s->remote;
+    ft_leaders_add(st->leaders, &sample);
+}
+
 /* Bytes that preceded the association's first report are counted when it is reported. */
-static void count_transfer(struct ft_state *st, struct ft_transfer *t, struct ft_process *p)
+static void count_transfer(struct ft_state *st, struct ft_transfer *t, struct ft_process *p,
+                           uint64_t ts_ns)
 {
     enum ft_confidence conf;
     uint32_t evidence;
+    bool started = false;
+    uint64_t delta = 0;
 
     if (!ft_state_classify(st, t, &conf, &evidence))
         return;
     if (!t->counted) {
         t->counted = true;
+        started = true;
         ft_series_add(st->series, FT_SERIES_TRANSFERS_STARTED, t->comm, t->method, conf, 1);
     }
     if (t->bytes > t->counted_bytes) {
-        uint64_t delta = t->bytes - t->counted_bytes;
+        delta = t->bytes - t->counted_bytes;
         ft_series_add(st->series, FT_SERIES_FILE_SENT, t->comm, t->method, conf, delta);
         p->file_bytes += delta;
         t->counted_bytes = t->bytes;
     }
+    if (st->leaders && (started || delta))
+        rank_transfer(st, t, p, conf, delta, started, ts_ns);
 }
 
 static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
@@ -497,7 +535,7 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     t->ops += e->ops;
     t->alternations += e->alternations;
     ft_rate_add(&t->rate, ev->ts_ns, e->bytes);
-    count_transfer(st, t, p);
+    count_transfer(st, t, p, ev->ts_ns);
     return true;
 }
 

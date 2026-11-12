@@ -1,5 +1,6 @@
 #include "filetrace/clock.h"
 #include "filetrace/format.h"
+#include "filetrace/leaders.h"
 #include "filetrace/state.h"
 
 #include <regex.h>
@@ -930,6 +931,20 @@ static bool query_events(struct ft_state *st, const struct ft_query *q, ft_row_f
     return true;
 }
 
+struct row_counter {
+    ft_row_fn *emit;
+    void *ctx;
+    uint32_t rows;
+};
+
+static void count_leader_row(void *ctx, uint16_t type, const void *row, size_t size)
+{
+    struct row_counter *c = ctx;
+    if (type == FT_MSG_ROW_LEADER)
+        c->rows++;
+    c->emit(c->ctx, type, row, size);
+}
+
 bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_ns, ft_row_fn *emit,
                     void *ctx, struct ft_msg_end *end, struct ft_error *err)
 {
@@ -962,6 +977,15 @@ bool ft_state_query(struct ft_state *st, const struct ft_query *q, uint64_t now_
             return false;
         }
         break;
+    case FT_Q_LEADERS: {
+        struct row_counter counter = {.emit = emit, .ctx = ctx};
+        if (!ft_leaders_query(st->leaders, q, st->start_ns, now_ns, count_leader_row, &counter,
+                              err))
+            return false;
+        end->rows = counter.rows;
+        sp.from_ns = ft_leaders_span_start((enum ft_leader_window)q->window, now_ns);
+        break;
+    }
     default:
         break;
     }

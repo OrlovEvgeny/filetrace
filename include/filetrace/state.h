@@ -17,6 +17,7 @@ struct ft_state_config {
     size_t max_transfers;
     size_t max_metric_series; /* label sets of the exported counters */
     size_t event_log_bytes;   /* 0: recent events are not kept */
+    size_t leader_entries;    /* sizes the tables of the rankings; 0: no rankings */
 
     /* An inferred association is reported only at or above both thresholds. */
     uint64_t inferred_min_bytes;
@@ -215,6 +216,7 @@ enum ft_log_class : uint8_t {
 };
 
 struct ft_evlog;
+struct ft_leaders;
 
 /* Receives each record as it is made; its time_ns is still monotonic. */
 typedef void ft_record_fn(void *ctx, const struct ft_row_event *row);
@@ -227,6 +229,7 @@ struct ft_state {
     struct ft_table *files;     /* key: struct ft_file_id */
     struct ft_table *transfers; /* key: struct ft_transfer_key */
     struct ft_evlog *logs[FT_LOG_CLASS_COUNT];
+    struct ft_leaders *leaders; /* nullptr when rankings are off */
     struct ft_series *series;
     struct ft_row_event *record;          /* the record being made */
     struct ft_process_text *process_text; /* what read_process_text last read */

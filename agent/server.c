@@ -351,7 +351,8 @@ static void handle_query(struct agent *d, struct client *c, const void *payload,
     case FT_Q_CONNECTIONS:
     case FT_Q_FLOWS:
     case FT_Q_TRANSFERS:
-    case FT_Q_EVENTS: {
+    case FT_Q_EVENTS:
+    case FT_Q_LEADERS: {
         struct ft_msg_end end;
         struct ft_error err = {0};
         size_t mark = c->out_len;
