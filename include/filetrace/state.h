@@ -88,6 +88,8 @@ struct ft_process {
     char *command_line; /* nullptr while unknown, as are cwd and script */
     char *cwd;
     char *script;
+    const char *interpreter; /* canonical static name, when resolved lazily from the executable */
+    bool interpreter_checked;
     uint64_t text_ns;   /* when they were read during traffic; 0: not since the last exec or fork */
     uint64_t args_hash; /* of the arguments they were made from */
 

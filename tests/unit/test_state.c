@@ -1395,6 +1395,101 @@ static void exec_carries_the_command_line(void)
     fixture_close(&f);
 }
 
+static struct ft_ev_process resolved_process;
+static unsigned executable_lookups;
+
+static bool lookup_interpreter(uint32_t pid, struct ft_ev_process *out)
+{
+    CHECK_U64(pid, PID_A);
+    executable_lookups++;
+    *out = resolved_process;
+    return resolved_process.exe[0] != '\0';
+}
+
+static void symlinked_interpreter_uses_its_executable(void)
+{
+    static const char args[] = "/tmp/ftlab-py\0-W\0ignore\0send.py";
+    static const struct {
+        uint32_t pid;
+        uint64_t start_ns;
+        const char *exe;
+        bool script;
+    } cases[] = {
+        {PID_A, 1000 * FT_NS_PER_SEC, "/usr/bin/python3.11", true},
+        {PID_A, 1000 * FT_NS_PER_SEC - 10 * FT_NS_PER_MS, "/usr/bin/python3.11", true},
+        {PID_A, 1001 * FT_NS_PER_SEC, "/usr/bin/python3.11", false},
+        {PID_A, 999 * FT_NS_PER_SEC, "/usr/bin/python3.11", false},
+        {PID_B, 1000 * FT_NS_PER_SEC, "/usr/bin/python3.11", false},
+        {PID_A, 0, "/usr/bin/python3.11", false},
+        {PID_A, 1000 * FT_NS_PER_SEC, "", false},
+        {PID_A, 1000 * FT_NS_PER_SEC, "/usr/bin/rsync", false},
+    };
+
+    for (size_t i = 0; i < FT_ARRAY_LEN(cases); i++) {
+        struct fixture f;
+        struct ft_state_config cfg;
+        ft_state_config_defaults(&cfg);
+        cfg.lookup_process = lookup_interpreter;
+        cfg.read_process_text = procfs_read;
+        cfg.command_line_arguments = i != 1;
+        procfs_clear();
+        procfs_set(PID_A, "/tmp/ftlab-py|-W|ignore|send.py", "/srv/later");
+        fixture_open_with(&f, &cfg);
+        resolved_process =
+            (struct ft_ev_process){.pid = cases[i].pid, .start_ns = cases[i].start_ns};
+        ft_strlcpy(resolved_process.exe, cases[i].exe, sizeof(resolved_process.exe));
+        executable_lookups = 0;
+
+        struct ft_event ev = {.type = FT_EVENT_PROCESS_EXEC, .ts_ns = f.now};
+        ev.process.pid = PID_A;
+        ev.process.start_ns = 1000 * FT_NS_PER_SEC;
+        ft_strlcpy(ev.process.comm, "ftlab-py", sizeof(ev.process.comm));
+        ft_strlcpy(ev.process.exe, "/tmp/ftlab-py", sizeof(ev.process.exe));
+        ev.process.args = args;
+        ev.process.args_len = sizeof(args);
+        ev.process.cwd = "/srv/job";
+        ft_state_ingest(f.st, &ev);
+
+        struct ft_process *p = ft_table_find(f.st->processes, &ev.process.pid);
+        CHECK(p != nullptr);
+        CHECK_U64(executable_lookups, 0); /* Never add /proc work to exec ingestion. */
+        CHECK(p->script == nullptr);
+        ft_process_text_refresh(f.st, p, f.now);
+        CHECK_U64(executable_lookups, 1);
+        CHECK_STR(p->comm, "ftlab-py");
+        CHECK_STR(p->exe, "/tmp/ftlab-py");
+        CHECK_STR(p->command_line,
+                  cfg.command_line_arguments ? "/tmp/ftlab-py -W ignore send.py" : "/tmp/ftlab-py");
+        CHECK_STR(p->script ? p->script : "", cases[i].script ? "/srv/job/send.py" : "");
+        CHECK_STR(p->cwd, "/srv/later");
+        ft_process_text_refresh(f.st, p, f.now + 11 * FT_NS_PER_SEC);
+        CHECK_U64(executable_lookups, 1); /* Cache failures as well as resolved interpreters. */
+        CHECK_STR(p->script ? p->script : "", cases[i].script ? "/srv/job/send.py" : "");
+        if (i == 0) {
+            /* Forks keep the executable's grammar even when the child rewrites its arguments. */
+            emit_fork(&f, PID_B, PID_A, "ftlab-py", 1001);
+            procfs_set(PID_B, "/tmp/ftlab-py|-m|http.server", "/srv/child");
+            struct ft_process *child = ft_table_find(f.st->processes, &PID_B);
+            ft_process_text_refresh(f.st, child, f.now);
+            CHECK_STR(child->script, "module:http.server");
+            CHECK_U64(executable_lookups, 1);
+
+            /* A new exec resets the cache; an exited process must never be looked up. */
+            ft_state_ingest(f.st, &ev);
+            CHECK(!p->interpreter_checked);
+            CHECK(p->interpreter == nullptr);
+            p->exited = true;
+            ft_process_text_refresh(f.st, p, f.now);
+            CHECK_U64(executable_lookups, 1);
+            p->exited = false;
+            ft_process_text_refresh(f.st, p, f.now);
+            CHECK_U64(executable_lookups, 2);
+            CHECK_STR(p->script, "/srv/job/send.py");
+        }
+        fixture_close(&f);
+    }
+}
+
 /* An interpreter's records say what it runs, as read when it started it. */
 static void processes_carry_their_command_line(void)
 {
@@ -1654,6 +1749,7 @@ void test_state(void)
     exec_carries_the_command_line();
     transfers_name_the_request_script();
     processes_carry_their_command_line();
+    symlinked_interpreter_uses_its_executable();
     forked_workers_are_read_again();
     arguments_can_be_left_out();
     process_text_is_bounded();

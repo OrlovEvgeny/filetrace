@@ -42,6 +42,7 @@ static void derives_scripts(void)
         {"/usr/bin/python3.13t", "python3.13t|x.py", "/srv", "/srv/x.py"},
         {"/opt/pypy/bin/pypy3", "pypy3|x.py", "/srv", "/srv/x.py"},
         {"/usr/bin/python3.11 (deleted)", "python3|x.py", "/srv", "/srv/x.py"},
+        {"/usr/bin/python3.11", "/tmp/ftlab-py|send.py", "/srv", "/srv/send.py"},
         {"", "python3|x.py", "/tmp", "/tmp/x.py"},
         {"/usr/bin/python3.11", "python3|x.py", "", "x.py"},
         /* A title the process set for itself, padded as setproctitle leaves it. */

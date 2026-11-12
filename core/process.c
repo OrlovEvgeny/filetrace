@@ -376,8 +376,38 @@ static uint64_t hash_bytes(const char *p, size_t n)
     return h;
 }
 
-/* A script is derived again only when the arguments change, so it keeps the earliest cwd. */
-static void apply_text(struct ft_state *st, struct ft_process *p, struct ft_process_text *t)
+/* Exec carries the invoked path, which may be a symlink with an unrecognised name. */
+static bool resolve_interpreter(struct ft_state *st, struct ft_process *p, const char *args)
+{
+    constexpr uint64_t TOLERANCE_NS = 20 * FT_NS_PER_MS; /* /proc rounds start times to ticks */
+    struct ft_ev_process found = {0};
+
+    if (p->interpreter_checked)
+        return false;
+    p->interpreter_checked = true;
+    if (p->script || grammar_of(p->exe) || grammar_of(args) || strchr(args, ' ') || !p->start_ns ||
+        !st->cfg.lookup_process || !st->cfg.lookup_process(p->pid, &found) || found.pid != p->pid ||
+        !found.start_ns)
+        return false;
+    uint64_t delta =
+        p->start_ns > found.start_ns ? p->start_ns - found.start_ns : found.start_ns - p->start_ns;
+    if (delta > TOLERANCE_NS)
+        return false;
+    const struct grammar *g = grammar_of(found.exe);
+    if (!g)
+        return false;
+    for (size_t i = 0; i < FT_ARRAY_LEN(interpreters); i++) {
+        if (interpreters[i].grammar == g) {
+            p->interpreter = interpreters[i].name;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Unchanged arguments keep the earliest cwd, including a newly resolved interpreter. */
+static void apply_text(struct ft_state *st, struct ft_process *p, struct ft_process_text *t,
+                       bool resolve_exe)
 {
     char line[FT_CMDLINE_MAX];
     char script[FT_PATH_MAX];
@@ -387,18 +417,24 @@ static void apply_text(struct ft_state *st, struct ft_process *p, struct ft_proc
     t->args[t->args_len] = '\0';
     t->cwd[sizeof(t->cwd) - 1] = '\0';
 
-    set_text(&p->cwd, t->cwd);
+    bool resolved = resolve_exe && resolve_interpreter(st, p, t->args);
     uint64_t hash = hash_bytes(t->args, t->args_len);
-    if (p->command_line && hash == p->args_hash)
+    bool same_args = p->command_line && hash == p->args_hash;
+    if (same_args && !resolved) {
+        set_text(&p->cwd, t->cwd);
         return;
+    }
     p->args_hash = hash;
     ft_command_line(t->args, t->args_len, st->cfg.command_line_arguments, line, sizeof(line));
     set_text(&p->command_line, line);
-    bool known = ft_script_derive(p->exe, t->args, t->args_len, t->cwd, script, sizeof(script));
+    const char *exe = p->interpreter ? p->interpreter : p->exe;
+    const char *cwd = same_args && p->cwd ? p->cwd : t->cwd;
+    bool known = ft_script_derive(exe, t->args, t->args_len, cwd, script, sizeof(script));
     set_text(&p->script, known ? script : nullptr);
+    set_text(&p->cwd, t->cwd);
 }
 
-static void read_text(struct ft_state *st, struct ft_process *p)
+static void read_text(struct ft_state *st, struct ft_process *p, bool resolve_exe)
 {
     struct ft_process_text *t = st->process_text;
 
@@ -408,7 +444,7 @@ static void read_text(struct ft_state *st, struct ft_process *p)
     t->cwd[0] = '\0';
     if (!st->cfg.read_process_text(p->pid, t) || t->args_len == 0)
         return;
-    apply_text(st, p, t);
+    apply_text(st, p, t, resolve_exe);
 }
 
 void ft_process_text_exec(struct ft_state *st, struct ft_process *p, const struct ft_ev_process *e)
@@ -417,13 +453,13 @@ void ft_process_text_exec(struct ft_state *st, struct ft_process *p, const struc
 
     ft_process_text_clear(p);
     if (!e->args || !e->args_len || !t) {
-        read_text(st, p);
+        read_text(st, p, false);
         return;
     }
     t->args_len = e->args_len < sizeof(t->args) ? e->args_len : sizeof(t->args) - 1;
     memcpy(t->args, e->args, t->args_len);
     ft_strlcpy(t->cwd, e->cwd ? e->cwd : "", sizeof(t->cwd));
-    apply_text(st, p, t);
+    apply_text(st, p, t, false);
 }
 
 void ft_process_text_refresh(struct ft_state *st, struct ft_process *p, uint64_t now_ns)
@@ -434,7 +470,7 @@ void ft_process_text_refresh(struct ft_state *st, struct ft_process *p, uint64_t
     if (p->exited || (p->text_ns && now_ns < p->text_ns + REFRESH_NS))
         return;
     p->text_ns = now_ns ? now_ns : 1;
-    read_text(st, p);
+    read_text(st, p, true);
 }
 
 void ft_process_text_inherit(struct ft_process *child, const struct ft_process *parent)
@@ -445,6 +481,8 @@ void ft_process_text_inherit(struct ft_process *child, const struct ft_process *
     set_text(&child->cwd, parent->cwd);
     set_text(&child->script, parent->script);
     child->args_hash = parent->args_hash;
+    child->interpreter = parent->interpreter;
+    child->interpreter_checked = parent->interpreter_checked;
     child->text_ns = 0;
 }
 
@@ -456,6 +494,8 @@ void ft_process_text_clear(struct ft_process *p)
     p->command_line = nullptr;
     p->cwd = nullptr;
     p->script = nullptr;
+    p->interpreter = nullptr;
+    p->interpreter_checked = false;
     p->text_ns = 0;
     p->args_hash = 0;
 }
