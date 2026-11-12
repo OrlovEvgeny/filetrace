@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -326,14 +327,17 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
     stop_sink(&sink);
 }
 
+static char *read_whole_file(const char *path, size_t size);
+
 /*
  * readsendother <path> <bytes> <other> <other bytes>: over a connection that has already heard
  * from its peer, reads the file whole and sends nothing of it, as a checksum pass does, then
- * reads the other file and sends that. readloadsend sends the first file, as a program that
- * loads a module between reading its upload and sending it.
+ * reads the other file and sends that, after reading a background file if one is named.
+ * readloadsend sends the first file, as a program that loads a module between reading its
+ * upload and sending it.
  */
 static void scenario_read_send_other(const char *path, size_t size, const char *other,
-                                     size_t other_size, bool send_first)
+                                     size_t other_size, bool send_first, const char *background)
 {
     struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
@@ -353,6 +357,8 @@ static void scenario_read_send_other(const char *path, size_t size, const char *
     int up = open_file(other);
     if (read(up, upload, other_size) != (ssize_t)other_size)
         die("read");
+    if (background)
+        free(read_whole_file(background, 2000));
     if (send_first)
         send_all(sock, contents, size);
     else
@@ -565,6 +571,219 @@ static void scenario_read_keepalive(const char *path, size_t size, size_t next)
     free(contents);
     free(request);
     report("readkeepalive", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * readstream <path> <bytes> <first>: reads the first bytes of the file, connects, then sends them
+ * and the rest in pieces as it reads them.
+ */
+static void scenario_read_stream(const char *path, size_t size, size_t first)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    make_file(path, size);
+    char buf[16384];
+    int file = open_file(path);
+    char *head = malloc(first);
+    if (!head || read(file, head, first) != (ssize_t)first)
+        die("read");
+    int sock = connect_sink(&sink);
+    send_all(sock, head, first);
+    ssize_t n;
+    while ((n = read(file, buf, sizeof(buf))) > 0)
+        send_all(sock, buf, (size_t)n);
+    close(sock);
+    close(file);
+    free(head);
+    report("readstream", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * readlater <path> <bytes> <other> <other bytes> <seconds> <send bytes>: over a connection that
+ * has heard from its peer, reads both files, waits, then sends that many bytes from memory.
+ */
+static void scenario_read_later(const char *path, size_t size, const char *other, size_t other_size,
+                                size_t seconds, size_t send)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    char *a = read_whole_file(path, size);
+    char *b = read_whole_file(other, other_size);
+    char *body = calloc(1, send);
+    if (!body)
+        die("malloc");
+    sleep((unsigned)seconds);
+    send_all(sock, body, send);
+    close(sock);
+    free(a);
+    free(b);
+    free(body);
+    report("readlater", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * twodials <path> <bytes>: reads the file, connects and sends a line, then connects again and
+ * sends a body of 100 KB from memory.
+ */
+static void scenario_two_dials(const char *path, size_t size)
+{
+    struct sink one = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    struct sink two = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char *contents = read_whole_file(path, size);
+    char line[30] = {0};
+    char *body = calloc(1, 100000);
+    if (!body)
+        die("malloc");
+    int a = connect_sink(&one);
+    send_all(a, line, sizeof(line));
+    int b = connect_sink(&two);
+    send_all(b, body, 100000);
+    close(b);
+    close(a);
+    free(contents);
+    free(body);
+    report("twodials", path, size, two.port);
+    stop_sink(&two);
+    stop_sink(&one);
+}
+
+/* readsendfile <path> <bytes>: reads the file whole, connects, sends a head, then sendfile. */
+static void scenario_read_sendfile(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char *contents = read_whole_file(path, size);
+    char head[300] = {0};
+    int file = open_file(path);
+    int sock = connect_sink(&sink);
+    send_all(sock, head, sizeof(head));
+    sendfile_all(sock, file, size);
+    close(sock);
+    close(file);
+    free(contents);
+    report("readsendfile", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/* fanout <path> <bytes>: reads the file, connects to two servers and sends it to both. */
+static void scenario_fan_out(const char *path, size_t size)
+{
+    struct sink one = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    struct sink two = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char *contents = read_whole_file(path, size);
+    int a = connect_sink(&one);
+    int b = connect_sink(&two);
+    send_all(a, contents, size);
+    send_all(b, contents, size);
+    close(b);
+    close(a);
+    free(contents);
+    report("fanout", path, size, one.port);
+    stop_sink(&two);
+    stop_sink(&one);
+}
+
+/*
+ * readchatty <path> <bytes>: reads the file, connects to two servers, sends the file to one and
+ * makes 50 small requests of the other, each answered.
+ */
+static void scenario_read_chatty(const char *path, size_t size)
+{
+    struct sink one = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    struct sink two = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char *contents = read_whole_file(path, size);
+    char request[200] = {0};
+    int a = connect_sink(&one);
+    int b = connect_sink(&two);
+    send_all(a, contents, size);
+    for (int i = 0; i < 50; i++) {
+        send_all(b, request, sizeof(request));
+        hear(b);
+    }
+    close(b);
+    close(a);
+    free(contents);
+    report("readchatty", path, size, one.port);
+    stop_sink(&two);
+    stop_sink(&one);
+}
+
+/*
+ * readtwo <path> <bytes> <other> <other bytes> <which>: reads both files, connects and sends the
+ * first (which 1) or the second (which 2).
+ */
+static void scenario_read_two(const char *path, size_t size, const char *other, size_t other_size,
+                              size_t which)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char *a = read_whole_file(path, size);
+    char *b = read_whole_file(other, other_size);
+    int sock = connect_sink(&sink);
+    if (which == 1)
+        send_all(sock, a, size);
+    else
+        send_all(sock, b, other_size);
+    close(sock);
+    free(a);
+    free(b);
+    report("readtwo", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/* readsmall <path> <bytes>: reads a small file, connects, sends it and closes. */
+static void scenario_read_small(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char *contents = read_whole_file(path, size);
+    int sock = connect_sink(&sink);
+    send_all(sock, contents, size);
+    close(sock);
+    free(contents);
+    report("readsmall", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+struct reader {
+    int sock;
+    int count;
+};
+
+static void *read_answers(void *arg)
+{
+    struct reader *r = arg;
+    for (int i = 0; i < r->count; i++)
+        hear(r->sock);
+    return nullptr;
+}
+
+/*
+ * readreplythread <path> <bytes>: reads the file, connects and sends it; another thread reads
+ * the answers, while this one then makes 60 small requests over the same connection.
+ */
+static void scenario_read_reply_thread(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char *contents = read_whole_file(path, size);
+    char request[1000] = {0};
+    int sock = connect_sink(&sink);
+    send_all(sock, contents, size);
+    struct reader r = {.sock = sock, .count = 1};
+    pthread_t answers;
+    if (pthread_create(&answers, nullptr, read_answers, &r) != 0)
+        die("pthread_create");
+    pthread_join(answers, nullptr);
+    for (int i = 0; i < 60; i++) {
+        send_all(sock, request, sizeof(request));
+        r.count = 1;
+        if (pthread_create(&answers, nullptr, read_answers, &r) != 0)
+            die("pthread_create");
+        pthread_join(answers, nullptr);
+    }
+    close(sock);
+    free(contents);
+    report("readreplythread", path, size, sink.port);
     stop_sink(&sink);
 }
 
@@ -1198,10 +1417,12 @@ int main(int argc, char **argv)
     else if (strcmp(name, "readbundlelate") == 0 && argc == 6)
         scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
                                 BUNDLE_AFTER_HELLO);
-    else if (strcmp(name, "readsendother") == 0 && argc == 6)
-        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), false);
+    else if (strcmp(name, "readsendother") == 0 && (argc == 6 || argc == 7))
+        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), false,
+                                 argc == 7 ? argv[6] : nullptr);
     else if (strcmp(name, "readloadsend") == 0 && argc == 6)
-        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), true);
+        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), true,
+                                 nullptr);
     else if (strcmp(name, "exchange") == 0 && argc == 6)
         scenario_exchange(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "readhello") == 0 && argc == 4)
@@ -1224,6 +1445,26 @@ int main(int argc, char **argv)
         scenario_two_files(argv[2], argv[3], arg_size(argv[4]));
     else if (strcmp(name, "readkeepalive") == 0 && argc == 5)
         scenario_read_keepalive(argv[2], arg_size(argv[3]), arg_size(argv[4]));
+    else if (strcmp(name, "readstream") == 0 && argc == 5)
+        scenario_read_stream(argv[2], arg_size(argv[3]), arg_size(argv[4]));
+    else if (strcmp(name, "readlater") == 0 && argc == 8)
+        scenario_read_later(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
+                            arg_size(argv[6]), arg_size(argv[7]));
+    else if (strcmp(name, "twodials") == 0 && argc == 4)
+        scenario_two_dials(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readsendfile") == 0 && argc == 4)
+        scenario_read_sendfile(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "fanout") == 0 && argc == 4)
+        scenario_fan_out(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readchatty") == 0 && argc == 4)
+        scenario_read_chatty(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readtwo") == 0 && argc == 7)
+        scenario_read_two(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
+                          arg_size(argv[6]));
+    else if (strcmp(name, "readsmall") == 0 && argc == 4)
+        scenario_read_small(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readreplythread") == 0 && argc == 4)
+        scenario_read_reply_thread(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readmemory") == 0 && argc == 5)
         scenario_read_memory(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readrefused") == 0 && argc == 4)
