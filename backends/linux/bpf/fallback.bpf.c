@@ -564,6 +564,7 @@ int BPF_KPROBE(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out
         .gen = BPF_CORE_READ(inode, i_generation),
     };
     __u32 instance = file_instance(in, inode, &fk, BPF_CORE_READ(sb, s_magic));
+    sendfile_read(ts, &fk);
 
     /* The call can move no more than what is left of the file. */
     loff_t pos = 0;
