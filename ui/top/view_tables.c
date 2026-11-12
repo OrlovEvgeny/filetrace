@@ -410,6 +410,15 @@ static void progress_cell(struct row_draw *rd, const struct column *c,
                    c->width - 1 - PROGRESS_CELLS - 1, style(rd, FT_COLOR_TEXT, false), percent);
 }
 
+/* The title when the column holds it, else its head: "nginx: worker" for "nginx: worker process".
+ */
+static const char *process_label(const struct ft_top_process *p, int width)
+{
+    if (!p->title[0] || ft_text_columns(p->title) <= width || !p->head[0])
+        return p->title;
+    return p->head;
+}
+
 static void transfer_cells(struct row_draw *rd, const struct columns *cols,
                            const struct ft_top_transfer *t)
 {
@@ -430,7 +439,7 @@ static void transfer_cells(struct row_draw *rd, const struct columns *cols,
             cell(rd, c, style(rd, FT_COLOR_TEXT, false), p ? p->user : "", FT_TOP_FIELD_USER);
             break;
         case COL_PROCESS:
-            cell(rd, c, style(rd, FT_COLOR_BRIGHT, false), p && p->title[0] ? p->title : "",
+            cell(rd, c, style(rd, FT_COLOR_BRIGHT, false), p ? process_label(p, c->width - 1) : "",
                  FT_TOP_FIELD_PROC);
             break;
         case COL_SCRIPT: {
@@ -765,7 +774,7 @@ static void top_process_cell(struct row_draw *rd, const struct column *c,
         snprintf(text, ROW_TEXT_BYTES, "%s [%.*s]", p->name && p->name[0] ? p->name : p->title,
                  stem, script);
     } else {
-        ft_strlcpy(text, p->title, ROW_TEXT_BYTES);
+        ft_strlcpy(text, process_label(p, c->width - 1), ROW_TEXT_BYTES);
     }
     cell(rd, c, style(rd, FT_COLOR_TEXT, false), text, FT_TOP_FIELD_PROC);
 }
@@ -929,7 +938,7 @@ static void draw_row(struct ft_top_draw *d, enum ft_top_mode mode, const struct 
         .d = d,
         .y = row.y,
         .done = r->flags & FT_TOP_ROW_DONE,
-        .selected = r->flags & FT_TOP_ROW_SELECTED,
+        .selected = (r->flags & FT_TOP_ROW_SELECTED) && !d->ui->no_selection,
         .tagged = r->flags & FT_TOP_ROW_TAGGED,
         .first_cell = true,
     };

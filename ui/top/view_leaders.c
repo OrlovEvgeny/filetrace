@@ -623,7 +623,7 @@ static void draw_leader_row(struct ft_top_draw *d, struct ft_rect line,
     bool compared = all->summary.previous_from_wall_ns != 0;
     const struct ft_top_leader *l = row->leader;
     const struct ft_row_leader *lr = l->row;
-    bool selected = row->flags & FT_TOP_ROW_SELECTED;
+    bool selected = (row->flags & FT_TOP_ROW_SELECTED) && !d->ui->no_selection;
     bool tagged = row->flags & FT_TOP_ROW_TAGGED;
     int y = line.y;
     char buf[48];

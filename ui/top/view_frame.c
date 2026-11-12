@@ -356,7 +356,8 @@ static void agent_line(const struct ft_top_draw *d, const struct ft_top_totals *
             add(l, fg(FT_COLOR_RED, false), "degraded");
         else
             add(l, fg(FT_COLOR_TEXT, false), "running");
-        add(l, fg(FT_COLOR_TEXT, false), " · %s ok · ringbuf ", word);
+        add(l, fg(FT_COLOR_TEXT, false), t->degraded ? " · %s · ringbuf " : " · %s ok · ringbuf ",
+            word);
         add(l, fg(FT_COLOR_BRIGHT, false), "%" PRIu32 "%%", t->queue_percent);
         add(l, fg(FT_COLOR_TEXT, false), " · drops ");
         add(l, fg(t->events_dropped ? FT_COLOR_RED : FT_COLOR_BRIGHT, false), "%s", drops);
@@ -638,7 +639,7 @@ static void draw_tab_state(struct ft_top_draw *d, struct ft_rect r, int from)
     }
     state_text(d, text, sizeof(text));
 
-    /* From the right: the agent's badge, the state text if all fits, the other badges. */
+    /* From the right: the agent's badge, the other badges, then the state text if it fits. */
     int room = r.x + r.w - from - 1;
     int x = r.x + r.w;
     if (has_after && ft_text_columns(after.text) <= room) {
@@ -647,16 +648,6 @@ static void draw_tab_state(struct ft_top_draw *d, struct ft_rect r, int from)
         ft_canvas_text(d->canvas, x, r.y, w, after.style, after.text);
         x--;
         room -= w + 1;
-    }
-    int badges = 0;
-    for (size_t i = 0; i < nbefore; i++)
-        badges += ft_text_columns(before[i].text) + 1;
-    int text_cols = ft_text_columns(text);
-    if (text_cols + badges <= room) {
-        x -= text_cols;
-        ft_canvas_text(d->canvas, x, r.y, text_cols, fg(FT_COLOR_DIM, false), text);
-        x--;
-        room -= text_cols + 1;
     }
     for (size_t i = nbefore; i-- > 0;) {
         int w = ft_text_columns(before[i].text);
@@ -667,6 +658,24 @@ static void draw_tab_state(struct ft_top_draw *d, struct ft_rect r, int from)
         x--;
         room -= w + 1;
     }
+    int text_cols = ft_text_columns(text);
+    if (text_cols <= room)
+        ft_canvas_text(d->canvas, x - text_cols, r.y, text_cols, fg(FT_COLOR_DIM, false), text);
+}
+
+/* Leaders has no Agent row either: its trouble takes the right end of the row from the bar. */
+static struct ft_rect leaders_bar_room(struct ft_top_draw *d, struct ft_rect r, int from)
+{
+    struct badge b;
+
+    if (!agent_badge(d, &b))
+        return r;
+    int w = ft_text_columns(b.text);
+    if (w + 1 > r.x + r.w - from)
+        return r;
+    ft_canvas_text(d->canvas, r.x + r.w - w, r.y, w, b.style, b.text);
+    r.w -= w + 1;
+    return r;
 }
 
 static int draw_tabs(struct ft_top_draw *d, struct ft_rect r)
@@ -1126,7 +1135,7 @@ void ft_top_draw(struct ft_top_draw *d)
     CLIPPED(l.tabs, {
         int x = draw_tabs(d, l.tabs);
         if (leaders)
-            ft_top_draw_leaders_bar(d, l.tabs, x);
+            ft_top_draw_leaders_bar(d, leaders_bar_room(d, l.tabs, x), x);
         else
             draw_tab_state(d, l.tabs, x);
     });
