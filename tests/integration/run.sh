@@ -210,20 +210,29 @@ settle
 expect "read, receive, then send" "$(ft files --path "$data/config.bin" --format csv | rows)" 0
 
 # An upload over a fresh connection, as an HTTPS client makes it: the file is read whole,
-# then a CA bundle, then the peers trade a hello each way before the file is sent. The
-# receive ends what the bundle read could claim, so the upload is not pinned on it.
-"$workload" readhandshake "$data/upload-tls.bin" 300000 "$data/ca-bundle.crt" 200000 >/dev/null
+# then the client connects, and the peers trade a hello each way before the file is sent.
+# What the connection the thread opened says before the send does not end the read.
+"$workload" readhandshake "$data/upload-tls.bin" 300000 "$data/no-bundle.crt" 0 >/dev/null
 settle
-expect "read before a handshake: CA bundle not reported" \
-    "$(ft files --path "$data/ca-bundle.crt" --format csv | rows)" 0
+csv=$(ft files --path "$data/upload-tls.bin" --format csv)
+expect "read before a handshake: upload reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "read before a handshake: upload bytes" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 300000
 
-# The same, with the hello received on a second connection: a receive on any socket ends
-# what the read could claim.
+# So does the handshake of a second connection when the first one was refused.
+"$workload" readrefused "$data/upload-refused.bin" 300000 >/dev/null
+settle
+expect "read before a refused connection: upload bytes" \
+    "$(ft files --path "$data/upload-refused.bin" --format csv | column transfer.bytes_sent)" 300000
+
+# The hello received on a second connection does end it, and then neither file is reported.
 "$workload" readrecvelsewhere "$data/upload-other.bin" 300000 "$data/ca-other.crt" 200000 \
     >/dev/null
 settle
 expect "receive on another connection: CA bundle not reported" \
     "$(ft files --path "$data/ca-other.crt" --format csv | rows)" 0
+expect "receive on another connection: upload not reported" \
+    "$(ft files --path "$data/upload-other.bin" --format csv | rows)" 0
 
 # Neither is sending a sliver of what was read.
 "$workload" readlittle "$data/bundle.bin" 400000 >/dev/null
@@ -689,12 +698,15 @@ no_minimum_paths = ["/etc/passwd"]
 CONFIG
 # The agent resolves the patterns to inodes when it starts, so the files exist by then.
 : >"$data/bg-ca.crt"
+: >"$data/bg-handshake.crt"
 : >"$data/bg-gai.conf"
 : >"$data/bg-whole.bin"
 mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
     { echo "FAIL: the agent did not start with background_paths"; exit 1; }
 "$workload" readbundle "$data/up-bundle.bin" 300000 "$data/bg-ca.crt" 200000 >/dev/null
+"$workload" readhandshake "$data/up-handshake.bin" 300000 "$data/bg-handshake.crt" 200000 \
+    >/dev/null
 "$workload" readlittle "$data/bg-gai.conf" 4000 >/dev/null
 "$workload" readsend "$data/bg-whole.bin" 4096 65536 >/dev/null
 "$workload" upload /etc/passwd 65536 >/dev/null
@@ -704,6 +716,10 @@ expect "background: file read before the bundle reported" "$(printf '%s\n' "$csv
 expect "background: file read before the bundle bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 300000
 expect "background: bundle not reported" "$(ft files --path "$data/bg-ca.crt" --format csv | rows)" 0
+expect "background: upload after a handshake bytes" \
+    "$(ft files --path "$data/up-handshake.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "background: bundle read before a handshake not reported" \
+    "$(ft files --path "$data/bg-handshake.crt" --format csv | rows)" 0
 expect "background: part of a read not reported" \
     "$(ft files --path "$data/bg-gai.conf" --format csv | rows)" 0
 csv=$(ft files --path "$data/bg-whole.bin" --format csv)

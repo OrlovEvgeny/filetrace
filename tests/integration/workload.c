@@ -260,38 +260,84 @@ static void scenario_read_then_recv(const char *path, size_t size)
 
 /*
  * readhandshake <path> <bytes> <bundle> <bundle bytes>: an upload over a fresh connection, as
- * an HTTPS client makes it. The file is read whole, then a CA bundle; then the peers trade a
- * hello each way, and only then is the file sent.
+ * an HTTPS client makes it. The file is read whole, then a CA bundle unless its size is 0;
+ * then the peers trade a hello each way, and only then is the file sent.
  */
 static void scenario_read_handshake(const char *path, size_t size, const char *bundle,
                                     size_t bundle_size)
 {
     struct sink sink = start_sink(SOCK_STREAM, false, true);
     make_file(path, size);
-    make_file(bundle, bundle_size);
 
     char *contents = malloc(size);
-    char *trust = malloc(bundle_size);
+    char *trust = malloc(bundle_size ? bundle_size : 1);
     char greeting[6];
     if (!contents || !trust)
         die("malloc");
     int file = open_file(path);
     if (read(file, contents, size) != (ssize_t)size)
         die("read");
-    int ca = open_file(bundle);
-    if (read(ca, trust, bundle_size) != (ssize_t)bundle_size)
-        die("read");
+    int ca = -1;
+    if (bundle_size) {
+        make_file(bundle, bundle_size);
+        ca = open_file(bundle);
+        if (read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+            die("read");
+    }
     int sock = connect_sink(&sink);
     send_all(sock, "hello\n", 6);
     if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
         die("recv");
     send_all(sock, contents, size);
     close(sock);
-    close(ca);
+    if (ca >= 0)
+        close(ca);
     close(file);
     free(contents);
     free(trust);
     report("readhandshake", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * readrefused <path> <bytes>: like readhandshake without a bundle, but the first connection is
+ * refused, as a client's first address can be, and the file goes out over the second.
+ */
+static void scenario_read_refused(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, true);
+    make_file(path, size);
+
+    /* A port that was just free on the sink's address, with nothing listening on it now. */
+    struct sockaddr_storage closed = sink.addr;
+    int probe = socket(sink.addr.ss_family, SOCK_STREAM, 0);
+    socklen_t len = sink.addr_len;
+    ((struct sockaddr_in *)&closed)->sin_port = 0;
+    if (probe < 0 || bind(probe, (struct sockaddr *)&closed, len) != 0 ||
+        getsockname(probe, (struct sockaddr *)&closed, &len) != 0)
+        die("bind");
+    close(probe);
+
+    char *contents = malloc(size);
+    char greeting[6];
+    if (!contents)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    int refused = socket(sink.addr.ss_family, SOCK_STREAM, 0);
+    if (refused < 0 || connect(refused, (struct sockaddr *)&closed, len) == 0)
+        die("connect to a closed port");
+    close(refused);
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
+        die("recv");
+    send_all(sock, contents, size);
+    close(sock);
+    close(file);
+    free(contents);
+    report("readrefused", path, size, sink.port);
     stop_sink(&sink);
 }
 
@@ -774,6 +820,8 @@ int main(int argc, char **argv)
         scenario_read_then_recv(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readhandshake") == 0 && argc == 6)
         scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "readrefused") == 0 && argc == 4)
+        scenario_read_refused(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readrecvelsewhere") == 0 && argc == 6)
         scenario_read_recv_elsewhere(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "readbundle") == 0 && argc == 6)
