@@ -5,10 +5,14 @@
 #include "ui/top/once.h"
 #include "ui/top/plain.h"
 
+#include <dirent.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 constexpr uint64_t SECOND = FT_NS_PER_SEC;
 constexpr uint64_t WALL = 1'790'000'000 * FT_NS_PER_SEC;
@@ -851,6 +855,116 @@ static void leaders_lines(void)
     ft_top_model_destroy(m);
 }
 
+static char *read_file(const char *path)
+{
+    FILE *in = fopen(path, "r");
+    char *text = nullptr;
+    size_t size = 0;
+    size_t used = 0;
+
+    if (!in)
+        return nullptr;
+    for (;;) {
+        char *grown = realloc(text, size + 4097);
+        CHECK(grown != nullptr);
+        text = grown;
+        size_t n = fread(text + used, 1, 4096, in);
+        used += n;
+        size += 4096;
+        if (n < 4096)
+            break;
+    }
+    text[used] = '\0';
+    fclose(in);
+    return text;
+}
+
+static size_t entries(const char *dir)
+{
+    DIR *d = opendir(dir);
+    size_t n = 0;
+
+    CHECK(d != nullptr);
+    for (struct dirent *e = d ? readdir(d) : nullptr; e; e = readdir(d))
+        n += strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0;
+    if (d)
+        closedir(d);
+    return n;
+}
+
+static void exports(void)
+{
+    const char *base = getenv("TMPDIR") && getenv("TMPDIR")[0] ? getenv("TMPDIR") : "/tmp";
+    char dir[PATH_MAX];
+    char path[PATH_MAX + 16];
+    struct ft_error err = {0};
+    struct fixture f;
+    size_t rows;
+
+    snprintf(dir, sizeof(dir), "%s/ft-top-once-XXXXXX", base);
+    CHECK(mkdtemp(dir) != nullptr);
+    fixture_init(&f);
+    fill(&f);
+
+    /* JSON, unless the name ends in .csv; the document is written whole and nothing else stays. */
+    snprintf(path, sizeof(path), "%s/rows.json", dir);
+    CHECK(ft_top_export(f.m, FT_TOP_TRANSFERS, path, &rows, &err));
+    CHECK_U64(rows, 3);
+    char *text = read_file(path);
+    CHECK(text && json_ok(text) && has(text, "\"mode\": \"transfers\""));
+    free(text);
+    CHECK_U64(entries(dir), 1);
+
+    snprintf(path, sizeof(path), "%s/rows.csv", dir);
+    CHECK(ft_top_export(f.m, FT_TOP_TRANSFERS, path, &rows, &err));
+    CHECK_U64(rows, 3);
+    text = read_file(path);
+    CHECK(text && starts(text, "id,pid,user,"));
+    free(text);
+    CHECK_U64(entries(dir), 2);
+
+    /* A file that is there is replaced. */
+    snprintf(path, sizeof(path), "%s/rows.json", dir);
+    CHECK(ft_top_export(f.m, FT_TOP_DESTINATIONS, path, &rows, &err));
+    CHECK_U64(rows, 2);
+    text = read_file(path);
+    CHECK(text && json_ok(text) && has(text, "\"mode\": \"destinations\""));
+    CHECK(text && !has(text, "\"transfers\": ["));
+    free(text);
+    CHECK_U64(entries(dir), 2);
+
+    /* A failure says why and leaves no file, whole or half. */
+    snprintf(path, sizeof(path), "%s/missing/rows.json", dir);
+    CHECK(!ft_top_export(f.m, FT_TOP_TRANSFERS, path, &rows, &err));
+    CHECK_U64(rows, 0);
+    CHECK(starts(err.msg, "Cannot write ") && has(err.msg, "No such file or directory"));
+    CHECK_U64(entries(dir), 2);
+    snprintf(path, sizeof(path), "%s/folder", dir);
+    CHECK(mkdir(path, 0700) == 0);
+    CHECK(!ft_top_export(f.m, FT_TOP_TRANSFERS, path, &rows, &err));
+    CHECK_U64(entries(dir), 3);
+    rmdir(path);
+    if (geteuid() != 0) {
+        char locked[PATH_MAX + 8];
+
+        snprintf(locked, sizeof(locked), "%s/locked", dir);
+        CHECK(mkdir(locked, 0500) == 0);
+        snprintf(path, sizeof(path), "%s/locked/rows.json", dir);
+        CHECK(!ft_top_export(f.m, FT_TOP_TRANSFERS, path, &rows, &err));
+        CHECK(has(err.msg, "Permission denied"));
+        CHECK_U64(entries(locked), 0);
+        rmdir(locked);
+    }
+    CHECK(!ft_top_export(f.m, FT_TOP_TRANSFERS, "", &rows, &err));
+
+    snprintf(path, sizeof(path), "%s/rows.json", dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/rows.csv", dir);
+    unlink(path);
+    rmdir(dir);
+    fixture_free(&f);
+}
+
 void test_top_once(void)
 {
     documents();
@@ -862,4 +976,5 @@ void test_top_once(void)
     canvas_lines();
     table_height();
     leaders_lines();
+    exports();
 }
