@@ -98,7 +98,7 @@ struct ft_query {
     uint16_t kind; /* enum ft_query_kind */
     uint16_t sort; /* enum ft_sort */
     uint32_t flags;
-    uint32_t limit; /* 0: no limit */
+    uint32_t limit; /* 0: no limit; for FT_Q_LEADERS, 0: the first 50 */
     uint32_t pid;   /* 0: any */
     uint32_t uid;   /* with FT_QF_HAS_UID */
     uint32_t ns_inum;
