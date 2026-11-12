@@ -709,8 +709,8 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     __u64 strict_whole =
         c->strict_size && c->strict_size < c->strict_read ? c->strict_size : c->strict_read;
     bool strict = c->strict_read && strict_matches(c->wire, strict_whole);
-    /* Of two that match, one far closer to what went is the file. */
-    if (file && strict) {
+    /* Of two that match in a first flight, one far closer to what went is the file. */
+    if (file && strict && flight) {
         __u64 off = distance(c->wire, whole);
         __u64 strict_off = distance(c->wire, strict_whole);
         if (off + CARRY_CLOSER <= strict_off)
