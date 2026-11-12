@@ -143,10 +143,9 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     if (dir == FT_BPF_TX) {
         /* Pages spliced in by sendfile belong to the transfer that sendfile reports. */
         if (tcp)
-            carry_sent(map, (__u64)sk, spliced ? 0 : (__u64)ret, (size_t)ret < asked, now);
+            carry_sent(map, (__u64)sk, spliced ? 0 : (__u64)ret, spliced ? 0 : asked, now);
         if (!spliced)
-            correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret,
-                           (size_t)ret < asked, now);
+            correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret, asked, now);
         return 0;
     }
     if (tcp)
