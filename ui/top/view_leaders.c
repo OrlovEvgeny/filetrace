@@ -508,10 +508,12 @@ static void draw_ranking_header(struct ft_top_draw *d, struct ft_rect header,
         const char *label = i == COL_TREND  ? trend
                             : i == COL_FILE ? key_label(key)
                                             : columns[i].label;
+        struct ft_style cell = s;
         char bracketed[32];
         if (w == 0)
             continue;
         if (i == (int)ranked) {
+            cell = ft_top_on(FT_COLOR_CYAN, true);
             ft_top_bar_row(d, (struct ft_rect){lay->x[i], header.y, w, 1}, FT_COLOR_CYAN);
             if (d->depth == FT_DEPTH_NONE) {
                 snprintf(bracketed, sizeof(bracketed), "[%s]", label);
@@ -519,7 +521,8 @@ static void draw_ranking_header(struct ft_top_draw *d, struct ft_rect header,
             }
         }
         /* The trend is the last column and has no padding of its own. */
-        ft_top_cell(d, lay->x[i], header.y, i == COL_TREND ? w + 1 : w, columns[i].right, s, label);
+        ft_top_cell(d, lay->x[i], header.y, i == COL_TREND ? w + 1 : w, columns[i].right, cell,
+                    label);
         if (sorts[i])
             ft_top_hits_add(d->hits, (struct ft_rect){lay->x[i], header.y, w, 1},
                             FT_TOP_TARGET_HEADER, sorts[i]);
