@@ -221,7 +221,8 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
 }
 
 static int load_with(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
-                     const bool enabled[FT_LINUX_MAX_PROBES], struct bpf_object **out)
+                     const bool enabled[FT_LINUX_MAX_PROBES], struct bpf_object **out,
+                     int *aging_error)
 {
     struct bpf_object *obj = open_object(set, cfg, enabled);
     if (!obj)
@@ -243,6 +244,8 @@ static int load_with(const struct ft_probe_set *set, const struct ft_backend_con
             bpf_object__close(obj);
             return err;
         }
+        if (aging_error)
+            *aging_error = -err;
     }
     *out = obj;
     return 0;
@@ -258,6 +261,28 @@ static void load_lists(struct ft_linux_probes *p, const struct ft_backend_config
         p->listed_files = ft_linux_background_load(files_fd, cfg, &p->listed_truncated);
     if (names_fd >= 0 && suffixes_fd >= 0)
         ft_linux_background_names(names_fd, suffixes_fd, cfg);
+}
+
+/* Attaches the iterator that judges windows nothing touched lately to the windows' map. */
+static void attach_aging(struct ft_linux_probes *p)
+{
+    struct bpf_program *prog = bpf_object__find_program_by_name(p->obj, "ft_carries_aged");
+    struct bpf_map *carries = bpf_object__find_map_by_name(p->obj, "carries");
+    if (!prog || !carries || bpf_program__fd(prog) < 0) {
+        if (!p->aging_error)
+            p->aging_error = ENOENT;
+        return;
+    }
+    union bpf_iter_link_info info = {.map = {.map_fd = (uint32_t)bpf_map__fd(carries)}};
+    /* libbpf refuses options whose padding is not zero. */
+    struct bpf_iter_attach_opts opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.sz = sizeof(opts);
+    opts.link_info = &info;
+    opts.link_info_len = sizeof(info);
+    p->aging = bpf_program__attach_iter(prog, &opts);
+    if (!p->aging)
+        p->aging_error = errno;
 }
 
 static int load_set(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
@@ -298,7 +323,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     }
     btf__free(vmlinux);
 
-    int err = wanted ? load_with(set, cfg, enabled, &out->obj) : -ENOENT;
+    int err = wanted ? load_with(set, cfg, enabled, &out->obj, &out->aging_error) : -ENOENT;
     if (err && wanted > 1) {
         /* One rejected probe fails the whole object: find which ones load. */
         int first_error = err;
@@ -311,7 +336,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
             struct bpf_object *trial = nullptr;
 
             only[i] = true;
-            int trial_err = load_with(set, cfg, only, &trial);
+            int trial_err = load_with(set, cfg, only, &trial, nullptr);
             if (trial_err) {
                 enabled[i] = false;
                 out->status[i] = (struct ft_probe_status){FT_PROBE_LOAD_FAILED, -trial_err};
@@ -320,7 +345,8 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
                 usable++;
             }
         }
-        err = usable ? load_with(set, cfg, enabled, &out->obj) : first_error;
+        out->aging_error = 0;
+        err = usable ? load_with(set, cfg, enabled, &out->obj, &out->aging_error) : first_error;
     }
     if (err) {
         for (size_t i = 0; i < set->count; i++) {
@@ -341,6 +367,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
         else
             out->status[i].state = FT_PROBE_ATTACHED;
     }
+    attach_aging(out);
     return 0;
 }
 
@@ -371,6 +398,8 @@ int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_pr
 
 void ft_linux_probes_unload(struct ft_linux_probes *p)
 {
+    bpf_link__destroy(p->aging);
+    p->aging = nullptr;
     for (size_t i = 0; i < FT_LINUX_MAX_PROBES; i++) {
         bpf_link__destroy(p->links[i]);
         p->links[i] = nullptr;
@@ -425,8 +454,7 @@ struct ft_backend {
     uint64_t last_flush_ns;
     int background_fd;
     uint64_t background_scan_ns; /* when the background map was last brought up to date */
-    struct bpf_link *aging;      /* the iterator that judges windows nothing touched lately */
-    uint64_t aged_ns;
+    uint64_t aged_ns;            /* when the aging iterator last ran */
     struct ft_linux_php *php;
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
@@ -803,7 +831,7 @@ static void report_losses(struct ft_backend *b, const uint64_t totals[FT_BPF_CNT
 /* Runs the aging iterator over the windows, which judges the ones nothing touched lately. */
 static void age_windows(struct ft_backend *b)
 {
-    int fd = bpf_iter_create(bpf_link__fd(b->aging));
+    int fd = bpf_iter_create(bpf_link__fd(b->probes.aging));
     if (fd < 0)
         return;
     char buf[64];
@@ -821,7 +849,7 @@ static void backend_flush(struct ft_backend *b)
     if (queued > b->queue_peak_bytes)
         b->queue_peak_bytes = queued;
     ring_buffer__consume(b->ring);
-    if (b->aging && now_ns - b->aged_ns >= FT_NS_PER_SEC) {
+    if (b->probes.aging && now_ns - b->aged_ns >= FT_NS_PER_SEC) {
         age_windows(b);
         b->aged_ns = now_ns;
     }
@@ -866,7 +894,6 @@ static void backend_close(struct ft_backend *b)
         return;
     ring_buffer__free(b->ring);
     ft_linux_php_close(b->php);
-    bpf_link__destroy(b->aging);
     ft_linux_probes_unload(&b->probes);
     free(b->cpu_values);
     free(b->keys);
@@ -945,22 +972,11 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     b->queue_bytes = bpf_map__max_entries(events);
     b->ncpus = libbpf_num_possible_cpus();
     b->last_flush_ns = ft_clock_mono_ns();
-    struct bpf_program *aging = bpf_object__find_program_by_name(obj, "ft_carries_aged");
-    struct bpf_map *carries = bpf_object__find_map_by_name(obj, "carries");
-    if (aging && carries && bpf_program__fd(aging) >= 0) {
-        union bpf_iter_link_info info = {.map = {.map_fd = (uint32_t)bpf_map__fd(carries)}};
-        /* libbpf refuses options whose padding is not zero. */
-        struct bpf_iter_attach_opts opts;
-        memset(&opts, 0, sizeof(opts));
-        opts.sz = sizeof(opts);
-        opts.link_info = &info;
-        opts.link_info_len = sizeof(info);
-        b->aging = bpf_program__attach_iter(aging, &opts);
-    }
-    if (!b->aging)
+    if (!b->probes.aging)
         ft_log(FT_LOG_WARN,
                "a held transfer is judged only when its connection or thread acts again: "
-               "the kernel refused the iterator that judges it after a quiet while");
+               "the kernel refused the iterator that judges it after a quiet while (%s)",
+               strerror(b->probes.aging_error));
     b->background_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_files"));
     b->background_scan_ns = b->last_flush_ns;
     if (b->probes.listed_truncated)

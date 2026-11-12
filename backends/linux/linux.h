@@ -55,8 +55,10 @@ struct ft_linux_probes {
     struct bpf_object *obj;
     struct bpf_link *links[FT_LINUX_MAX_PROBES];
     struct ft_probe_status status[FT_LINUX_MAX_PROBES];
-    size_t listed_files;   /* files the background and strict lists resolved to */
-    bool listed_truncated; /* more than the kernel table holds */
+    size_t listed_files;    /* files the background and strict lists resolved to */
+    bool listed_truncated;  /* more than the kernel table holds */
+    struct bpf_link *aging; /* the iterator that judges windows nothing touched lately */
+    int aging_error;        /* errno of the kernel's refusal of it */
 };
 
 /* Returns 0 once an object is loaded, even if single probes failed (see status); else -errno. */

@@ -126,11 +126,14 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_back
                               "read(2) and pread(2) on regular files; readv, io_uring and "
                               "memory-mapped reads are not observed");
             ft_capability_set(out, FT_FEAT_READ_SEND, net ? FT_CAP_PARTIAL : FT_CAP_UNAVAILABLE,
-                              "%s",
+                              "%s%s",
                               net ? "a thread that reads a file and then sends is reported "
                                     "as INFERRED; reads and sends on different threads are "
                                     "not associated"
-                                  : "network probes are unavailable");
+                                  : "network probes are unavailable",
+                              net && !p->aging ? "; a held transfer is judged only when its "
+                                                 "connection or thread acts again"
+                                               : "");
         }
 
         problem = group_problem(p, FT_PG_SENDFILE, why, sizeof(why));
@@ -313,6 +316,15 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
                      "loaded; every kernel field they read was found");
 
     size_t failed_groups = report_probes(out, &probes);
+    if (probes.aging) {
+        ft_diagnosis_add_probe(out, FT_CHECK_OK, true, "iter bpf_map_elem", "%s", "");
+    } else {
+        ft_diagnosis_add_probe(out, FT_CHECK_WARN, true, "iter bpf_map_elem",
+                               "%s; a held transfer is judged only when its connection or "
+                               "thread acts again",
+                               error_text(probes.aging_error));
+        failed_groups++;
+    }
     bool have_network = ft_linux_network_attached(&probes);
     bool kprobes = probes.set->kind == FT_PROBES_KPROBE;
 

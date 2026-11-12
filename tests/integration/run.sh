@@ -145,6 +145,8 @@ if [ $doctor -eq 3 ] || [ $doctor -eq 5 ]; then
     exit 77
 fi
 expect "doctor exit code" "$doctor" 0
+expect_match "doctor lists the iterator that judges quiet windows" \
+    "$(grep 'iter bpf_map_elem' "$work/doctor.txt")" '\[OK\] iter bpf_map_elem$'
 
 start_agent || { echo "FAIL: the agent did not start"; exit 1; }
 
