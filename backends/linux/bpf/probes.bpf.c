@@ -21,8 +21,10 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
     if (cfg.file_corr &&
         (newstate == TCP_FIN_WAIT1 || newstate == TCP_LAST_ACK || newstate == TCP_CLOSE)) {
         void *map = agg_map_now();
-        if (map)
+        if (map) {
             carry_close(map, (__u64)sk, CARRY_QUIET, bpf_ktime_get_boot_ns());
+            dial_close(map, (__u64)sk, bpf_ktime_get_boot_ns());
+        }
     }
     if (newstate != TCP_ESTABLISHED && newstate != TCP_SYN_SENT && newstate != TCP_LISTEN &&
         newstate != TCP_CLOSE)
@@ -218,7 +220,6 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
         ts->strict_unreported += (__u64)ret;
         ts->strict_last_ns = now;
         ts->strict_fresh = 1;
-        candidate_read(ts, &ts->strict_file, ts->strict_size, (__u64)ret, now);
         return 0;
     }
     thread_set_file(ts, file, inode, &fk, magic);

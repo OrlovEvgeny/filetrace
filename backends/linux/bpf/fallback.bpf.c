@@ -109,7 +109,6 @@ static __always_inline void read_sync(struct thread_state *ts)
         ts->strict_unreported += delta;
         ts->strict_last_ns = ts->strict_read_ns;
         ts->strict_fresh = 1;
-        candidate_read(ts, &ts->strict_file, ts->strict_size, delta, ts->strict_read_ns);
         return;
     }
     ts->pending += delta;
@@ -192,10 +191,14 @@ static __always_inline void claim_charge(void *map, struct sock *sk, struct sock
     if (t->claim_carried) {
         __u64 sock = (__u64)sk;
         struct carry *c = t->carrying ? bpf_map_lookup_elem(&carries, &sock) : NULL;
-        if (c && c->kind != CARRY_DIALED && c->tid == t->claim_tid)
+        if (c && c->tid == t->claim_tid)
             carry_add(c, take, t->claim_read, t->claim_fresh, t->claim_script, now);
+        if (t->carrying)
+            dial_charged((__u64)sk, &t->claim_file, (__s64)take);
         return;
     }
+    if (t->carrying)
+        dial_charged((__u64)sk, &t->claim_file, (__s64)take);
     struct ft_bpf_agg_key key = {
         .cookie = t->id,
         .tgid = t->claim_tgid,
@@ -353,18 +356,6 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     t->claim_tid = (__u32)ids;
     t->claim_received = ts->received;
     t->claim_script = ts->script;
-    struct carry *w = t->carrying ? dialed_window((__u64)sk) : NULL;
-    if (w) {
-        /* The window judges what goes over the connection; the send only uses the read up. */
-        t->claim_kind = 0;
-        if (w->tid == (__u32)ids) {
-            ts->pending -= size < ts->pending ? size : ts->pending;
-            ts->unreported = 0;
-            ts->fresh = 0;
-            strict_reset(ts);
-        }
-        return 0;
-    }
     if (!ts->pending && !ts->strict_pending) {
         t->claim_kind = 0;
         return 0;
@@ -381,12 +372,17 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
         t->claim_kind = 0;
         return 0;
     }
+    /* A send carries no more than it was given; the rest of the read stays the thread's. */
+    __u64 take = size < ts->pending ? size : ts->pending;
     t->claim_carried = c != NULL;
     t->claim_file = ts->file;
-    t->claim_bytes = ts->pending;
+    t->claim_bytes = take;
     t->claim_read = ts->unreported;
     t->claim_fresh = ts->fresh;
-    foreground_reset(ts);
+    candidate_spent(ts, (__u64)sk);
+    ts->pending -= take;
+    ts->unreported = 0;
+    ts->fresh = 0;
     ts->last_ns = now;
     return 0;
 }
@@ -470,15 +466,21 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         if (!t->tx_tgid && !t->rx_tgid)
             t->tx_tgid = tgid;
         tcp_settle_tx(map, sk, t, now);
-        if (t->carrying && cfg.file_corr)
+        if (t->carrying && cfg.file_corr) {
             carry_close(map, (__u64)sk, CARRY_QUIET, now);
+            dial_close(map, (__u64)sk, now);
+            t->carrying = 0;
+        }
         t->tx_live = 0;
         break;
     case TCP_CLOSE:
         /* A disconnect rewrites both positions right after this. */
         tcp_settle_tx(map, sk, t, now);
-        if (t->carrying && cfg.file_corr)
+        if (t->carrying && cfg.file_corr) {
             carry_close(map, (__u64)sk, CARRY_QUIET, now);
+            dial_close(map, (__u64)sk, now);
+            t->carrying = 0;
+        }
         t->tx_live = 0;
         break;
     case TCP_LISTEN:

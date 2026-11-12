@@ -371,14 +371,15 @@ expect "first flight: second of two files bytes" \
 
 # A file streamed in pieces after the connection, its first piece read before it, goes whole.
 "$workload" readstream "$data/stream-after-dial.bin" 300000 65536 >/dev/null
-# So does one whose first bytes were only looked at before the connection.
+# So does one whose first bytes were only looked at before the connection, with the request
+# head sent after that look counted as the file's, as any send after a read is.
 "$workload" readsniff "$data/stream-sniffed.bin" 1048576 512 >/dev/null
 # Sent to two servers over connections opened after the read, it is reported for both; sent to
 # one while another connection makes small requests, once.
 "$workload" fanout "$data/fanout.bin" 300000 >/dev/null
 "$workload" readchatty "$data/chatty.bin" 300000 >/dev/null
-# Of two large files read before a connection, the one it took whole is reported; of two of the
-# same size, neither is.
+# Of two large files read before a connection that replies before the upload, the one it took
+# whole is reported; of two of the same size, neither is.
 "$workload" readtwo "$data/two-a.bin" 300000 "$data/two-b.bin" 200000 1 >/dev/null
 "$workload" readtwo "$data/two-c.bin" 300000 "$data/two-d.bin" 200000 2 >/dev/null
 "$workload" readtwo "$data/two-e.bin" 300000 "$data/two-f.bin" 300000 1 >/dev/null
@@ -386,7 +387,8 @@ expect "first flight: second of two files bytes" \
 "$workload" readreplythread "$data/reply-thread.bin" 300000 >/dev/null
 # A file read and then sent with sendfile is reported once, as sendfile.
 "$workload" readsendfile "$data/read-then-sendfile.bin" 300000 >/dev/null
-# A line over one connection and a body of another size over a second carry neither.
+# A line over one connection, and a body of another size over a second after its reply, carry
+# neither.
 "$workload" twodials "$data/two-dials.bin" 300000 >/dev/null
 # A small file read before a plain connection that sends it whole and closes is reported.
 "$workload" readsmall "$data/small-before.json" 20000 >/dev/null
@@ -400,7 +402,7 @@ mkdir -p "$data/etc/php/8.4/cli"
 "$workload" readlater "$data/later-large.bin" 300000 "$data/later-small.bin" 20000 3 3000 \
     >/dev/null
 settle
-for pair in stream-after-dial:300000 stream-sniffed:1048576 chatty:300000 two-a:300000 two-d:200000 \
+for pair in stream-after-dial:300000 stream-sniffed:1048364 chatty:300000 two-a:300000 two-d:200000 \
     reply-thread:300000 small-before:20000 side-bg-small:20000; do
     name=${pair%%:*}
     path=$(ls "$data/$name".* | head -1)
@@ -481,6 +483,48 @@ for shape in before after heard; do
             "$(ft files --path "$data/plain-$shape-$size.ini" --format csv | rows)" 0
     done
 done
+
+# Request and reply traffic over a connection opened after a large read is not the file, even
+# when it adds up to the file's size.
+"$workload" exchange "$data/burst.bin" 300000 100 3100 >/dev/null
+# A connection opened after a large read still reports what the thread reads and sends over it
+# later, in a reply or as a stream it never hears an answer to.
+"$workload" readbigsmall "$data/big.sqlite" 10000000 "$data/after-big.json" 20000 >/dev/null
+"$workload" readstreamother "$data/before-stream.bin" 300000 "$data/shipped.log" 500000 >/dev/null
+# Parts of one file over fresh connections, and two files of one size one after another.
+"$workload" parts "$data/parts.bin" 3000000 3 >/dev/null
+"$workload" insequence "$data/seq-a.bin" "$data/seq-b.bin" 300000 >/dev/null
+# A file read earlier with one of the same size read since, a file that already went over another
+# connection, and a connection first used long after its dial carry nothing.
+"$workload" stalesame "$data/stale-a.bin" "$data/stale-b.bin" 300000 3 >/dev/null
+"$workload" spentthen "$data/spent.bin" 300000 20000 >/dev/null
+"$workload" dialidle "$data/idle-dial.bin" 300000 3 >/dev/null
+settle
+for name in burst.bin big.sqlite before-stream.bin stale-a.bin stale-b.bin idle-dial.bin; do
+    expect "dialed window, $name: not reported" \
+        "$(ft files --path "$data/$name" --format csv | rows)" 0
+done
+for pair in after-big.json:20000 shipped.log:500000 seq-a.bin:300000 seq-b.bin:300000 \
+    spent.bin:20000; do
+    csv=$(ft files --path "$data/${pair%%:*}" --format csv)
+    expect "dialed window, ${pair%%:*}: rows" "$(printf '%s\n' "$csv" | rows)" 1
+    expect "dialed window, ${pair%%:*}: bytes" \
+        "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "${pair#*:}"
+done
+csv=$(ft files --path "$data/parts.bin" --format csv)
+expect "dialed window, parts: rows" "$(printf '%s\n' "$csv" | rows)" 3
+expect "dialed window, parts: bytes" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent | sort -u | tr -d '\n')" 1000000
+
+# A module a runtime reads whole as it starts is no candidate for its first connection: neither
+# a body of its size nor a small file read after the connection is taken for it.
+"$workload" readmemory "$data/acorn.js" 217747 217747 >/dev/null
+"$workload" readbigsmall "$data/undici-fetch.js" 627423 "$data/after-module.json" 20000 >/dev/null
+settle
+expect "module read at start: not reported for a body of its size" \
+    "$(ft files --path "$data/acorn.js" --format csv | rows)" 0
+expect "module read at start: small file sent after the connection bytes" \
+    "$(ft files --path "$data/after-module.json" --format csv | column transfer.bytes_sent)" 20000
 
 # Below 64 KB, a file read before its connection is not told from a request of its size.
 "$workload" readhandshake "$data/upload-small.json" 20000 "$data/no-bundle.crt" 0 >/dev/null
@@ -982,7 +1026,7 @@ start_agent --config "$work/background.toml" ||
 "$workload" readlittle "$data/bg-gai.conf" 4000 >/dev/null
 "$workload" readsend "$data/bg-whole.bin" 4096 65536 >/dev/null
 "$workload" readsend "$data/strict-whole.bin" 4096 65536 >/dev/null
-"$workload" upload /etc/passwd 65536 >/dev/null
+passwd_report=$("$workload" upload /etc/passwd 65536)
 settle
 csv=$(ft files --path "$data/up-bundle.bin" --format csv)
 expect "background: file read before the bundle reported" "$(printf '%s\n' "$csv" | rows)" 1
@@ -1000,7 +1044,7 @@ expect "background: whole read not reported" \
 csv=$(ft files --path "$data/strict-whole.bin" --format csv)
 expect "strict: whole read reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "strict: whole read bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 4096
-csv=$(ft files --path /etc/passwd --format csv)
+csv=$(ft files --path /etc/passwd --pid "$(field "$passwd_report" pid)" --format csv)
 expect "strict: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "strict: /etc/passwd upload bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "$(stat -L -c %s /etc/passwd)"
