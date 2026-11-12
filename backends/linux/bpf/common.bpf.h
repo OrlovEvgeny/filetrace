@@ -132,7 +132,6 @@ struct thread_state {
     __u64 file_size;    /* the file's size at its last read */
     __u64 carry_sock;   /* the socket of the window of the connection the thread dialed last */
     __u64 episode_sock; /* the socket of the thread's window of a reply on a heard connection */
-    __u64 flight_sock;  /* the socket of the thread's window of a first flight */
     struct candidate cands[CARRY_CANDIDATES];
     __u64 file_read;     /* of the file since what the thread read before was all taken */
     __u64 datagrams;     /* what datagrams took of a held strict file */
@@ -703,11 +702,14 @@ static __always_inline bool held_matches(__u64 wire, __u64 whole)
     return volume_within(wire, whole, head + whole / 128);
 }
 
-/* What the window must take of its file: what the thread read of it, up to its size. */
+/*
+ * What the window must take of its file: what the thread read of it, in whole copies of the file
+ * once it read more than one.
+ */
 static __always_inline __u64 carry_whole(const struct carry *c)
 {
     __u64 read = c->read > c->read_seen ? c->read : c->read_seen;
-    return c->size && c->size < read ? c->size : read;
+    return c->size && c->size < read ? read - read % c->size : read;
 }
 
 /*
@@ -1185,8 +1187,6 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
             carry_episode_end(ts, now, CARRY_NEXT);
             ts->episode_sock = sk;
         }
-        if (c->kind == CARRY_FLIGHT)
-            ts->flight_sock = sk;
         return c;
     }
     if (c)
@@ -1226,8 +1226,6 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     c->kind = kind;
     if (kind == CARRY_EPISODE)
         ts->episode_sock = sk;
-    else
-        ts->flight_sock = sk;
     return c;
 }
 
@@ -1311,8 +1309,8 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
 }
 
 /*
- * A window that took all the thread read of a file ends when the thread reads the file again. A
- * small first flight its peer answered was a hello.
+ * A reply that took all the thread read of a file ends when the thread reads the file again. A
+ * first flight goes on: its next send decides, on its own socket or another.
  */
 static __always_inline void file_again(struct thread_state *ts, const struct file_key *fk,
                                        __u64 now)
@@ -1321,14 +1319,6 @@ static __always_inline void file_again(struct thread_state *ts, const struct fil
         return;
     if (ts->episode_sock)
         carry_episode_end(ts, now, CARRY_NEXT);
-    __u64 sk = ts->flight_sock;
-    ts->flight_sock = 0;
-    struct carry *c = sk ? carry_get(sk) : NULL;
-    void *map = agg_map_now();
-    if (!c || !map || c->kind != CARRY_FLIGHT || c->tid != (__u32)bpf_get_current_pid_tgid())
-        return;
-    carry_close(map, sk, sock_heard(sk) && c->wire < CARRY_FLIGHT_MAX ? CARRY_AGAIN : CARRY_NEXT,
-                now);
 }
 
 /* Pseudo filesystems whose regular files are kernel state, not stored data. */
