@@ -54,7 +54,8 @@ message Process {
   string command_line = 5;
   string working_directory = 6;
   // What an interpreter runs: the path of its script, "module:<name>" for
-  // python -m, or "pool:<name>" for a PHP-FPM worker; empty otherwise.
+  // python -m, or "pool:<name>" for a PHP-FPM worker; empty otherwise. In the
+  // process of a Transfer made during a PHP request, the request's script.
   string script = 7;
 }
 
@@ -126,7 +127,8 @@ message TransferFilter {
   Transport transport = 6;
   Method method = 7;
   Confidence confidence = 8;
-  // Script the process runs, as in Process.script; "*" matches any run of
+  // Script as in Process.script: of the PHP request that made the transfer
+  // when there is one, otherwise of the process. "*" matches any run of
   // characters.
   string script = 9;
 }

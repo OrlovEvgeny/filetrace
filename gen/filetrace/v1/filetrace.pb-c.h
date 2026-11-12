@@ -97,7 +97,8 @@ struct  Filetrace__V1__Process
   char *working_directory;
   /*
    * What an interpreter runs: the path of its script, "module:<name>" for
-   * python -m, or "pool:<name>" for a PHP-FPM worker; empty otherwise.
+   * python -m, or "pool:<name>" for a PHP-FPM worker; empty otherwise. In the
+   * process of a Transfer made during a PHP request, the request's script.
    */
   char *script;
 };
@@ -236,7 +237,8 @@ struct  Filetrace__V1__TransferFilter
   Filetrace__V1__Method method;
   Filetrace__V1__Confidence confidence;
   /*
-   * Script the process runs, as in Process.script; "*" matches any run of
+   * Script as in Process.script: of the PHP request that made the transfer
+   * when there is one, otherwise of the process. "*" matches any run of
    * characters.
    */
   char *script;
