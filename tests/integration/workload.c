@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <limits.h>
 #include <sched.h>
@@ -8,15 +9,19 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/sendfile.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -2594,6 +2599,378 @@ static void scenario_child(const char *path, size_t size)
     printf("scenario=child parent=%d child=%d\n", (int)getpid(), (int)pid);
 }
 
+static uint64_t now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1'000'000;
+}
+
+static const struct {
+    int signo;
+    const char *name;
+} signal_names[] = {{SIGINT, "INT"},   {SIGTERM, "TERM"}, {SIGHUP, "HUP"},   {SIGKILL, "KILL"},
+                    {SIGQUIT, "QUIT"}, {SIGPIPE, "PIPE"}, {SIGABRT, "ABRT"}, {SIGSEGV, "SEGV"}};
+
+static int signal_number(const char *name)
+{
+    for (size_t i = 0; i < sizeof(signal_names) / sizeof(signal_names[0]); i++) {
+        if (strcmp(signal_names[i].name, name) == 0)
+            return signal_names[i].signo;
+    }
+    return 0;
+}
+
+static void describe_status(int status, char *out, size_t size)
+{
+    if (WIFEXITED(status)) {
+        snprintf(out, size, "exit:%d", WEXITSTATUS(status));
+        return;
+    }
+    for (size_t i = 0; i < sizeof(signal_names) / sizeof(signal_names[0]); i++) {
+        if (signal_names[i].signo == WTERMSIG(status)) {
+            snprintf(out, size, "signal:%s", signal_names[i].name);
+            return;
+        }
+    }
+    snprintf(out, size, "signal:%d", WTERMSIG(status));
+}
+
+enum escape_state : uint8_t {
+    TEXT,
+    ESCAPE,
+    CSI,
+    OSC,
+    OSC_ESCAPE,
+    CHARSET
+};
+
+/* Finds a text in what a terminal is sent, across the escape sequences between its letters. */
+struct screen_text {
+    const char *text;
+    size_t len;
+    char tail[256];
+    size_t filled;
+    enum escape_state state;
+    bool seen;
+};
+
+static void screen_feed(struct screen_text *s, const char *buf, size_t n)
+{
+    for (size_t i = 0; i < n && !s->seen; i++) {
+        unsigned char c = (unsigned char)buf[i];
+
+        switch (s->state) {
+        case ESCAPE:
+            s->state = c == '[' ? CSI : c == ']' ? OSC : c >= '(' && c <= '+' ? CHARSET : TEXT;
+            continue;
+        case CSI:
+            if (c >= 0x40 && c <= 0x7e)
+                s->state = TEXT;
+            continue;
+        case OSC:
+            if (c == 0x07)
+                s->state = TEXT;
+            else if (c == 0x1b)
+                s->state = OSC_ESCAPE;
+            continue;
+        case OSC_ESCAPE:
+        case CHARSET:
+            s->state = TEXT;
+            continue;
+        case TEXT:
+            break;
+        }
+        if (c == 0x1b) {
+            s->state = ESCAPE;
+            continue;
+        }
+        if (c < 0x20 || c == 0x7f)
+            continue;
+        if (s->filled == s->len) {
+            memmove(s->tail, s->tail + 1, s->len - 1);
+            s->filled--;
+        }
+        s->tail[s->filled++] = (char)c;
+        s->seen = s->filled == s->len && memcmp(s->tail, s->text, s->len) == 0;
+    }
+}
+
+/* Waits up to 10 ms for output and reads it, so the command never blocks on a full terminal. */
+static void drain(int terminal, struct screen_text *s)
+{
+    struct pollfd p = {.fd = terminal, .events = POLLIN};
+    char buf[4096];
+
+    if (poll(&p, 1, 10) <= 0)
+        return;
+    ssize_t n = read(terminal, buf, sizeof(buf));
+    if (n > 0)
+        screen_feed(s, buf, (size_t)n);
+    else
+        usleep(10 * 1000);
+}
+
+static bool reaped(pid_t pid, int *status)
+{
+    return waitpid(pid, status, WNOHANG) == pid;
+}
+
+struct descendant {
+    pid_t pid;
+    bool gone;
+    bool reaped;
+    int status;
+};
+
+static size_t children_of(pid_t parent, struct descendant *out, size_t max)
+{
+    DIR *dir = opendir("/proc");
+    struct dirent *e;
+    size_t n = 0;
+
+    if (!dir)
+        die("/proc");
+    while ((e = readdir(dir)) && n < max) {
+        char path[300];
+        char stat[512];
+        int ppid;
+        char state;
+
+        if (e->d_name[0] < '0' || e->d_name[0] > '9')
+            continue;
+        snprintf(path, sizeof(path), "/proc/%s/stat", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f)
+            continue;
+        size_t len = fread(stat, 1, sizeof(stat) - 1, f);
+        fclose(f);
+        stat[len] = '\0';
+        /* The command name may hold spaces and parentheses; the fields after it do not. */
+        char *rest = strrchr(stat, ')');
+        if (rest && sscanf(rest + 1, " %c %d", &state, &ppid) == 2 && ppid == parent)
+            out[n++] = (struct descendant){.pid = (pid_t)atoi(e->d_name)};
+    }
+    closedir(dir);
+    return n;
+}
+
+static bool descendant_gone(struct descendant *d)
+{
+    char path[64];
+    char stat[512];
+    char state = 0;
+
+    if (reaped(d->pid, &d->status)) {
+        d->reaped = true;
+        return true;
+    }
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)d->pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return true;
+    size_t len = fread(stat, 1, sizeof(stat) - 1, f);
+    fclose(f);
+    stat[len] = '\0';
+    char *rest = strrchr(stat, ')');
+    return !rest || sscanf(rest + 1, " %c", &state) != 1 || state == 'Z' || state == 'X';
+}
+
+/* Leads a session, as a shell does: a command that led one would hang up its own job dying. */
+static void lead_session(void)
+{
+    if (setsid() >= 0)
+        return;
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid < 0)
+        die("fork");
+    if (pid > 0) {
+        int status;
+        while (waitpid(pid, &status, 0) < 0) {
+            if (errno != EINTR)
+                die("waitpid");
+        }
+        exit(WIFEXITED(status) ? WEXITSTATUS(status) : 1);
+    }
+    if (setsid() < 0)
+        die("setsid");
+}
+
+static int open_terminal(size_t columns, size_t rows)
+{
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+
+    /* A minimal init mounts /dev but no devpts, and the multiplexer needs one at /dev/pts. */
+    if (master < 0) {
+        mkdir("/dev/pts", 0755);
+        if (mount("devpts", "/dev/pts", "devpts", 0, "ptmxmode=0666,mode=0620") == 0)
+            master = posix_openpt(O_RDWR | O_NOCTTY);
+    }
+    if (master < 0)
+        return -1;
+    if (grantpt(master) != 0 || unlockpt(master) != 0)
+        die("unlockpt");
+    struct winsize size = {.ws_row = (unsigned short)rows, .ws_col = (unsigned short)columns};
+    if (ioctl(master, TIOCSWINSZ, &size) != 0)
+        die("TIOCSWINSZ");
+    return master;
+}
+
+[[noreturn]] static void exec_foreground(int master, int terminal, char **command)
+{
+    static const int inherited[] = {SIGINT, SIGQUIT, SIGPIPE, SIGTERM, SIGHUP, SIGTTOU};
+    sigset_t none;
+
+    close(master);
+    setpgid(0, 0);
+    signal(SIGTTOU, SIG_IGN);
+    tcsetpgrp(terminal, getpid());
+    /* A background job starts with INT and QUIT ignored, and this process ignores PIPE. */
+    for (size_t i = 0; i < sizeof(inherited) / sizeof(inherited[0]); i++)
+        signal(inherited[i], SIG_DFL);
+    sigemptyset(&none);
+    sigprocmask(SIG_SETMASK, &none, nullptr);
+    dup2(terminal, STDIN_FILENO);
+    dup2(terminal, STDOUT_FILENO);
+    dup2(terminal, STDERR_FILENO);
+    if (terminal > STDERR_FILENO)
+        close(terminal);
+    setenv("TERM", "xterm-256color", 1);
+    execvp(command[0], command);
+    _exit(127);
+}
+
+/*
+ * pty <columns> <rows> <text> <seconds> <key:c|signal:NAME> -- <command...>: runs the command as
+ * the foreground job of a terminal of that size, waits up to the seconds for the text on its
+ * screen, presses the key or sends the signal, and waits as long again for the command to end.
+ * Then follows its children for up to 5 seconds.
+ */
+static void scenario_pty(size_t columns, size_t rows, const char *text, size_t seconds,
+                         const char *action, char **command)
+{
+    constexpr uint64_t CHILDREN_WINDOW_MS = 5000;
+    constexpr size_t MAX_CHILDREN = 16;
+    struct screen_text screen = {.text = text, .len = strlen(text)};
+    struct descendant children[MAX_CHILDREN];
+    uint64_t limit_ms = (uint64_t)seconds * 1000;
+    int key = -1;
+    int signo = 0;
+
+    if (strncmp(action, "key:", 4) == 0 && strlen(action) == 5)
+        key = (unsigned char)action[4];
+    else if (strncmp(action, "signal:", 7) == 0)
+        signo = signal_number(action + 7);
+    if ((key < 0 && signo == 0) || screen.len == 0 || screen.len > sizeof(screen.tail)) {
+        fprintf(stderr, "pty: invalid action '%s' or text '%s'\n", action, text);
+        exit(2);
+    }
+
+    lead_session();
+    int master = open_terminal(columns, rows);
+    if (master < 0) {
+        printf("scenario=pty pty=none error=%s\n", strerror(errno));
+        return;
+    }
+    /* Kept open, so the terminal never hangs up while the command's children still use it. */
+    int terminal = open(ptsname(master), O_RDWR);
+    if (terminal < 0)
+        die("ptsname");
+    /* Orphans come here rather than to init, so how each one ended can be told. */
+    prctl(PR_SET_CHILD_SUBREAPER, 1);
+
+    uint64_t start = now_ms();
+    pid_t pid = fork();
+    if (pid < 0)
+        die("fork");
+    if (pid == 0)
+        exec_foreground(master, terminal, command);
+    setpgid(pid, pid);
+
+    int status = 0;
+    bool ended = false;
+    while (!screen.seen && !ended && now_ms() - start < limit_ms) {
+        drain(master, &screen);
+        ended = reaped(pid, &status);
+    }
+    bool seen = screen.seen;
+    uint64_t seen_ms = now_ms() - start;
+
+    size_t nchildren = ended ? 0 : children_of(pid, children, MAX_CHILDREN);
+    uint64_t acted = now_ms();
+    if (!ended && key >= 0) {
+        char c = (char)key;
+        if (write(master, &c, 1) != 1)
+            die("write");
+    } else if (!ended) {
+        kill(pid, signo);
+    }
+    bool ended_before = ended;
+    while (!ended && now_ms() - acted < limit_ms) {
+        drain(master, &screen);
+        ended = reaped(pid, &status);
+    }
+    if (!ended) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+    }
+    uint64_t end = now_ms();
+
+    size_t left = nchildren;
+    uint64_t last_gone = end;
+    for (;;) {
+        for (size_t i = 0; i < nchildren; i++) {
+            if (!children[i].gone && descendant_gone(&children[i])) {
+                children[i].gone = true;
+                left--;
+                last_gone = now_ms();
+            }
+        }
+        if (left == 0 || now_ms() - end >= CHILDREN_WINDOW_MS)
+            break;
+        drain(master, &screen);
+    }
+
+    char how[32] = "stuck";
+    if (ended)
+        describe_status(status, how, sizeof(how));
+    printf("scenario=pty seen=%s seen_ms=", seen ? "yes" : "no");
+    if (seen)
+        printf("%llu", (unsigned long long)seen_ms);
+    else
+        printf("-");
+    printf(" action=%s status=%s ended_ms=", action, how);
+    if (ended_before)
+        printf("-");
+    else
+        printf("%llu", (unsigned long long)(end - acted));
+    printf(" children=");
+    for (size_t i = 0; i < nchildren; i++)
+        printf("%s%d", i ? "," : "", (int)children[i].pid);
+    printf("%s child_status=", nchildren ? "" : "-");
+    for (size_t i = 0; i < nchildren; i++) {
+        char child_how[32] = "-";
+        if (!children[i].gone)
+            snprintf(child_how, sizeof(child_how), "alive");
+        else if (children[i].reaped)
+            describe_status(children[i].status, child_how, sizeof(child_how));
+        printf("%s%s", i ? "," : "", child_how);
+    }
+    printf("%s left=%zu gone_ms=", nchildren ? "" : "-", left);
+    if (left)
+        printf("-\n");
+    else
+        printf("%llu\n", (unsigned long long)(last_gone - end));
+
+    for (size_t i = 0; i < nchildren; i++) {
+        if (!children[i].gone) {
+            kill(children[i].pid, SIGKILL);
+            waitpid(children[i].pid, nullptr, 0);
+        }
+    }
+}
+
 static size_t arg_size(const char *text)
 {
     char *end;
@@ -2800,6 +3177,9 @@ int main(int argc, char **argv)
         scenario_partial_send(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "partialsendfile") == 0 && argc == 4)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "pty") == 0 && argc >= 9 && strcmp(argv[7], "--") == 0)
+        scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
+                     argv + 8);
     else {
         fprintf(stderr, "usage: %s <scenario> <arguments>\n", argv[0]);
         return 2;
