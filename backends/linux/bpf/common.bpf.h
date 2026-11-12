@@ -256,8 +256,9 @@ struct {
 /* A first flight this large is no handshake and no request without a body. */
 #define CARRY_FLIGHT_MAX (4 * 1024)
 
+/* Files learned by name come back on their next read, so the least used make room. */
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, FT_BPF_BACKGROUND_MAX);
     __type(key, struct ft_bpf_background_key);
     __type(value, __u8);
