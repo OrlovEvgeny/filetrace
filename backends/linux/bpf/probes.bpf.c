@@ -153,7 +153,7 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
     if (ts) {
         carry_episode_end(ts, now);
-        if (ts->pending || ts->strict_pending)
+        if (ts->pending)
             thread_reset(ts);
     }
     return 0;
@@ -214,20 +214,15 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
     __u8 listed = listed_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
     if (listed == FT_BPF_LISTED_BACKGROUND)
         return 0;
-    if (listed == FT_BPF_LISTED_STRICT) {
-        thread_set_strict(ts, file, inode, &fk, magic);
-        ts->strict_pending += (__u64)ret;
-        ts->strict_unreported += (__u64)ret;
-        ts->strict_last_ns = now;
-        ts->strict_fresh = 1;
-        return 0;
-    }
     thread_set_file(ts, file, inode, &fk, magic);
+    ts->file_strict = listed == FT_BPF_LISTED_STRICT;
     ts->pending += (__u64)ret;
     ts->unreported += (__u64)ret;
+    ts->file_read += (__u64)ret;
     ts->last_ns = now;
     ts->fresh = 1;
-    candidate_read(ts, &ts->file, ts->file_size, (__u64)ret, now);
+    if (!ts->file_strict)
+        candidate_read(ts, &ts->file, ts->file_size, (__u64)ret, now);
     return 0;
 }
 

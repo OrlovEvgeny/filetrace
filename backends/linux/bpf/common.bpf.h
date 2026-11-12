@@ -107,9 +107,8 @@ struct candidate {
 #define CARRY_CANDIDATES 4
 
 /*
- * The file a thread read most recently and how much of it is unsent, apart from it the strict
- * file it read last, which a send is taken to carry only when it matches its size, and the
- * large files it read lately, for the connections it opens.
+ * The file a thread read most recently and how much of it is unsent, and the large files it read
+ * lately, for the connections it opens.
  */
 struct thread_state {
     struct file_ref file;
@@ -121,28 +120,21 @@ struct thread_state {
     __u64 read_ns;    /* when the file was last read */
     __u64 rchar_mark; /* the task's read counter up to which reads are accounted */
     __u8 fresh;
-    __u8 reading; /* the read counter has grown only by reads of this file */
-    __u8 strict_fresh;
-    __u8 strict_reading; /* the read counter has grown only by reads of strict_file */
-    __u32 received;      /* receives seen; a claim made before the last one is not handed back */
-    __u32 script;        /* the PHP request running on this thread, as ft_bpf_ev_script names it */
-    __u64 dialed;        /* the TCP socket the thread connected last */
+    __u8 reading;       /* the read counter has grown only by reads of this file */
+    __u8 file_strict;   /* strict_paths names the file */
+    __u8 file_streamed; /* the base rule charged it since it was read */
+    __u8 datagram_file; /* datagrams to datagram_sock carried the file: what follows is charged */
+    __u32 received;     /* receives seen; a claim made before the last one is not handed back */
+    __u32 script;       /* the PHP request running on this thread, as ft_bpf_ev_script names it */
+    __u64 dialed;       /* the TCP socket the thread connected last */
     __u64 dialed_ns;
     __u64 file_size;    /* the file's size at its last read */
     __u64 carry_sock;   /* the socket of the window of the connection the thread dialed last */
     __u64 episode_sock; /* the socket of the thread's window of a reply on a heard connection */
     struct candidate cands[CARRY_CANDIDATES];
-    struct file_ref strict_file;
-    __u64 strict_size;
-    __u32 strict_gen;
-    __u32 strict_forgotten;
-    __u64 strict_pending;
-    __u64 strict_unreported;
-    __u64 strict_last_ns;
-    __u64 strict_read_ns;
-    __u64 strict_datagrams;     /* what datagrams took since the strict file was read */
-    __u64 strict_datagram_sock; /* the cookie of the socket that took them */
-    __u8 strict_datagram_file;  /* they carried the strict file: what follows is charged */
+    __u64 file_read;     /* of the file since the thread turned to it or last heard */
+    __u64 datagrams;     /* what datagrams took of a held strict file */
+    __u64 datagram_sock; /* the cookie of the socket that took them */
 };
 
 struct {
@@ -186,12 +178,10 @@ struct carry {
     __u64 size; /* the file's size */
     __u64 first_ns;
     __u64 last_ns;
-    __u64 wire;                  /* what the connection took while the window was open */
-    __u64 sent;                  /* of that, charged to the file */
-    __u64 read;                  /* of the file, before those charges */
-    struct file_ref strict_file; /* the strict file read before a send, if any */
-    __u64 strict_size;
-    __u64 strict_read;
+    __u64 wire; /* what the connection took while the window was open */
+    __u64 sent; /* of that, charged to the file */
+    __u64 read; /* of the file, before those charges */
+    __u8 held;  /* a strict file read whole, judged by what went at any size */
 };
 
 static struct carry carry_zero;
@@ -252,7 +242,6 @@ struct {
 /* What a reply takes besides a small file it sends: half the file's size, within these. */
 #define CARRY_HEAD_MIN 1024
 #define CARRY_HEAD_MAX (2 * 1024)
-#define CARRY_CLOSER 256 /* how much closer to what went one of two matching files must be */
 /* A first flight this large is no handshake and no request without a body. */
 #define CARRY_FLIGHT_MAX (4 * 1024)
 
@@ -440,6 +429,16 @@ static __always_inline void foreground_reset(struct thread_state *ts)
     ts->pending = 0;
     ts->unreported = 0;
     ts->fresh = 0;
+    ts->file_read = 0;
+    ts->file_streamed = 0;
+    ts->datagrams = 0;
+    ts->datagram_sock = 0;
+    ts->datagram_file = 0;
+}
+
+static __always_inline void thread_reset(struct thread_state *ts)
+{
+    foreground_reset(ts);
 }
 
 /* A thread that sent a file with sendfile read it for something else, as for a checksum. */
@@ -447,22 +446,6 @@ static __always_inline void sendfile_read(struct thread_state *ts, __u64 ino, __
 {
     if (ts && ts->pending && ts->file.ino == ino && ts->file.dev == dev)
         foreground_reset(ts);
-}
-
-static __always_inline void strict_reset(struct thread_state *ts)
-{
-    ts->strict_pending = 0;
-    ts->strict_unreported = 0;
-    ts->strict_fresh = 0;
-    ts->strict_datagrams = 0;
-    ts->strict_datagram_sock = 0;
-    ts->strict_datagram_file = 0;
-}
-
-static __always_inline void thread_reset(struct thread_state *ts)
-{
-    foreground_reset(ts);
-    strict_reset(ts);
 }
 
 /* Which list names the file by its inode, or 0. */
@@ -530,18 +513,25 @@ static __always_inline __u8 listed_by_name(const unsigned char *dname, const str
     return kind;
 }
 
-/* Which list names a file read: by inode, or by name unless it is one the thread is reading. */
+/*
+ * Which list names a file read: by inode, else as the thread already holds it, else by name. A
+ * file the thread is reading keeps its kind when its entry made room for others.
+ */
 static __always_inline __u8 listed_read(const struct thread_state *ts, const unsigned char *dname,
                                         const struct file_key *fk)
 {
     __u8 kind = listed_inode(fk);
     if (kind)
         return kind;
-    if ((ts->file.ino == fk->ino && ts->file.dev == fk->dev && ts->gen == fk->gen) ||
-        (ts->strict_file.ino == fk->ino && ts->strict_file.dev == fk->dev &&
-         ts->strict_gen == fk->gen))
-        return 0;
+    if (ts->file.ino == fk->ino && ts->file.dev == fk->dev && ts->gen == fk->gen)
+        return ts->file_strict ? FT_BPF_LISTED_STRICT : 0;
     return listed_by_name(dname, fk);
+}
+
+/* A strict file read whole that the base rule has not charged: what goes decides, at any size. */
+static __always_inline bool thread_held(const struct thread_state *ts)
+{
+    return ts->file_strict && !ts->file_streamed && ts->file_size && ts->file_read >= ts->file_size;
 }
 
 /* Adds a send of up to *pending bytes of the file to the counters, and takes it off *pending. */
@@ -668,29 +658,20 @@ static __always_inline bool volume_matches(__u64 wire, __u64 whole)
     return volume_within(wire, whole, head);
 }
 
-/*
- * A strict file is sent whole, its head if any gone before it was read: an eighth of its size,
- * within these bounds, so that a request a lookup of it preceded does not pass for it, and the
- * framing of a secure connection on top.
- */
-static __always_inline bool strict_matches(__u64 wire, __u64 whole)
+/* A held strict file: a head as a reply sends besides a small file, and secure framing on top. */
+static __always_inline bool held_matches(__u64 wire, __u64 whole)
 {
-    __u64 head = whole / 8;
-    if (head < 256)
-        head = 256;
-    if (head > 1024)
-        head = 1024;
+    __u64 head = whole / 2;
+    if (head < CARRY_HEAD_MIN)
+        head = CARRY_HEAD_MIN;
+    if (head > CARRY_HEAD_MAX)
+        head = CARRY_HEAD_MAX;
     return volume_within(wire, whole, head + whole / 128);
 }
 
-static __always_inline __u64 distance(__u64 a, __u64 b)
-{
-    return a > b ? a - b : b - a;
-}
-
 /*
- * Reports the file a first flight or a reply carried, or drops both it may have: the file the
- * thread was sending and the strict file it read before. Of the two, only one can be taken.
+ * Reports the file a first flight or a reply carried, or drops it. A first flight is taken by
+ * its charges, unless it holds a strict file read whole; a reply is taken by what went.
  */
 static __always_inline void carry_judge(void *map, __u64 sk, const struct carry *c,
                                         enum carry_end end)
@@ -702,37 +683,19 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
         return;
     }
     __u64 whole = c->size && c->size < c->read ? c->size : c->read;
-    /* Beside a strict file, the thread's file too must match what went. */
-    bool by_volume = !flight || c->strict_read;
+    bool by_volume = !flight || c->held;
     bool file = false;
     if (c->sends && by_volume)
-        file = volume_matches(c->wire, whole);
+        file = c->held ? held_matches(c->wire, whole) : volume_matches(c->wire, whole);
     /* Within a flight, all of a file that went before another one's bytes is a part. */
     else if (c->sends)
         file = end != CARRY_NEXT || (c->read && c->sent >= c->read);
 
-    __u64 strict_whole =
-        c->strict_size && c->strict_size < c->strict_read ? c->strict_size : c->strict_read;
-    bool strict = c->strict_read && strict_matches(c->wire, strict_whole);
-    /* Of two that match in a first flight, one far closer to what went is the file. */
-    if (file && strict && flight) {
-        __u64 off = distance(c->wire, whole);
-        __u64 strict_off = distance(c->wire, strict_whole);
-        if (off + CARRY_CLOSER <= strict_off)
-            strict = false;
-        else if (strict_off + CARRY_CLOSER <= off)
-            file = false;
-    }
-
-    if (file && !strict) {
+    if (file) {
         carry_report(map, c, &c->file, by_volume ? whole : c->sent, c->read);
         return;
     }
     dial_charged(sk, &c->file, -(__s64)c->sent);
-    if (strict && !file) {
-        carry_report(map, c, &c->strict_file, strict_whole, c->strict_read);
-        dial_charged(sk, &c->strict_file, (__s64)strict_whole);
-    }
 }
 
 /* Closes the window on a socket and judges it. */
@@ -851,7 +814,7 @@ static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 n
     }
     if (c->kind == CARRY_FLIGHT && sock_flown(sk, bytes)) {
         /* No hello: a small or a strict file is judged by the whole of what goes. */
-        if (!c->strict_read && !(c->size && c->size < CARRY_FLOOR)) {
+        if (!c->held && !(c->size && c->size < CARRY_FLOOR)) {
             carry_close(map, sk, CARRY_QUIET, now);
             return;
         }
@@ -1071,6 +1034,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         if (foreground && !c->sends) {
             c->file = ts->file;
             c->size = ts->file_size;
+            c->held = thread_held(ts);
         }
         /* A first flight turns into a reply as it is sent, and the reply ends as it is heard. */
         if (c->kind == CARRY_EPISODE && ts->episode_sock != sk) {
@@ -1084,7 +1048,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     __u8 kind;
     if (!sock_heard(sk) && !sock_flown(sk, wire))
         kind = CARRY_FLIGHT;
-    else if (!foreground || (ts->file_size && ts->file_size < CARRY_FLOOR))
+    else if (!foreground || (ts->file_size && ts->file_size < CARRY_FLOOR) || thread_held(ts))
         kind = CARRY_EPISODE;
     else
         return NULL;
@@ -1107,6 +1071,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     if (foreground) {
         c->file = ts->file;
         c->size = ts->file_size;
+        c->held = thread_held(ts);
     }
     c->first_ns = now;
     c->last_ns = now;
@@ -1129,27 +1094,17 @@ static __always_inline void carry_add(struct carry *c, __u64 sent, __u64 read, _
     c->last_ns = now;
 }
 
-/* Lets the window judge the strict file the thread read last as well. */
-static __always_inline void carry_strict(struct carry *c, const struct thread_state *ts)
-{
-    c->strict_file = ts->strict_file;
-    c->strict_size = ts->strict_size;
-    c->strict_read = ts->strict_pending;
-}
-
 /* Lets go of reads the correlation window has passed. */
 static __always_inline void reads_age(struct thread_state *ts, __u64 now)
 {
     if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
         foreground_reset(ts);
-    if (ts->strict_pending && now - ts->strict_last_ns > cfg.corr_window_ns)
-        strict_reset(ts);
 }
 
 /*
  * Attributes a send to the file this thread just read, up to what of it is still unsent. A
- * send in a connection's first flight, or with the read of a small or a strict file, is held in
- * the connection's window.
+ * send in a connection's first flight, with the read of a small file, or with a strict file read
+ * whole, is held in the connection's window.
  */
 static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __u32 tgid,
                                            __u64 sent, __u64 now)
@@ -1158,51 +1113,46 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
     if (!ts)
         return;
     reads_age(ts, now);
-    if (!ts->pending && !ts->strict_pending)
+    if (!ts->pending)
         return;
     bool skip;
-    struct carry *c = carry_window(ts, sk, cookie, tgid, sent, now, ts->pending != 0, &skip);
+    struct carry *c = carry_window(ts, sk, cookie, tgid, sent, now, true, &skip);
     if (c) {
-        if (ts->pending) {
-            __u64 take = sent < ts->pending ? sent : ts->pending;
-            carry_add(c, take, ts->unreported, ts->fresh, ts->script, now);
-            dial_charged(sk, &ts->file, (__s64)take);
-            ts->pending -= take;
-            ts->unreported = 0;
-            ts->fresh = 0;
-            ts->last_ns = now;
-            candidate_spent(ts, sk);
-        }
-        if (ts->strict_pending)
-            carry_strict(c, ts);
+        __u64 take = sent < ts->pending ? sent : ts->pending;
+        carry_add(c, take, ts->unreported, ts->fresh, ts->script, now);
+        dial_charged(sk, &ts->file, (__s64)take);
+        ts->pending -= take;
+        ts->unreported = 0;
+        ts->fresh = 0;
+        ts->last_ns = now;
+        candidate_spent(ts, sk);
         return;
     }
     if (skip)
         return;
-    if (!ts->pending) {
-        /* A datagram socket holds no window: a strict file is sent once datagrams took its size. */
-        if (!sk && ts->strict_pending) {
-            if (ts->strict_datagram_sock != cookie) {
-                ts->strict_datagram_sock = cookie;
-                ts->strict_datagrams = 0;
-                ts->strict_datagram_file = 0;
-            }
-            ts->strict_datagrams += sent;
-            if (ts->strict_datagram_file) {
-                charge_send(map, cookie, tgid, &ts->strict_file, 0, ts->script, sent,
-                            &ts->strict_pending, &ts->strict_unreported, &ts->strict_fresh, now);
-            } else if (strict_matches(ts->strict_datagrams, ts->strict_pending)) {
-                charge_send(map, cookie, tgid, &ts->strict_file, 0, ts->script,
-                            ts->strict_datagrams, &ts->strict_pending, &ts->strict_unreported,
-                            &ts->strict_fresh, now);
-                ts->strict_datagram_file = 1;
-            }
+    /* A datagram socket holds no window: a held strict file is sent once datagrams took its size.
+     */
+    if (!sk && (ts->datagram_file || thread_held(ts))) {
+        if (ts->datagram_sock != cookie) {
+            ts->datagram_sock = cookie;
+            ts->datagrams = 0;
+            ts->datagram_file = 0;
+        }
+        ts->datagrams += sent;
+        if (ts->datagram_file) {
+            charge_send(map, cookie, tgid, &ts->file, 0, ts->script, sent, &ts->pending,
+                        &ts->unreported, &ts->fresh, now);
+        } else if (held_matches(ts->datagrams, ts->pending)) {
+            charge_send(map, cookie, tgid, &ts->file, 0, ts->script, ts->datagrams, &ts->pending,
+                        &ts->unreported, &ts->fresh, now);
+            ts->datagram_file = 1;
         }
         return;
     }
     __u64 take = sent < ts->pending ? sent : ts->pending;
     charge_send(map, cookie, tgid, &ts->file, 0, ts->script, sent, &ts->pending, &ts->unreported,
                 &ts->fresh, now);
+    ts->file_streamed = 1;
     dial_charged(sk, &ts->file, (__s64)take);
     candidate_spent(ts, sk);
     ts->last_ns = now;
@@ -1456,28 +1406,6 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
     }
     if (!ts->file.instance)
         ts->file.instance = file_instance(file, inode, fk, fs_magic);
-}
-
-/* Points the thread's strict slot at the file, starting it over if that is another file. */
-static __always_inline void thread_set_strict(struct thread_state *ts, struct file *file,
-                                              struct inode *inode, const struct file_key *fk,
-                                              __u64 fs_magic)
-{
-    ts->strict_size = FT_READ(inode, i_size);
-    if (ts->strict_file.ino != fk->ino || ts->strict_file.dev != fk->dev ||
-        ts->strict_gen != fk->gen) {
-        ts->strict_file.ino = fk->ino;
-        ts->strict_file.dev = fk->dev;
-        ts->strict_file.instance = 0;
-        ts->strict_gen = fk->gen;
-        strict_reset(ts);
-    }
-    if (ts->strict_forgotten != forgotten_files) {
-        ts->strict_forgotten = forgotten_files;
-        ts->strict_file.instance = 0;
-    }
-    if (!ts->strict_file.instance)
-        ts->strict_file.instance = file_instance(file, inode, fk, fs_magic);
 }
 
 /* A deleted file is gone for good once its inode is destroyed. */

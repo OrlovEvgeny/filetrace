@@ -94,7 +94,7 @@ static __always_inline void tcp_flow_add(void *map, struct sock *sk, __u64 id, _
 /* Credits the thread with what it read since the mark, as counted by the kernel. */
 static __always_inline void read_sync(struct thread_state *ts)
 {
-    if (!ts->reading && !ts->strict_reading)
+    if (!ts->reading)
         return;
 
     struct task_struct *task = (void *)bpf_get_current_task();
@@ -104,18 +104,13 @@ static __always_inline void read_sync(struct thread_state *ts)
     ts->rchar_mark = rchar;
     if (!delta)
         return;
-    if (ts->strict_reading) {
-        ts->strict_pending += delta;
-        ts->strict_unreported += delta;
-        ts->strict_last_ns = ts->strict_read_ns;
-        ts->strict_fresh = 1;
-        return;
-    }
     ts->pending += delta;
     ts->unreported += delta;
+    ts->file_read += delta;
     ts->last_ns = ts->read_ns;
     ts->fresh = 1;
-    candidate_read(ts, &ts->file, ts->file_size, delta, ts->read_ns);
+    if (!ts->file_strict)
+        candidate_read(ts, &ts->file, ts->file_size, delta, ts->read_ns);
 }
 
 static __always_inline struct thread_state *thread_now(bool create)
@@ -139,7 +134,6 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
     if (!tracked) {
         /* What this call reads would be mistaken for bytes of the tracked file. */
         ts->reading = 0;
-        ts->strict_reading = 0;
         return 0;
     }
 
@@ -152,23 +146,14 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
     __u8 listed = listed_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
     if (listed == FT_BPF_LISTED_BACKGROUND) {
         ts->reading = 0;
-        ts->strict_reading = 0;
-        return 0;
-    }
-    if (listed == FT_BPF_LISTED_STRICT) {
-        thread_set_strict(ts, file, inode, &fk, magic);
-        ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
-        ts->strict_read_ns = bpf_ktime_get_boot_ns();
-        ts->strict_reading = 1;
-        ts->reading = 0;
         return 0;
     }
     thread_set_file(ts, file, inode, &fk, magic);
+    ts->file_strict = listed == FT_BPF_LISTED_STRICT;
 
     ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
     ts->read_ns = bpf_ktime_get_boot_ns();
     ts->reading = 1;
-    ts->strict_reading = 0;
     return 0;
 }
 
@@ -358,17 +343,16 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     t->claim_tid = (__u32)ids;
     t->claim_received = ts->received;
     t->claim_script = ts->script;
-    if (!ts->pending && !ts->strict_pending) {
+    if (!ts->pending) {
         t->claim_kind = 0;
         return 0;
     }
     bool skip;
-    struct carry *c =
-        carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, now, ts->pending != 0, &skip);
+    struct carry *c = carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, now, true, &skip);
     if (c) {
         t->carrying = 1;
-        if (ts->strict_pending)
-            carry_strict(c, ts);
+    } else if (!skip) {
+        ts->file_streamed = 1;
     }
     if (!ts->pending || (!c && skip)) {
         t->claim_kind = 0;
@@ -533,7 +517,6 @@ int BPF_KPROBE(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out
     if (ts) {
         read_sync(ts);
         ts->reading = 0;
-        ts->strict_reading = 0;
     }
 
     struct inode *inode = BPF_CORE_READ(in, f_inode);
