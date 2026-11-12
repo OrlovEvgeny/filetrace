@@ -576,6 +576,45 @@ static void tree(void)
     fixture_free(&f);
 }
 
+static void deep_tree(void)
+{
+    constexpr uint32_t N = 20'000;
+    struct fixture f;
+    fixture_init(&f);
+
+    /* Each process the parent of the next, the last one sending. */
+    for (uint32_t pid = 2; pid < N + 2; pid++) {
+        char command[32];
+        snprintf(command, sizeof(command), "job%" PRIu32, pid);
+        process(&f, pid, pid - 1, "job", command, "", 0);
+    }
+    transfer(&f, (struct xfer){.id = 1, .pid = N + 1, .rate = 1000});
+    sample(&f, 0);
+    ft_top_set_tree(f.m, true);
+    ft_top_expand_all(f.m, FT_TOP_PROCESSES);
+
+    bool *listed = calloc(N + 2, sizeof(*listed));
+    size_t processes = 0;
+    size_t transfers = 0;
+    size_t deepest = 0;
+    for (size_t i = 0; i < ft_top_row_count(f.m, FT_TOP_PROCESSES); i++) {
+        const struct ft_top_row *r = row_at(&f, FT_TOP_PROCESSES, i);
+        if (r->depth > deepest)
+            deepest = r->depth;
+        if (r->kind == FT_TOP_ROW_PROCESS && r->process->pid < N + 2 && !listed[r->process->pid]) {
+            listed[r->process->pid] = true;
+            processes++;
+        }
+        transfers += r->kind == FT_TOP_ROW_TRANSFER;
+    }
+    CHECK_U64(processes, N);
+    CHECK_U64(transfers, 1);
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_PROCESSES), N + 1);
+    CHECK(deepest <= 64);
+    free(listed);
+    fixture_free(&f);
+}
+
 static void groups(void)
 {
     struct fixture f;
@@ -829,6 +868,7 @@ void test_top_model(void)
     tags();
     aggregates();
     tree();
+    deep_tree();
     groups();
     search();
     churn();

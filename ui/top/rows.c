@@ -8,7 +8,8 @@ constexpr double HOLD_SHARE = 0.05; /* rows closer than this keep their order */
 constexpr uint32_t POSITION_MASK = 0xffffffu;
 constexpr uint32_t EXPLICIT_COLLAPSED = 1;
 constexpr uint32_t EXPLICIT_EXPANDED = 2;
-constexpr unsigned FOLD_AT = 3; /* siblings sharing a title from which all but the first fold */
+constexpr unsigned FOLD_AT = 3;    /* siblings sharing a title from which all but the first fold */
+constexpr size_t TREE_LEVELS = 64; /* a deeper process shows as a root */
 
 enum key_type : uint8_t {
     BY_VALUE,
@@ -1234,11 +1235,11 @@ static void grow_tree(struct tree *t)
         t->nodes[i].parent = parent->node;
     }
 
-    /* A loop of parents would hide its members; cut it where found. */
+    /* A loop of parents would hide its members, a chain too long would nest too deep: cut both. */
     for (size_t i = 0; i < t->nnodes; i++) {
         uint32_t at = t->nodes[i].parent;
-        for (size_t depth = 0; at != FT_TOP_NONE; depth++) {
-            if (depth > t->nnodes || at == i) {
+        for (size_t depth = 1; at != FT_TOP_NONE; depth++) {
+            if (depth == TREE_LEVELS || at == i) {
                 t->nodes[i].parent = FT_TOP_NONE;
                 break;
             }
