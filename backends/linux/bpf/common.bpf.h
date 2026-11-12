@@ -1032,6 +1032,11 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
             c->file = ts->file;
             c->size = ts->file_size;
         }
+        /* A first flight turns into a reply as it is sent, and the reply ends as it is heard. */
+        if (c->kind == CARRY_EPISODE && ts->episode_sock != sk) {
+            carry_episode_end(ts, now);
+            ts->episode_sock = sk;
+        }
         return c;
     }
     if (c)
