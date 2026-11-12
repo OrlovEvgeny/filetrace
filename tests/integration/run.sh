@@ -516,6 +516,59 @@ expect "dialed window, parts: rows" "$(printf '%s\n' "$csv" | rows)" 3
 expect "dialed window, parts: bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent | sort -u | tr -d '\n')" 1000000
 
+# An S3 client sends a signed head and then the file it read after the connect, around the size
+# at which a first flight is told from a hello. Over a connection that has heard, a file of 1 or
+# 2 KB is not told from a page its template went into with a head of this size.
+for n in 1024 2048 3072 4096 5120 20000 60000; do
+    "$workload" headbody "$data/head-fresh-$n.bin" "$n" fresh >/dev/null
+done
+for n in 3072 4096 5120 20000 60000; do
+    "$workload" headbody "$data/head-heard-$n.bin" "$n" heard >/dev/null
+done
+# Expect: 100-continue: the head is answered before the body goes, and with split the body goes
+# in two runs with an answer between them.
+for n in 65536 300000; do
+    "$workload" headbody "$data/head-continue-$n.bin" "$n" early >/dev/null
+    "$workload" headbody "$data/head-split-$n.bin" "$n" split >/dev/null
+done
+settle
+for n in 1024 2048 3072 4096 5120 20000 60000; do
+    expect "head then body, fresh connection: $n bytes" \
+        "$(ft files --path "$data/head-fresh-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
+done
+for n in 3072 4096 5120 20000 60000; do
+    expect "head then body, heard connection: $n bytes" \
+        "$(ft files --path "$data/head-heard-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
+done
+for n in 65536 300000; do
+    expect "head answered before the body: $n bytes" \
+        "$(ft files --path "$data/head-continue-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
+    expect "body sent in two runs: $n bytes" \
+        "$(ft files --path "$data/head-split-$n.bin" --format csv | column transfer.bytes_sent)" "$n"
+done
+
+# Two PUTs of one file over a keep-alive connection: the second is a reply's; the first only when
+# it is more than a hello could be.
+for n in 3072 4096 5120 20000 300000; do
+    "$workload" twoputs "$data/two-puts-$n.bin" "$n" >/dev/null
+done
+# A PUT followed by small requests over the same connection, all within the correlation window.
+for x in 0 5 30; do
+    "$workload" uploadchat "$data/upload-chat-$x.bin" 300000 "$x" >/dev/null
+done
+settle
+expect "two PUTs: second of a 3072-byte file" \
+    "$(ft files --path "$data/two-puts-3072.bin" --format csv | column transfer.bytes_sent)" 3072
+for n in 4096 5120 20000 300000; do
+    expect "two PUTs: both of a $n-byte file" \
+        "$(ft files --path "$data/two-puts-$n.bin" --format csv | column transfer.bytes_sent)" \
+        "$((n * 2))"
+done
+for x in 0 5 30; do
+    expect "PUT then $x small requests: bytes" \
+        "$(ft files --path "$data/upload-chat-$x.bin" --format csv | column transfer.bytes_sent)" 300000
+done
+
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.
 "$workload" readmemory "$data/acorn.js" 217747 217747 >/dev/null
