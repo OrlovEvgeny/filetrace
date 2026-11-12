@@ -1,0 +1,15 @@
+termbox2 2.7.0, a terminal library in a single C header: cell grid with diffed
+output, truecolor, key and mouse decoding, terminfo with built-in fallbacks.
+
+Upstream: https://github.com/termbox/termbox2
+License:  MIT, at the top of termbox2.h and in packaging/licenses/termbox2.LICENSE
+SHA-256:  0ba7a4bbce31f98b337c0bd6df2758ef5ce4f5907cb0822cd16569ba1b56bc61
+
+termbox2.h is the upstream file, unmodified. ui/tui/termbox.c is its only
+implementation unit and CMakeLists.txt sets its options (TB_OPT_ATTR_W);
+ui/tui/screen.c is the only other file that includes it.
+
+To update: replace termbox2.h with the same file from a newer upstream release,
+change the version and checksum above, check the copyright lines against
+packaging/licenses/termbox2.LICENSE, then build, run the unit tests and use
+filetrace top in a terminal.
