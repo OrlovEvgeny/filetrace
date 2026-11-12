@@ -848,11 +848,11 @@ static __always_inline void dial_close(void *map, __u64 sk, __u64 now)
 }
 
 /*
- * Counts a send into the socket's windows. A send on a first flight's socket judges the flight
- * once the peer has answered, or once it has grown past what a handshake sends. bytes: what the
- * send took, when it is counted here rather than as the socket is settled.
+ * Counts a send into the socket's dialed window, and judges a first flight its connection went
+ * on from after the peer answered, or that the bytes sent before this send took past what a
+ * handshake sends. Before the send is attributed: the send may bring another file.
  */
-static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 asked, __u64 now)
+static __always_inline void carry_send_starts(void *map, __u64 sk, __u64 bytes, __u64 now)
 {
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (d) {
@@ -864,13 +864,13 @@ static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 a
         d->last_ns = now;
     }
     struct carry *c = bpf_map_lookup_elem(&carries, &sk);
-    if (!c)
+    if (!c || c->kind != CARRY_FLIGHT)
         return;
-    if (c->kind == CARRY_FLIGHT && sock_heard(sk)) {
+    if (sock_heard(sk)) {
         carry_close(map, sk, CARRY_AGAIN, now);
         return;
     }
-    if (c->kind == CARRY_FLIGHT && sock_flown(sk, bytes)) {
+    if (sock_flown(sk, bytes)) {
         /* No hello: a small or a strict file is judged by the whole of what goes. */
         if (!c->held && !(c->size && c->size < CARRY_FLOOR)) {
             carry_close(map, sk, CARRY_QUIET, now);
@@ -878,13 +878,25 @@ static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 a
         }
         c->kind = CARRY_EPISODE;
     }
+}
+
+/* Counts what a send took, and what it was given, into its thread's window on the socket. */
+static __always_inline void carry_send_counted(__u64 sk, __u64 bytes, __u64 asked, __u64 now)
+{
+    struct carry *c = bpf_map_lookup_elem(&carries, &sk);
     /* Another thread's bytes on the socket are its own. */
-    if (c->tid != (__u32)bpf_get_current_pid_tgid())
+    if (!c || c->tid != (__u32)bpf_get_current_pid_tgid())
         return;
     __sync_fetch_and_add(&c->wire, bytes);
     if (asked > c->asked)
         c->asked = asked;
     c->last_ns = now;
+}
+
+static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 asked, __u64 now)
+{
+    carry_send_starts(map, sk, bytes, now);
+    carry_send_counted(sk, bytes, asked, now);
 }
 
 /* Counts what the socket took into its windows, as the socket is settled; tid sent it. */
@@ -1076,12 +1088,12 @@ static __always_inline bool carry_dial(struct sock *sk, __u64 cookie, __u64 now)
  * The window a send goes into: the one open on the socket, or one opened when the socket has
  * heard nothing yet, or when the file the thread was sending is small enough to be judged by
  * the reply it went into, or when it is a strict file read whole. NULL with *skip set:
- * nowhere, as no window could be made; NULL otherwise: charged as it is. wire: what the send
- * took, when it is counted here, and asked, what it was given. foreground: the send uses the read
- * of the thread's file.
+ * nowhere, as no window could be made; NULL otherwise: charged as it is. sending: what the
+ * send took, when it is counted here, and asked, what it was given. foreground: the send uses the
+ * read of the thread's file.
  */
 static __always_inline struct carry *carry_window(struct thread_state *ts, __u64 sk, __u64 cookie,
-                                                  __u32 tgid, __u64 wire, __u64 asked, __u64 now,
+                                                  __u32 tgid, __u64 sending, __u64 asked, __u64 now,
                                                   bool foreground, bool *skip)
 {
     __u32 tid = (__u32)bpf_get_current_pid_tgid();
@@ -1110,7 +1122,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     if (c)
         carry_close(map, sk, CARRY_NEXT, now);
     __u8 kind;
-    if (!sock_heard(sk) && !sock_flown(sk, wire))
+    if (!sock_heard(sk) && !sock_flown(sk, sending))
         kind = CARRY_FLIGHT;
     else if (!foreground || (ts->file_size && ts->file_size < CARRY_FLOOR) || thread_held(ts))
         kind = CARRY_EPISODE;
@@ -1139,7 +1151,6 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     }
     c->first_ns = now;
     c->last_ns = now;
-    c->wire = wire;
     c->asked = asked;
     if (kind == CARRY_EPISODE)
         ts->episode_sock = sk;

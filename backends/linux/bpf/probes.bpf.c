@@ -142,10 +142,13 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     bool tcp = proto == IPPROTO_TCP;
     if (dir == FT_BPF_TX) {
         /* Pages spliced in by sendfile belong to the transfer that sendfile reports. */
+        __u64 bytes = spliced ? 0 : (__u64)ret;
         if (tcp)
-            carry_sent(map, (__u64)sk, spliced ? 0 : (__u64)ret, spliced ? 0 : asked, now);
+            carry_send_starts(map, (__u64)sk, bytes, now);
         if (!spliced)
             correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret, asked, now);
+        if (tcp)
+            carry_send_counted((__u64)sk, bytes, spliced ? 0 : asked, now);
         return 0;
     }
     if (tcp)
