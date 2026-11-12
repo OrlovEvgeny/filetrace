@@ -79,10 +79,11 @@ int main(int argc, char **argv)
     const char *program = argc > 0 ? argv[0] : "ft_sim_agent";
 
     for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
         const char *value = nullptr;
         bool ok = true;
 
-        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+        if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
             usage(stdout, program);
             return FT_EXIT_OK;
         } else if (option_value(argc, argv, &i, "--socket", &value)) {
@@ -101,12 +102,12 @@ int main(int argc, char **argv)
         } else if (option_value(argc, argv, &i, "--log-level", &value)) {
             ok = value && ft_log_level_parse(value, &level);
         } else {
-            fprintf(stderr, "%s: unknown option '%s'\n\n", program, argv[i]);
+            fprintf(stderr, "%s: unknown option '%s'\n\n", program, arg);
             usage(stderr, program);
             return FT_EXIT_USAGE;
         }
         if (!ok) {
-            fprintf(stderr, "%s: invalid or missing value for '%s'\n\n", program, argv[i]);
+            fprintf(stderr, "%s: invalid or missing value for '%s'\n\n", program, arg);
             usage(stderr, program);
             return FT_EXIT_USAGE;
         }
