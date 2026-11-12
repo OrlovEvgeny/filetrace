@@ -39,8 +39,10 @@ struct ft_top_source {
     uint64_t frames;
     uint32_t since_totals;
     bool totals_known;
-    bool agent_lost; /* the connection is closed; the next refresh connects again */
-    bool no_leaders; /* the agent does not know the leaders queries */
+    bool agent_lost;        /* the connection is closed; the next refresh connects again */
+    bool no_leaders;        /* the agent does not know the leaders queries */
+    uint64_t serving;       /* the serial of the request being answered */
+    uint64_t events_served; /* the serial of the request whose events were fetched */
 };
 
 void ft_top_request_init(struct ft_top_request *req)
@@ -63,6 +65,7 @@ void ft_top_frame_init(struct ft_top_frame *frame)
     ft_rows_init(&frame->leaders, FT_MSG_ROW_LEADER);
     ft_rows_init(&frame->leader_directories, FT_MSG_ROW_LEADER);
     ft_rows_init(&frame->leader_destinations, FT_MSG_ROW_LEADER);
+    ft_rows_init(&frame->events, FT_MSG_ROW_EVENT);
 }
 
 void ft_top_frame_free(struct ft_top_frame *frame)
@@ -73,6 +76,7 @@ void ft_top_frame_free(struct ft_top_frame *frame)
     ft_rows_free(&frame->leaders);
     ft_rows_free(&frame->leader_directories);
     ft_rows_free(&frame->leader_destinations);
+    ft_rows_free(&frame->events);
 }
 
 /* Empties a frame but keeps its buffers. */
@@ -84,10 +88,12 @@ static void frame_clear(struct ft_top_frame *f)
     ft_rows_clear(&f->leaders);
     ft_rows_clear(&f->leader_directories);
     ft_rows_clear(&f->leader_destinations);
+    ft_rows_clear(&f->events);
     f->code = FT_EXIT_OK;
     f->error[0] = '\0';
     f->has_totals = false;
     f->has_leaders = false;
+    f->has_events = false;
     memset(&f->stats, 0, sizeof(f->stats));
     memset(&f->end, 0, sizeof(f->end));
     memset(&f->leader_summary, 0, sizeof(f->leader_summary));
@@ -291,6 +297,26 @@ static int fetch_leaders(struct ft_top_source *src, struct ft_error *err)
     return ask(src, &(struct sink){.rows = &f->leader_destinations}, nullptr, err);
 }
 
+static int fetch_events(struct ft_top_source *src, struct ft_error *err)
+{
+    struct ft_top_frame *f = &src->work;
+    struct ft_query *q = src->query;
+    const struct ft_top_request *req = &src->current;
+
+    ft_query_init(q, FT_Q_EVENTS);
+    q->limit = FT_TOP_EVENTS_LIMIT;
+    q->pid = req->events_pid;
+    q->remote = req->events_remote;
+    q->remote.port = 0;
+    copy_text(q->path, sizeof(q->path), req->events_path, sizeof(req->events_path));
+    int code = ask(src, &(struct sink){.rows = &f->events}, nullptr, err);
+    if (code == FT_EXIT_OK) {
+        f->has_events = true;
+        src->events_served = src->serving;
+    }
+    return code;
+}
+
 static int fetch(struct ft_top_source *src, struct ft_error *err)
 {
     const struct ft_top_request *req = &src->current;
@@ -310,6 +336,8 @@ static int fetch(struct ft_top_source *src, struct ft_error *err)
 
     if (req->leaders && !src->no_leaders && code == FT_EXIT_OK && !src->stop)
         code = fetch_leaders(src, err);
+    if (req->events && src->events_served != src->serving && code == FT_EXIT_OK && !src->stop)
+        code = fetch_events(src, err);
     return code;
 }
 
@@ -360,6 +388,13 @@ static void publish(struct ft_top_source *src)
         ready->destination_totals = totals;
         work->has_totals = true;
     }
+    /* The events are fetched once per request, so they too outlive the frame that brought them. */
+    if (src->ready_valid && ready->has_events && !work->has_events) {
+        struct ft_rows events = work->events;
+        work->events = ready->events;
+        ready->events = events;
+        work->has_events = true;
+    }
     frame_swap(work, ready);
     src->ready_valid = true;
     if (!src->notified) {
@@ -381,6 +416,7 @@ static uint64_t refresh(struct ft_top_source *src)
     src->current = src->request;
     served = src->request_serial;
     pthread_mutex_unlock(&src->lock);
+    src->serving = served;
 
     frame_clear(f);
     f->serial = ++src->frames;

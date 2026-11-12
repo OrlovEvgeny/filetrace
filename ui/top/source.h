@@ -23,7 +23,15 @@ struct ft_top_request {
     enum ft_sort by;       /* FT_SORT_BYTES, FT_SORT_TRANSFERS or FT_SORT_DESTINATIONS */
     uint32_t limit;        /* rows of the ranking; 0 asks for the agent's default */
     char leader_path[256]; /* glob the ranked paths must match, or "" */
+    /* The latest events of a process, a remote address or a file; fetched once per request. */
+    bool events;
+    uint32_t events_pid;              /* 0: any */
+    struct ft_endpoint events_remote; /* any port; family 0: any */
+    char events_path[FT_PATH_MAX];    /* glob, or "" */
 };
+
+/* How many of the latest events an events request asks for. */
+constexpr uint32_t FT_TOP_EVENTS_LIMIT = 200;
 
 /* Everything one refresh asked for, taken as close together as the agent allows. */
 struct ft_top_frame {
@@ -43,6 +51,9 @@ struct ft_top_frame {
     bool has_leaders;
     struct ft_row_leader_summary leader_summary;
     struct ft_rows leaders, leader_directories, leader_destinations;
+    /* Only on the frame that answers an events request; FT_MSG_ROW_EVENT rows, oldest first. */
+    bool has_events;
+    struct ft_rows events;
 };
 
 /* Fills the request with the defaults of the options, asking for nothing yet. */

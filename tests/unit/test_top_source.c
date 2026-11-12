@@ -17,6 +17,7 @@ constexpr uint32_t FAKE_TRANSFERS = 2;
 constexpr uint32_t FAKE_PROCESSES = 3;
 constexpr uint64_t FAKE_ACTIVE = 42;
 constexpr uint64_t FAKE_LOST = 7;
+constexpr uint32_t FAKE_EVENTS = 3;
 constexpr size_t SEEN_MAX = 64;
 
 struct seen {
@@ -29,6 +30,7 @@ struct seen {
     uint8_t leader_key;
     uint8_t method;
     uint64_t min_bytes;
+    struct ft_endpoint remote;
     char script[32];
     char path[32];
 };
@@ -144,6 +146,20 @@ static void answer(struct fake *fake, int fd, const struct ft_query *q)
         free(row);
         break;
     }
+    case FT_Q_EVENTS: {
+        struct ft_row_event *row = calloc(1, sizeof(*row));
+        if (!row)
+            return;
+        for (uint32_t i = 0; i < FAKE_EVENTS; i++) {
+            row->seq = i + 1;
+            row->pid = q->pid;
+            row->type = FT_REC_FILE_TRANSFER;
+            ft_wire_send(fd, FT_MSG_ROW_EVENT, row, ft_row_event_size(row));
+        }
+        send_end(fd, FAKE_EVENTS, 0);
+        free(row);
+        break;
+    }
     case FT_Q_LEADERS:
         if (atomic_load(&fake->unknown_leaders)) {
             struct ft_msg_error e = {.code = FT_EXIT_USAGE};
@@ -171,7 +187,8 @@ static void note(struct fake *fake, const struct ft_query *q)
                            .window = q->window,
                            .leader_key = q->leader_key,
                            .method = q->method,
-                           .min_bytes = q->min_bytes};
+                           .min_bytes = q->min_bytes,
+                           .remote = q->remote};
         memcpy(s->script, q->script, sizeof(s->script) - 1);
         memcpy(s->path, q->path, sizeof(s->path) - 1);
     }
@@ -588,6 +605,67 @@ static void check_agent_without_leaders(void)
     rig_stop(&rig);
 }
 
+static uint64_t event_seq(const struct ft_top_frame *frame, size_t i)
+{
+    struct ft_row_event *row = malloc(sizeof(*row));
+    uint64_t seq = 0;
+
+    if (row) {
+        ft_rows_get(&frame->events, i, row, sizeof(*row));
+        seq = row->seq;
+    }
+    free(row);
+    return seq;
+}
+
+static void check_events_once_per_request(void)
+{
+    struct rig rig;
+    struct ft_top_request req;
+
+    rig_request(&req);
+    req.delay_ns = 100 * FT_NS_PER_MS;
+    CHECK(rig_start(&rig, &req));
+    CHECK(rig_take(&rig, 2000));
+    CHECK(!rig.frame.has_events);
+
+    req.events = true;
+    req.events_pid = 4242;
+    CHECK(ft_addr_parse("192.0.2.9", &req.events_remote));
+    req.events_remote.port = 443;
+    ft_strlcpy(req.events_path, "/srv/*.pdf", sizeof(req.events_path));
+    uint64_t serial = ft_top_source_request(rig.source, &req);
+    bool answered = false;
+    for (int i = 0; i < 10 && !answered; i++)
+        answered = rig_take(&rig, 2000) && rig.frame.request_serial == serial;
+    CHECK(answered);
+    CHECK(rig.frame.has_events);
+    CHECK_U64(rig.frame.events.count, FAKE_EVENTS);
+    CHECK_U64(event_seq(&rig.frame, 0), 1);
+    CHECK_U64(event_seq(&rig.frame, FAKE_EVENTS - 1), FAKE_EVENTS);
+
+    size_t asked = 0;
+    for (size_t i = 0; i < fake_logged(&rig.fake) && i < SEEN_MAX; i++) {
+        struct seen s = fake_seen(&rig.fake, i);
+        if (s.kind != FT_Q_EVENTS)
+            continue;
+        asked++;
+        CHECK_U64(s.limit, FT_TOP_EVENTS_LIMIT);
+        CHECK_U64(s.pid, 4242);
+        CHECK_U64(s.remote.family, 4);
+        CHECK_U64(s.remote.port, 0);
+        CHECK_STR(s.path, "/srv/*.pdf");
+    }
+    CHECK_U64(asked, 1);
+
+    /* The refreshes that follow under the same request do not ask again. */
+    CHECK(rig_take(&rig, 2000));
+    CHECK_U64(rig.frame.request_serial, serial);
+    CHECK(!rig.frame.has_events);
+    CHECK_U64(rig.frame.events.count, 0);
+    rig_stop(&rig);
+}
+
 static void check_lost_agent(void)
 {
     struct rig rig;
@@ -671,6 +749,7 @@ void test_top_source(void)
     check_totals_survive_a_dropped_frame();
     check_request_refreshes_at_once();
     check_agent_without_leaders();
+    check_events_once_per_request();
     check_lost_agent();
     check_protocol_mismatch();
     check_stop_during_a_wait();
