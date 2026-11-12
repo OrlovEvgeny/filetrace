@@ -17,6 +17,10 @@ add_executable(ft_unit_tests
     unit/test_top_filter.c
     unit/test_tui.c
     unit/test_top_source.c
+    unit/test_top_views.c
+    unit/test_top_panels.c
+    unit/test_top_control.c
+    unit/test_top_once.c
 )
 target_link_libraries(ft_unit_tests PRIVATE ft_cli)
 set_property(SOURCE unit/test_agent.c unit/test_otlp.c

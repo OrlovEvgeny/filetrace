@@ -59,5 +59,9 @@ void test_top_model(void);
 void test_top_filter(void);
 void test_tui(void);
 void test_top_source(void);
+void test_top_views(void);
+void test_top_panels(void);
+void test_top_control(void);
+void test_top_once(void);
 
 #endif
