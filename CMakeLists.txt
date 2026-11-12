@@ -266,6 +266,8 @@ add_library(ft_cli STATIC
 # termbox2 is one header that also holds its implementation; this is its translation unit.
 add_library(ft_termbox STATIC ui/tui/termbox.c)
 target_include_directories(ft_termbox SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/termbox2)
+# The attribute width sets the size of the cell colors, so every includer must see the same one.
+target_compile_definitions(ft_termbox PUBLIC TB_OPT_ATTR_W=32)
 target_compile_options(ft_termbox PRIVATE -w)
 find_package(Threads REQUIRED)
 target_link_libraries(ft_cli PUBLIC ft_agent Threads::Threads PRIVATE ft_termbox)
