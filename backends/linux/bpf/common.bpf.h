@@ -251,6 +251,7 @@ struct {
 /* What a reply takes besides a small file it sends: half the file's size, within these. */
 #define CARRY_HEAD_MIN 1024
 #define CARRY_HEAD_MAX (2 * 1024)
+#define CARRY_CLOSER 256 /* how much closer to what went one of two matching files must be */
 /* A first flight this large is no handshake and no request without a body. */
 #define CARRY_FLIGHT_MAX (4 * 1024)
 
@@ -662,7 +663,8 @@ static __always_inline bool volume_matches(__u64 wire, __u64 whole)
 
 /*
  * A strict file is sent whole, its head if any gone before it was read: an eighth of its size,
- * within these bounds, so that a request a lookup of it preceded does not pass for it.
+ * within these bounds, so that a request a lookup of it preceded does not pass for it, and the
+ * framing of a secure connection on top.
  */
 static __always_inline bool strict_matches(__u64 wire, __u64 whole)
 {
@@ -671,7 +673,12 @@ static __always_inline bool strict_matches(__u64 wire, __u64 whole)
         head = 256;
     if (head > 1024)
         head = 1024;
-    return volume_within(wire, whole, head);
+    return volume_within(wire, whole, head + whole / 128);
+}
+
+static __always_inline __u64 distance(__u64 a, __u64 b)
+{
+    return a > b ? a - b : b - a;
 }
 
 /*
@@ -700,6 +707,15 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     __u64 strict_whole =
         c->strict_size && c->strict_size < c->strict_read ? c->strict_size : c->strict_read;
     bool strict = c->strict_read && strict_matches(c->wire, strict_whole);
+    /* Of two that match, one far closer to what went is the file. */
+    if (file && strict) {
+        __u64 off = distance(c->wire, whole);
+        __u64 strict_off = distance(c->wire, strict_whole);
+        if (off + CARRY_CLOSER <= strict_off)
+            strict = false;
+        else if (strict_off + CARRY_CLOSER <= off)
+            file = false;
+    }
 
     if (file && !strict) {
         carry_report(map, c, &c->file, by_volume ? whole : c->sent, c->read);
