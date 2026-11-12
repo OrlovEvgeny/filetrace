@@ -302,10 +302,16 @@ expect "requests after a read: large file not reported" \
 # when more follows the answer: a CA file a client reads before its TLS hello. A small upload
 # that is all a fresh connection sends is reported once the connection closes.
 "$workload" readhello "$data/internal-ca.pem" 1111 >/dev/null
+"$workload" readhello "$data/helper.py" 1200 >/dev/null
+"$workload" exchange "$data/lookup.py" 2584 1 3000 >/dev/null
 "$workload" smallupload "$data/small-upload.json" 2000 >/dev/null
 settle
 expect "first flight: CA file read before the hello not reported" \
     "$(ft files --path "$data/internal-ca.pem" --format csv | rows)" 0
+expect "first flight: background file read before the hello not reported" \
+    "$(ft files --path "$data/helper.py" --format csv | rows)" 0
+expect "background file read before the connection not reported with its request" \
+    "$(ft files --path "$data/lookup.py" --format csv | rows)" 0
 csv=$(ft files --path "$data/small-upload.json" --format csv)
 expect "first flight: small upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "first flight: small upload bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 2000

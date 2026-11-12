@@ -409,7 +409,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     if (ts->pending) {
         bool skip;
         bool carried =
-            carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, now, &skip) != NULL;
+            carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, now, false, &skip) != NULL;
         if (!carried && skip) {
             t->claim_kind = 0;
             return 0;
@@ -425,7 +425,17 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
         ts->last_ns = now;
         return 0;
     }
-    if (ts->bg_pending && now - ts->bg_last_ns <= cfg.corr_window_ns) {
+    if (ts->bg_pending && now - ts->bg_last_ns <= cfg.corr_window_ns &&
+        !background_dialed(ts, (__u64)sk)) {
+        bool skip;
+        bool carried =
+            carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, now, true, &skip) != NULL;
+        if (!carried && skip) {
+            t->claim_kind = 0;
+            return 0;
+        }
+        t->claim_carried = carried;
+        t->carrying |= carried;
         t->claim_file = ts->bg_file;
         t->claim_bytes = ts->bg_pending;
         t->claim_read = ts->bg_unreported;

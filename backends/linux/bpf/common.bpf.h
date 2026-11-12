@@ -171,6 +171,7 @@ struct carry {
     __u32 sends;
     __u32 alternations;
     __u8 kind;
+    __u8 background; /* the charges are of the thread's background file */
     __u64 first_ns;
     __u64 last_ns;
     __u64 wire;      /* what the connection took while the window was open */
@@ -393,11 +394,11 @@ static __always_inline void thread_reset(struct thread_state *ts)
     background_reset(ts);
 }
 
-/* Notes a connection a thread opens after reading what it may send there. */
+/* Notes the connection a thread opens last, which reads before it may be meant for. */
 static __always_inline void thread_dialed(struct sock *sk, __u64 now)
 {
     struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
-    if (ts && ts->pending) {
+    if (ts) {
         ts->dialed = (__u64)sk;
         ts->dialed_ns = now;
     }
@@ -582,6 +583,7 @@ static __always_inline void carry_report(void *map, const struct carry *c, __u64
         .cookie = c->cookie,
         .tgid = c->tgid,
         .kind = FT_BPF_AGG_READ_SEND,
+        .background = c->background,
         .file = {.ino = c->file.ino, .dev = c->file.dev, .instance = c->file.instance},
     };
     struct ft_bpf_agg_val init = {.first_ns = c->first_ns};
@@ -715,15 +717,18 @@ static __always_inline bool carry_tolerates(struct thread_state *ts, __u64 sk, _
  * Where a send of the thread's read goes: into the window open on the socket for the file, or
  * into a new one when the thread dialed the socket after it began the read, or when the socket
  * has heard nothing yet. NULL with *skip set: nowhere, as the read is carried elsewhere; NULL
- * otherwise: charged as it is. wire: what the send took, when it is counted here.
+ * otherwise: charged as it is. wire: what the send took, when it is counted here. background:
+ * the send is of the thread's background file, which only a first flight holds back.
  */
 static __always_inline struct carry *carry_window(struct thread_state *ts, __u64 sk, __u64 cookie,
-                                                  __u32 tgid, __u64 wire, __u64 now, bool *skip)
+                                                  __u32 tgid, __u64 wire, __u64 now,
+                                                  bool background, bool *skip)
 {
     __u32 tid = (__u32)bpf_get_current_pid_tgid();
     void *map = agg_map_now();
+    const struct file_ref *file = background ? &ts->bg_file : &ts->file;
 
-    *skip = ts->carried;
+    *skip = !background && ts->carried;
     if (!sk || !map)
         return NULL;
     struct carry *c = bpf_map_lookup_elem(&carries, &sk);
@@ -731,20 +736,22 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         *skip = true;
         return NULL;
     }
-    if (c && c->file.ino == ts->file.ino && c->file.dev == ts->file.dev &&
-        c->file.instance == ts->file.instance) {
-        c->size = ts->file_size;
-        if (ts->ep_read > c->file_read)
-            c->file_read = ts->ep_read;
+    if (c && c->background == background && c->file.ino == file->ino && c->file.dev == file->dev &&
+        c->file.instance == file->instance) {
+        if (!background) {
+            c->size = ts->file_size;
+            if (ts->ep_read > c->file_read)
+                c->file_read = ts->ep_read;
+        }
         return c;
     }
     if (c)
         carry_close(map, sk, CARRY_NEXT, now);
 
     __u8 kind;
-    if (carry_dialed(ts, sk) && !(ts->carried && carry_dialed_open(ts)))
+    if (!background && carry_dialed(ts, sk) && !(ts->carried && carry_dialed_open(ts)))
         kind = CARRY_DIALED;
-    else if (!ts->carried && !sock_heard(sk) && !sock_flown(sk))
+    else if (!*skip && !sock_heard(sk) && !sock_flown(sk))
         kind = CARRY_FLIGHT;
     else
         return NULL;
@@ -755,8 +762,9 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         .cookie = cookie,
         .tgid = tgid,
         .tid = tid,
-        .file = ts->file,
+        .file = *file,
         .kind = kind,
+        .background = background,
         .first_ns = now,
         .wire = wire,
         .file_read = ts->ep_read,
@@ -809,6 +817,15 @@ static __always_inline void side_promote(struct thread_state *ts, __u64 now)
     ts->bg_side = 0;
 }
 
+/*
+ * Whether the thread's background file was read before it connected the socket, as resolver
+ * files are read for the lookup before a connection: then it is not what goes over it.
+ */
+static __always_inline bool background_dialed(const struct thread_state *ts, __u64 sk)
+{
+    return sk && ts->dialed == sk && ts->dialed_ns > ts->bg_last_ns;
+}
+
 /* Promotes the thread's side read unless the send goes where its large read was carried. */
 static __always_inline void side_send(struct thread_state *ts, __u64 sk, __u64 now)
 {
@@ -833,7 +850,7 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
     side_send(ts, sk, now);
     if (ts->pending) {
         bool skip;
-        struct carry *c = carry_window(ts, sk, cookie, tgid, sent, now, &skip);
+        struct carry *c = carry_window(ts, sk, cookie, tgid, sent, now, false, &skip);
         if (c) {
             __u64 take = sent < ts->pending ? sent : ts->pending;
             carry_add(c, take, ts->unreported, ts->fresh, ts->script, now);
@@ -854,12 +871,22 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
     }
     if (!ts->bg_pending)
         return;
-    if (now - ts->bg_last_ns > cfg.corr_window_ns) {
+    if (now - ts->bg_last_ns > cfg.corr_window_ns || background_dialed(ts, sk)) {
         background_reset(ts);
         return;
     }
-    charge_send(map, cookie, tgid, &ts->bg_file, 1, ts->script, sent, &ts->bg_pending,
-                &ts->bg_unreported, &ts->bg_fresh, now);
+    bool skip;
+    struct carry *c = carry_window(ts, sk, cookie, tgid, sent, now, true, &skip);
+    if (c) {
+        __u64 take = sent < ts->bg_pending ? sent : ts->bg_pending;
+        carry_add(c, take, ts->bg_unreported, ts->bg_fresh, ts->script, now);
+        ts->bg_pending -= take;
+        ts->bg_unreported = 0;
+        ts->bg_fresh = 0;
+    } else if (!skip) {
+        charge_send(map, cookie, tgid, &ts->bg_file, 1, ts->script, sent, &ts->bg_pending,
+                    &ts->bg_unreported, &ts->bg_fresh, now);
+    }
     ts->bg_last_ns = now;
 }
 
