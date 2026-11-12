@@ -116,6 +116,8 @@ void ft_screen_size(const struct ft_screen *s, int *cols, int *rows);
 
 /* Shows the canvas; only the cells that changed since the last present are written. */
 void ft_screen_present(struct ft_screen *s, const struct ft_canvas *c);
+/* Makes the next present clear the terminal and write every cell. */
+void ft_screen_repaint(struct ft_screen *s);
 /* Shows the terminal cursor at (x, y) from the next present on; x < 0 hides it. */
 void ft_screen_cursor(struct ft_screen *s, int x, int y);
 

@@ -389,6 +389,12 @@ void ft_screen_present(struct ft_screen *s, const struct ft_canvas *c)
     tb_present();
 }
 
+void ft_screen_repaint(struct ft_screen *s)
+{
+    if (s->open && terminal_taken)
+        tb_invalidate();
+}
+
 void ft_screen_cursor(struct ft_screen *s, int x, int y)
 {
     s->cursor_x = x < 0 ? -1 : x;
