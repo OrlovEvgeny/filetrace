@@ -1172,6 +1172,56 @@ static void scenario_upload_chat(const char *path, size_t size, size_t exchanges
 }
 
 /*
+ * sendfilethen <path> <bytes> <answered|unanswered>: reads the file, connects, sends it with
+ * sendfile, with answered hears the answer, then sends as many bytes from memory over the same
+ * connection.
+ */
+static void scenario_sendfile_then(const char *path, size_t size, bool answered)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char *contents = read_whole_file(path, size);
+    int file = open_file(path);
+    int sock = connect_sink(&sink);
+    sendfile_all(sock, file, size);
+    if (answered)
+        hear(sock);
+    memset(contents, 'm', size);
+    send_all(sock, contents, size);
+    hear(sock);
+    close(sock);
+    close(file);
+    free(contents);
+    report("sendfilethen", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * readudp <path> <bytes> <datagram bytes> <datagrams>: connects a datagram socket, reads the file
+ * and sends datagrams of its bytes, as a syslog or TFTP client does.
+ */
+static void scenario_read_udp(const char *path, size_t size, size_t datagram, size_t count)
+{
+    struct sink sink = start_sink(SOCK_DGRAM, false, SINK_DISCARD);
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0)
+        die("socket");
+    if (connect(sock, (struct sockaddr *)&sink.addr, sink.addr_len) != 0)
+        die("connect");
+    char *contents = read_whole_file(path, size);
+    for (size_t i = 0; i < count; i++) {
+        size_t at = i * datagram % size;
+        size_t n = datagram < size - at ? datagram : size - at;
+        if (send(sock, contents + at, n, 0) != (ssize_t)n)
+            die("send");
+    }
+    close(sock);
+    free(contents);
+    report("readudp", path, size, sink.port);
+    usleep(100 * 1000);
+    stop_sink(&sink);
+}
+
+/*
  * readmemory <path> <file bytes> <body bytes>: reads the file, then connects, sends a hello the
  * size of a TLS ClientHello with a post-quantum key share, hears one back and sends the body
  * from memory, as a client that loads a module, a service model or a bundle before it uploads.
@@ -1827,6 +1877,10 @@ int main(int argc, char **argv)
         scenario_read_side_handshake(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "twofiles") == 0 && argc == 5)
         scenario_two_files(argv[2], argv[3], arg_size(argv[4]));
+    else if (strcmp(name, "sendfilethen") == 0 && argc == 5)
+        scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
+    else if (strcmp(name, "readudp") == 0 && argc == 6)
+        scenario_read_udp(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "headbody") == 0 && argc == 5)
         scenario_head_body(argv[2], arg_size(argv[3]), argv[4]);
     else if (strcmp(name, "twoputs") == 0 && argc == 4)
