@@ -131,6 +131,7 @@ struct thread_state {
     __u64 file_size;    /* the file's size at its last read */
     __u64 carry_sock;   /* the socket of the window of the connection the thread dialed last */
     __u64 episode_sock; /* the socket of the thread's window of a reply on a heard connection */
+    __u64 flight_sock;  /* the socket of the thread's window of a first flight */
     struct candidate cands[CARRY_CANDIDATES];
     __u64 file_read;     /* of the file since what the thread read before was all taken */
     __u64 datagrams;     /* what datagrams took of a held strict file */
@@ -761,10 +762,10 @@ static __always_inline void carry_close(void *map, __u64 sk, enum carry_end end,
 }
 
 /*
- * Judges a reply that nothing touched for the correlation window as it stands. The agent runs it
- * over the windows once a second. A first flight waits for its peer, however slow. A judged
- * window stays, judged, until the next visit, so that a probe that found it just before cannot
- * write into an element given to another socket.
+ * Judges a window that nothing touched for the correlation window as it stands. The agent runs it
+ * over the windows once a second. A first flight under what a handshake sends waits for its
+ * peer, however slow. A judged window stays, judged, until the next visit, so that a probe that
+ * found it just before cannot write into an element given to another socket.
  */
 SEC("iter/bpf_map_elem")
 int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
@@ -790,6 +791,8 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
         return 0;
     }
     carry_settle(map, sk, now);
+    if (c->kind != CARRY_EPISODE && c->wire < CARRY_FLIGHT_MAX)
+        return 0;
     if (__sync_val_compare_and_swap(&c->judged, 0, 1))
         return 0;
     carry_judge(map, sk, c, CARRY_AGED);
@@ -1171,6 +1174,8 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
             carry_episode_end(ts, now, CARRY_NEXT);
             ts->episode_sock = sk;
         }
+        if (c->kind == CARRY_FLIGHT)
+            ts->flight_sock = sk;
         return c;
     }
     if (c)
@@ -1210,6 +1215,8 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     c->kind = kind;
     if (kind == CARRY_EPISODE)
         ts->episode_sock = sk;
+    else
+        ts->flight_sock = sk;
     return c;
 }
 
@@ -1292,13 +1299,25 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
     ts->last_ns = now;
 }
 
-/* A reply that took all the thread read of a file ends when the thread reads the file again. */
+/*
+ * A window that took all the thread read of a file ends when the thread reads the file again. A
+ * small first flight its peer answered was a hello.
+ */
 static __always_inline void file_again(struct thread_state *ts, const struct file_key *fk,
                                        __u64 now)
 {
-    if (ts->episode_sock && !ts->pending && ts->file.ino == fk->ino && ts->file.dev == fk->dev &&
-        ts->gen == fk->gen)
+    if (ts->pending || ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen)
+        return;
+    if (ts->episode_sock)
         carry_episode_end(ts, now, CARRY_NEXT);
+    __u64 sk = ts->flight_sock;
+    ts->flight_sock = 0;
+    struct carry *c = sk ? carry_get(sk) : NULL;
+    void *map = agg_map_now();
+    if (!c || !map || c->kind != CARRY_FLIGHT || c->tid != (__u32)bpf_get_current_pid_tgid())
+        return;
+    carry_close(map, sk, sock_heard(sk) && c->wire < CARRY_FLIGHT_MAX ? CARRY_AGAIN : CARRY_NEXT,
+                now);
 }
 
 /* Pseudo filesystems whose regular files are kernel state, not stored data. */
