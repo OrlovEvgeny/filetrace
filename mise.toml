@@ -101,6 +101,10 @@ run = [
 description = "Save every screen of filetrace top as text, HTML and PNG, from the simulated agent"
 run = "tools/dev/top-shots.sh"
 
+[tasks."test:acceptance"]
+description = "Run the lab scenarios against the Linux binaries in a directory, each in a privileged container"
+run = "tests/acceptance/run.sh"
+
 [tasks.dist]
 description = "Build the static Linux binaries into dist/"
 run = "tools/dist/build.sh"
