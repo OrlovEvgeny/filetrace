@@ -1094,7 +1094,185 @@ void ft_top_draw_overlay(struct ft_top_draw *d, struct ft_rect r)
     ft_canvas_clip(d->canvas, clip);
 }
 
+struct help_key {
+    const char *key;
+    const char *text;
+};
+
+struct help_group {
+    const char *title;
+    struct help_key keys[7];
+};
+
+static const struct help_group help_groups[] = {
+    {"Modes",
+     {{"1", "Transfers: one row per active file → socket"},
+      {"2", "Processes: per-process totals, tree with F5"},
+      {"3", "Destinations: per remote address or subnet"},
+      {"4", "Files: per file, live (no window)"},
+      {"L", "Leaders: top files over a time window"},
+      {"F2  Tab", "next mode"}}},
+    {"Navigate",
+     {{"↑ ↓ PgUp PgDn", "move selection"},
+      {"Home End", "first / last row"},
+      {"Space  U", "tag row / untag all"},
+      {"Enter  F8", "inspect the selected row"},
+      {"+ - *", "expand, collapse, expand all"},
+      {"F9  z", "pause updates"}}},
+    {"Sort and group",
+     {{"F6", "sort-by panel"},
+      {"< >", "previous / next sort column"},
+      {"I", "invert sort order"},
+      {"click header", "sort by that column"},
+      {"F7  g", "group by process, script, dest, dir"},
+      {"P B T", "sort by rate, bytes, age"}}},
+    {"Search and filter",
+     {{"F3  /", "incremental search, highlights matches"},
+      {"n  N", "next / previous match"},
+      {"F4  \\", "filter: key:value, ! negates"},
+      {"Ctrl-S", "save filter as preset"},
+      {"u", "filter by user of selected row"},
+      {"Esc", "clear search / filter"}}},
+    {"Leaders",
+     {{"F2  w", "window: 1m 5m 15m 1h 24h 7d"},
+      {"F6  r", "rank by bytes, transfers, dests"},
+      {"F7", "group: file, directory, extension"},
+      {"F9", "freeze the ranking"},
+      {"e", "export current view (JSON / CSV)"},
+      {"Enter", "inspect file: senders and dests"}}},
+    {"Display",
+     {{"n", "resolve destination hostnames"},
+      {"p", "full paths or file names"},
+      {"s", "show / hide SCRIPT column"},
+      {"m", "color by egress or by method"},
+      {"c  C", "copy the path, or the whole row"},
+      {"d", "refresh delay 0.5s … 10s"},
+      {"F10  q", "quit"}}},
+};
+
+static const struct help_key help_commands[] = {
+    {"$ sudo filetrace top", "Transfers mode, sorted by rate"},
+    {"$ sudo filetrace top --mode processes --tree", "start in the process tree"},
+    {"$ sudo filetrace top --sort bytes --filter \"dest:public script:*.php\"",
+     "start sorted and filtered"},
+    {"$ sudo filetrace top --remote 10.0.0.0/8 --script \"*/export.php\"",
+     "same flags as filetrace files"},
+    {"$ sudo filetrace top --leaders --window 1h --by bytes --limit 20", "Leaders screen directly"},
+    {"$ sudo filetrace top --leaders --window 24h --once --json",
+     "one snapshot to stdout, no screen"},
+};
+
+constexpr int HELP_COLUMNS = 3;
+
+static int help_keys(const struct help_group *g)
+{
+    int n = 0;
+    while (n < (int)FT_ARRAY_LEN(g->keys) && g->keys[n].key)
+        n++;
+    return n;
+}
+
+/* The keys of the tallest group in a row of groups. */
+static int help_row_keys(size_t row)
+{
+    int rows = 0;
+    for (size_t g = row * HELP_COLUMNS;
+         g < (row + 1) * HELP_COLUMNS && g < FT_ARRAY_LEN(help_groups); g++) {
+        int n = help_keys(&help_groups[g]);
+        rows = n > rows ? n : rows;
+    }
+    return rows;
+}
+
+/* The keys of a column of groups, as wide as its longest key and a gap of two. */
+static int help_key_width(size_t column)
+{
+    int widest = 0;
+    for (size_t g = column; g < FT_ARRAY_LEN(help_groups); g += HELP_COLUMNS) {
+        for (size_t i = 0; i < FT_ARRAY_LEN(help_groups[g].keys) && help_groups[g].keys[i].key;
+             i++) {
+            int w = ft_text_columns(help_groups[g].keys[i].key);
+            widest = w > widest ? w : widest;
+        }
+    }
+    return widest + 2;
+}
+
+static void help_group(struct ft_top_draw *d, int x, int y, int width, int key_width, int bottom,
+                       const struct help_group *g)
+{
+    ft_top_title_row(d, (struct ft_rect){x, y, width, 1}, FT_COLOR_GREEN, g->title, nullptr);
+    for (size_t i = 0; i < FT_ARRAY_LEN(g->keys) && g->keys[i].key && y + 1 + (int)i < bottom;
+         i++) {
+        int row = y + 1 + (int)i;
+        ft_canvas_text_cut(d->canvas, x, row, key_width - 1, ft_top_fg(FT_COLOR_CYAN, true),
+                           g->keys[i].key, FT_CUT_END);
+        ft_canvas_text_cut(d->canvas, x + key_width, row, width - key_width, plain(FT_COLOR_TEXT),
+                           g->keys[i].text, FT_CUT_END);
+    }
+}
+
 void ft_top_draw_help(struct ft_top_draw *d)
 {
-    (void)d;
+    int cols = ft_canvas_cols(d->canvas);
+    int rows = ft_canvas_rows(d->canvas);
+    int x = 2;
+    int width = cols - 4;
+    int bottom = rows - 1;
+
+    if (width <= 0 || rows <= 0)
+        return;
+    const struct seg title[] = {
+        {"filetrace top", ft_top_fg(FT_COLOR_BRIGHT, true)},
+        {" — live view of files leaving this host: which process, which file, to whom, how fast.",
+         dim()},
+    };
+    draw_segs(d->canvas, x, 1, width, title, FT_ARRAY_LEN(title));
+    const struct seg data[] = {
+        {"Data comes from filetrace-agent. ", dim()},
+        {"EXACT", plain(FT_COLOR_GREEN)},
+        {" = sendfile, the kernel moved file → socket. ", dim()},
+        {"INFERRED", plain(FT_COLOR_AMBER)},
+        {" = a thread read the file, then wrote to a socket.", dim()},
+    };
+    draw_segs(d->canvas, x, 3, width, data, FT_ARRAY_LEN(data));
+
+    int column = (cols - 4 - 2 * 3) / HELP_COLUMNS;
+    int y = 5;
+    for (size_t g = 0; g < FT_ARRAY_LEN(help_groups); g++) {
+        if (g && g % HELP_COLUMNS == 0)
+            y += 1 + help_row_keys(g / HELP_COLUMNS - 1) + 1;
+        if (y < bottom)
+            help_group(d, x + (int)(g % HELP_COLUMNS) * (column + 3), y, column,
+                       help_key_width(g % HELP_COLUMNS), bottom, &help_groups[g]);
+    }
+
+    /* The command lines need a rule, a heading and a free row above the key bar. */
+    int cli = y + 1 + help_row_keys((FT_ARRAY_LEN(help_groups) - 1) / HELP_COLUMNS) + 1;
+    int ncommands = (int)FT_ARRAY_LEN(help_commands);
+    if (cli + 2 + ncommands < bottom) {
+        int command_w = 0;
+        for (size_t i = 0; i < FT_ARRAY_LEN(help_commands); i++) {
+            int w = ft_text_columns(help_commands[i].key);
+            command_w = w > command_w ? w : command_w;
+        }
+        command_w += 3;
+        ft_canvas_repeat(d->canvas, x, cli, width, U'─', plain(FT_COLOR_RULE));
+        ft_canvas_text(d->canvas, x, cli + 1, width, ft_top_on(FT_COLOR_GREEN, true),
+                       " Command line ");
+        for (int i = 0; i < ncommands; i++) {
+            int row = cli + 2 + i;
+            ft_canvas_text_cut(d->canvas, x, row, width, plain(FT_COLOR_BRIGHT),
+                               help_commands[i].key, FT_CUT_END);
+            if (width > command_w)
+                ft_canvas_text_cut(d->canvas, x + command_w, row, width - command_w, dim(),
+                                   help_commands[i].text, FT_CUT_END);
+        }
+    }
+
+    int kx = x + ft_canvas_text(d->canvas, x, bottom, width, plain(FT_COLOR_BRIGHT), "Esc");
+    kx += ft_canvas_text(d->canvas, kx, bottom, x + width - kx, ft_top_on(FT_COLOR_CYAN, false),
+                         "Back   ");
+    ft_top_hits_add_key(d->hits, (struct ft_rect){x, bottom, kx - x, 1}, FT_KEY_ESC, 0);
+    ft_canvas_text(d->canvas, kx + 3, bottom, x + width - kx - 3, dim(), "Press any key to return");
 }
