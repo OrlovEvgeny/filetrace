@@ -88,7 +88,18 @@ struct ft_top_ui {
     int agent_code;        /* FT_EXIT_OK, or why there is no fresh data */
     char agent_error[256]; /* "" when fine */
     uint64_t lag_ns;       /* how late the latest data is beyond one refresh; 0 when on time */
+
+    /* Where the data comes from. */
+    bool session_only;      /* no agent: a collector of this command's own, gone when it ends */
+    bool collector_lost;    /* that collector stopped; there is nothing to connect to again */
+    bool starting;          /* the first answer has been awaited for longer than a moment */
+    uint64_t starting_ns;   /* how long it has been awaited */
+    uint64_t since_wall_ns; /* when the agent or the collector started; 0 until known */
 };
+
+/* The start of a run as the screen shows it: "21:33:08", or "Nov 12 21:33" on another day. */
+void ft_top_since_text(uint64_t since_wall_ns, uint64_t now_wall_ns, bool seconds, char *buf,
+                       size_t size);
 
 /* What a click lands on. */
 enum ft_top_target : uint8_t {

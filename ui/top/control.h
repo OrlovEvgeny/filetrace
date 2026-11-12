@@ -75,6 +75,10 @@ struct ft_top_controller {
     size_t nhistory;
 
     struct ft_top_lines overlay;
+
+    uint64_t start_ns; /* when the first request went out; 0 when no wait for it is shown */
+    bool answered;     /* a frame has come */
+    int exit_code;     /* why the run ends with FT_TOP_DO_QUIT by itself; FT_EXIT_OK for a key */
 };
 
 /* Sets up the state the options ask for; false with err set when the filter does not apply. */
@@ -82,6 +86,9 @@ bool ft_top_control_init(struct ft_top_controller *c, struct ft_top_model *m,
                          const struct ft_top_options *opt, const char *filter,
                          struct ft_error *err);
 void ft_top_control_free(struct ft_top_controller *c);
+
+/* Records where the data comes from and that the first request went out at now_ns. */
+void ft_top_control_start(struct ft_top_controller *c, bool session_only);
 
 /* Applies one input to the state and the model; says what the loop must do next. */
 unsigned ft_top_control(struct ft_top_controller *c, const struct ft_input *in);

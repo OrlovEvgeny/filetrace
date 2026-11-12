@@ -72,7 +72,7 @@ bool ft_top_export(const struct ft_top_model *m, enum ft_top_mode mode, const ch
     }
 
     size_t written = ends_with_csv(path) ? ft_top_write_csv(m, mode, out)
-                                         : ft_top_write_document(m, mode, true, out);
+                                         : ft_top_write_document(m, mode, nullptr, true, out);
     if (fflush(out) != 0 || ferror(out))
         error = errno ? errno : EIO;
     if (fclose(out) != 0 && error == 0)
@@ -274,11 +274,11 @@ static int output_width(void)
 }
 
 /* Writes what the model holds as the options ask: the table, or the document. */
-static bool compose(const struct ft_top_model *m, const struct ft_top_options *opt, bool indent,
-                    FILE *out)
+static bool compose(const struct ft_top_model *m, const struct ft_top_options *opt,
+                    const char *source, bool indent, FILE *out)
 {
     if (opt->json) {
-        ft_top_write_document(m, opt->mode, indent, out);
+        ft_top_write_document(m, opt->mode, source, indent, out);
         return true;
     }
     struct ft_top_ui ui = {
@@ -323,12 +323,12 @@ enum delivery : uint8_t {
 
 /* Writes the output in one piece, so that a reader that goes away never sees half of it. */
 static enum delivery deliver(const struct ft_top_model *m, const struct ft_top_options *opt,
-                             bool indent)
+                             const char *source, bool indent)
 {
     char *text = nullptr;
     size_t size = 0;
     FILE *out = open_memstream(&text, &size);
-    bool composed = out && compose(m, opt, indent, out) && !ferror(out);
+    bool composed = out && compose(m, opt, source, indent, out) && !ferror(out);
 
     if (out && fclose(out) != 0)
         composed = false;
@@ -404,24 +404,24 @@ static int first_sample(struct ft_top_source *src, struct ft_top_model *m,
 
 /* One snapshot, which ends like any other query: with the loss of events as its exit code. */
 static int snapshot(const struct ft_top_model *m, const struct ft_top_options *opt,
-                    const struct ft_top_frame *frame)
+                    const char *source, const struct ft_top_frame *frame)
 {
     struct ft_output out = output_of(opt);
     struct ft_error none = {0};
 
-    if (deliver(m, opt, true) == DELIVERY_FAILED)
+    if (deliver(m, opt, source, true) == DELIVERY_FAILED)
         return FT_EXIT_ERROR;
     return ft_finish_query(FT_EXIT_OK, &none, &frame->end, &out);
 }
 
 /* One document per frame, each on a line, until interrupted or until the reader has gone. */
 static int stream(struct ft_top_source *src, struct ft_top_model *m,
-                  const struct ft_top_options *opt, struct ft_top_frame *frame)
+                  const struct ft_top_options *opt, const char *source, struct ft_top_frame *frame)
 {
     char reported[sizeof(frame->error)] = "";
 
     for (;;) {
-        enum delivery result = deliver(m, opt, false);
+        enum delivery result = deliver(m, opt, source, false);
 
         if (result == READER_GONE)
             return FT_EXIT_OK;
@@ -460,9 +460,10 @@ static int serve(struct ft_session *s, const struct ft_cli *cli, const struct ft
         return err.code != FT_EXIT_OK ? err.code : FT_EXIT_ERROR;
     }
     int code = first_sample(src, m, opt, frame);
+    const char *source = s->collector > 0 ? "session" : "agent";
 
     if (code == FT_EXIT_OK)
-        code = opt->once ? snapshot(m, opt, frame) : stream(src, m, opt, frame);
+        code = opt->once ? snapshot(m, opt, source, frame) : stream(src, m, opt, source, frame);
     ft_top_source_stop(src);
     return code;
 }

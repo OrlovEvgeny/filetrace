@@ -1204,6 +1204,31 @@ static void help_group(struct ft_top_draw *d, int x, int y, int width, int key_w
     }
 }
 
+/* Whether an agent or this screen itself collects, and since when. */
+static void help_source(struct ft_top_draw *d, int x, int y, int width)
+{
+    const struct ft_top_ui *ui = d->ui;
+    char since[32] = "";
+    char text[200];
+
+    if (ui->since_wall_ns)
+        ft_top_since_text(ui->since_wall_ns, ft_top_totals(d->model)->now_wall_ns, true, since,
+                          sizeof(since));
+    if (ui->session_only && since[0])
+        snprintf(text, sizeof(text),
+                 "No agent is running: this screen collects by itself, since %s, and stops when "
+                 "it closes.",
+                 since);
+    else if (ui->session_only)
+        snprintf(text, sizeof(text),
+                 "No agent is running: this screen collects by itself and stops when it closes.");
+    else if (since[0])
+        snprintf(text, sizeof(text), "Data comes from filetrace-agent, running since %s.", since);
+    else
+        snprintf(text, sizeof(text), "Data comes from filetrace-agent.");
+    ft_canvas_text_cut(d->canvas, x, y, width, plain(FT_COLOR_TEXT), text, FT_CUT_END);
+}
+
 void ft_top_draw_help(struct ft_top_draw *d)
 {
     int cols = ft_canvas_cols(d->canvas);
@@ -1220,8 +1245,8 @@ void ft_top_draw_help(struct ft_top_draw *d)
          dim()},
     };
     draw_segs(d->canvas, x, 1, width, title, FT_ARRAY_LEN(title));
+    help_source(d, x, 2, width);
     const struct seg data[] = {
-        {"Data comes from filetrace-agent. ", dim()},
         {"EXACT", plain(FT_COLOR_GREEN)},
         {" = sendfile, the kernel moved file → socket. ", dim()},
         {"INFERRED", plain(FT_COLOR_AMBER)},

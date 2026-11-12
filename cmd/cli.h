@@ -180,10 +180,16 @@ void ft_query_args_help_note(FILE *out);
 struct ft_session {
     struct ft_client *client;
     pid_t collector; /* a collector started for this session, or 0 */
+    bool answered;   /* the collector has answered; it stops by itself when the session closes */
 };
 
 /* With allow_foreground, starts a collector for the session when no agent is reachable. */
 int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_session *s);
+/*
+ * Like ft_session_open with a collector allowed, but silent, and back before the collector has
+ * attached unless it fails at once; its first answer then tells whether it could.
+ */
+int ft_session_start(const struct ft_cli *cli, struct ft_session *s);
 /* Reports why a session's collector could not run, in the words a user acts on; returns code. */
 int ft_session_failed(const struct ft_cli *cli, int code, const char *msg);
 void ft_session_close(struct ft_session *s);

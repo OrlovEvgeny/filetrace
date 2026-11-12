@@ -20,6 +20,7 @@
 constexpr uint64_t MESSAGE_NS = 3 * FT_NS_PER_SEC;
 constexpr uint64_t SKIPPED_NS = 2 * FT_NS_PER_SEC;
 constexpr uint64_t SPINNER_NS = 100 * FT_NS_PER_MS;
+constexpr uint64_t STARTING_NS = 300 * FT_NS_PER_MS; /* a first answer this quick needs no notice */
 constexpr long WHEEL_ROWS = 3;
 
 static const uint64_t delays[] = {
@@ -2127,9 +2128,37 @@ static void hold(struct ft_top_controller *c, struct ft_top_frame *f, bool ranki
     c->held_leaders = c->ui.frozen && ranking;
 }
 
+/* A collector that cannot run says so in its first answer; one that stops later is not back. */
+static unsigned session_answer(struct ft_top_controller *c, const struct ft_top_frame *frame)
+{
+    struct ft_top_ui *ui = &c->ui;
+    bool first = !c->answered;
+
+    c->answered = true;
+    if (ui->starting) {
+        ui->starting = false;
+        ui->starting_ns = 0;
+    }
+    if (frame->code == FT_EXIT_OK) {
+        if (frame->stats.start_wall_ns)
+            ui->since_wall_ns = frame->stats.start_wall_ns;
+        return 0;
+    }
+    if (!ui->session_only)
+        return 0;
+    if (first) {
+        c->exit_code = frame->code;
+        return FT_TOP_DO_QUIT;
+    }
+    if (frame->code == FT_EXIT_NO_AGENT)
+        ui->collector_lost = true;
+    return 0;
+}
+
 unsigned ft_top_control_frame(struct ft_top_controller *c, struct ft_top_frame *frame)
 {
     struct ft_top_ui *ui = &c->ui;
+    unsigned quit = session_answer(c, frame);
 
     ui->agent_code = frame->code;
     ft_strlcpy(ui->agent_error, frame->code == FT_EXIT_OK ? "" : frame->error,
@@ -2142,7 +2171,7 @@ unsigned ft_top_control_frame(struct ft_top_controller *c, struct ft_top_frame *
         ui->waiting = false;
     }
     if (frame->code != FT_EXIT_OK)
-        return finish(c, FT_TOP_DO_REDRAW, true);
+        return finish(c, FT_TOP_DO_REDRAW, true) | quit;
     if (frame->has_events && c->events_serial && frame->request_serial >= c->events_serial &&
         ui->overlay == FT_TOP_OVERLAY_EVENTS) {
         c->events_serial = 0;
@@ -2187,6 +2216,14 @@ unsigned ft_top_control_tick(struct ft_top_controller *c)
         c->spin_ns = now + SPINNER_NS;
         bits |= FT_TOP_DO_REDRAW;
     }
+    if (!c->answered && c->start_ns && now >= c->start_ns + STARTING_NS) {
+        uint64_t waited = now - c->start_ns;
+        if (!ui->starting || waited / SPINNER_NS != ui->starting_ns / SPINNER_NS)
+            bits |= FT_TOP_DO_REDRAW;
+        ui->starting = true;
+        ui->starting_ns = waited;
+        ui->spinner = (unsigned)(waited / SPINNER_NS);
+    }
     if (!ui->paused) {
         if (ft_top_model_tick(c->model, now))
             bits |= FT_TOP_DO_REDRAW;
@@ -2194,7 +2231,7 @@ unsigned ft_top_control_tick(struct ft_top_controller *c)
             c->linger_ns = 0;
             bits |= FT_TOP_DO_REDRAW;
         }
-        if (c->shown_mono_ns && now > c->shown_mono_ns + 2 * ui->delay_ns) {
+        if (c->shown_mono_ns && !ui->collector_lost && now > c->shown_mono_ns + 2 * ui->delay_ns) {
             ui->lag_ns = now - c->shown_mono_ns;
             bits |= FT_TOP_DO_REDRAW;
         }
@@ -2218,7 +2255,11 @@ uint64_t ft_top_control_deadline(const struct ft_top_controller *c)
         sooner(&next, c->ui.waiting ? c->spin_ns : c->await_ns + SPINNER_NS);
     if (!c->ui.paused)
         sooner(&next, c->linger_ns);
-    if (!c->ui.paused && c->shown_mono_ns) {
+    if (!c->answered && c->start_ns)
+        sooner(&next, c->ui.starting
+                          ? c->start_ns + (c->ui.starting_ns / SPINNER_NS + 1) * SPINNER_NS
+                          : c->start_ns + STARTING_NS);
+    if (!c->ui.paused && c->shown_mono_ns && !c->ui.collector_lost) {
         uint64_t stale_ns = c->shown_mono_ns + 2 * c->ui.delay_ns + 1;
         sooner(&next, c->now_ns < stale_ns ? stale_ns : c->now_ns + FT_NS_PER_SEC);
     }
@@ -2270,6 +2311,12 @@ bool ft_top_control_init(struct ft_top_controller *c, struct ft_top_model *m,
         return false;
     ft_top_set_resolve(m, opt->resolve);
     return true;
+}
+
+void ft_top_control_start(struct ft_top_controller *c, bool session_only)
+{
+    c->ui.session_only = session_only;
+    c->start_ns = c->now_ns;
 }
 
 void ft_top_control_free(struct ft_top_controller *c)

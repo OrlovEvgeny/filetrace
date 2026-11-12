@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 constexpr int ROOMY_ROWS = 36; /* from this height the spacer under the head and the rule exist */
 constexpr int PANEL_COLS = 24;
@@ -180,6 +181,30 @@ static bool agent_unreachable(const struct ft_top_ui *ui)
     return ui->agent_code != FT_EXIT_OK || ui->agent_error[0];
 }
 
+void ft_top_since_text(uint64_t since_wall_ns, uint64_t now_wall_ns, bool seconds, char *buf,
+                       size_t size)
+{
+    time_t since = (time_t)(since_wall_ns / FT_NS_PER_SEC);
+    time_t now = (time_t)((now_wall_ns ? now_wall_ns : since_wall_ns) / FT_NS_PER_SEC);
+    struct tm at;
+    struct tm today;
+
+    if (!localtime_r(&since, &at) || !localtime_r(&now, &today)) {
+        ft_strlcpy(buf, "-", size);
+        return;
+    }
+    bool same_day = at.tm_year == today.tm_year && at.tm_yday == today.tm_yday;
+    const char *fmt = !same_day ? "%b %d %H:%M" : seconds ? "%H:%M:%S" : "%H:%M";
+    if (strftime(buf, size, fmt, &at) == 0)
+        ft_strlcpy(buf, "-", size);
+}
+
+static void since_of(const struct ft_top_draw *d, bool seconds, char *buf, size_t size)
+{
+    ft_top_since_text(d->ui->since_wall_ns, ft_top_totals(d->model)->now_wall_ns, seconds, buf,
+                      size);
+}
+
 /* The kernel release up to its third number: "6.8.0" of "6.8.0-45-generic". */
 static void kernel_release(const char *release, char *buf, size_t size)
 {
@@ -337,33 +362,67 @@ static void meters(struct ft_top_draw *d, struct ft_rect r, const struct ft_top_
     }
 }
 
-static void agent_line(const struct ft_top_draw *d, const struct ft_top_totals *t, struct line *l)
+static int line_columns(const struct line *l)
+{
+    int total = 0;
+    for (size_t i = 0; i < l->count; i++)
+        total += ft_text_columns(l->text + l->spans[i].at);
+    return total;
+}
+
+/* Detail 0 is the whole row; 1 leaves out the ring buffer, 2 the start as well. */
+static void agent_line(const struct ft_top_draw *d, const struct ft_top_totals *t, int detail,
+                       struct line *l)
 {
     const struct ft_top_ui *ui = d->ui;
     char word[48];
     char drops[32];
+    char since[32];
 
-    add(l, fg(FT_COLOR_CYAN, true), "Agent: ");
-    if (agent_unreachable(ui)) {
-        add(l, fg(FT_COLOR_RED, false), "unreachable, retrying%s%s",
+    add(l, fg(FT_COLOR_CYAN, true), ui->session_only ? "Session: " : "Agent: ");
+    if (ui->session_only && ui->collector_lost) {
+        add(l, fg(FT_COLOR_RED, false), "collector stopped");
+    } else if (agent_unreachable(ui)) {
+        add(l, fg(FT_COLOR_RED, false), "%s%s%s",
+            ui->session_only ? "no answer" : "unreachable, retrying",
             ui->agent_error[0] ? " · " : "", ui->agent_error);
     } else if (!t->agent) {
-        add(l, fg(FT_COLOR_DIM, false), "waiting for its first answer");
+        add(l, fg(FT_COLOR_DIM, false), "%s",
+            ui->session_only ? "starting" : "waiting for its first answer");
     } else {
         backend_word(t->backend, word, sizeof(word));
         ft_format_count(t->events_dropped, drops, sizeof(drops));
+        add(l, fg(FT_COLOR_TEXT, false), "%s", ui->session_only ? "collecting" : "running");
+        if (detail < 2 && ui->since_wall_ns) {
+            since_of(d, true, since, sizeof(since));
+            add(l, fg(FT_COLOR_TEXT, false), " since %s", since);
+        }
+        add(l, fg(FT_COLOR_TEXT, false), " · %s ", word);
         if (t->degraded)
             add(l, fg(FT_COLOR_RED, false), "degraded");
         else
-            add(l, fg(FT_COLOR_TEXT, false), "running");
-        add(l, fg(FT_COLOR_TEXT, false), t->degraded ? " · %s · ringbuf " : " · %s ok · ringbuf ",
-            word);
-        add(l, fg(FT_COLOR_BRIGHT, false), "%" PRIu32 "%%", t->queue_percent);
+            add(l, fg(FT_COLOR_TEXT, false), "ok");
+        if (detail < 1) {
+            add(l, fg(FT_COLOR_TEXT, false), " · ringbuf ");
+            add(l, fg(FT_COLOR_BRIGHT, false), "%" PRIu32 "%%", t->queue_percent);
+        }
         add(l, fg(FT_COLOR_TEXT, false), " · drops ");
         add(l, fg(t->events_dropped ? FT_COLOR_RED : FT_COLOR_BRIGHT, false), "%s", drops);
     }
     if (ui->lag_ns)
         add(l, fg(FT_COLOR_AMBER, false), " · ui lag %.1fs", (double)ui->lag_ns / 1e9);
+}
+
+/* The agent row in the most detail that fits the width. */
+static void agent_row(const struct ft_top_draw *d, const struct ft_top_totals *t, int width,
+                      struct line *l)
+{
+    for (int detail = 0; detail < 3; detail++) {
+        *l = (struct line){0};
+        agent_line(d, t, detail, l);
+        if (line_columns(l) <= width)
+            return;
+    }
 }
 
 static void host_line(const struct ft_top_draw *d, const struct ft_top_totals *t, struct line *l)
@@ -428,7 +487,7 @@ static void grouping_line(const struct ft_top_draw *d, enum ft_top_mode mode, co
     }
 }
 
-static void summary_lines(const struct ft_top_draw *d, const struct ft_top_totals *t,
+static void summary_lines(const struct ft_top_draw *d, const struct ft_top_totals *t, int width,
                           struct line *lines, size_t *count)
 {
     enum ft_top_mode mode = d->ui->mode;
@@ -465,7 +524,7 @@ static void summary_lines(const struct ft_top_draw *d, const struct ft_top_total
                 ft_top_method_word((uint8_t)m));
         }
         l++;
-        agent_line(d, t, l++);
+        agent_row(d, t, width, l++);
         host_line(d, t, l++);
         struct ft_style dim = fg(FT_COLOR_DIM, false);
         add(l, fg(FT_COLOR_GREEN, false), "■");
@@ -548,7 +607,7 @@ static void draw_head(struct ft_top_draw *d, struct ft_rect r)
     int x = r.x + (r.w + 4) / 2;
 
     meters(d, r, t);
-    summary_lines(d, t, lines, &count);
+    summary_lines(d, t, r.x + r.w - x, lines, &count);
     for (size_t i = 0; i < count && (int)i < r.h; i++)
         draw_line(d->canvas, x, r.y + (int)i, r.x + r.w - x, &lines[i]);
 }
@@ -598,8 +657,11 @@ static bool agent_badge(const struct ft_top_draw *d, struct badge *b)
     char count[32];
 
     b->style = badge_style(d, FT_COLOR_RED);
-    if (agent_unreachable(ui)) {
-        ft_strlcpy(b->text, " agent unreachable ", sizeof(b->text));
+    if (ui->session_only && ui->collector_lost) {
+        ft_strlcpy(b->text, " collector stopped ", sizeof(b->text));
+    } else if (agent_unreachable(ui)) {
+        ft_strlcpy(b->text, ui->session_only ? " no answer " : " agent unreachable ",
+                   sizeof(b->text));
     } else if (ui->lag_ns) {
         b->style = badge_style(d, FT_COLOR_AMBER);
         snprintf(b->text, sizeof(b->text), " ui lag %.1fs ", (double)ui->lag_ns / 1e9);
@@ -615,6 +677,24 @@ static bool agent_badge(const struct ft_top_draw *d, struct badge *b)
     return true;
 }
 
+static const char SESSION_BADGE[] = " SESSION ";
+
+/* The SESSION badge, long when it is the only badge and fits with the text beside it. */
+static void session_badge(const struct ft_top_draw *d, bool alone, int room, struct badge *b)
+{
+    char since[32];
+
+    b->style = badge_style(d, FT_COLOR_BLUE);
+    ft_strlcpy(b->text, SESSION_BADGE, sizeof(b->text));
+    if (!alone || !d->ui->since_wall_ns)
+        return;
+    since_of(d, true, since, sizeof(since));
+    char text[sizeof(b->text)];
+    snprintf(text, sizeof(text), " SESSION since %s ", since);
+    if (ft_text_columns(text) <= room)
+        ft_strlcpy(b->text, text, sizeof(b->text));
+}
+
 static void draw_tab_state(struct ft_top_draw *d, struct ft_rect r, int from)
 {
     const struct ft_top_ui *ui = d->ui;
@@ -623,6 +703,7 @@ static void draw_tab_state(struct ft_top_draw *d, struct ft_rect r, int from)
     struct badge after;
     bool has_after = ui->mode != FT_TOP_TRANSFERS && agent_badge(d, &after);
     char text[160];
+    char agent[64] = "";
 
     if (ui->paused) {
         before[nbefore].style = badge_style(d, FT_COLOR_AMBER);
@@ -639,10 +720,25 @@ static void draw_tab_state(struct ft_top_draw *d, struct ft_rect r, int from)
                  v->total);
     }
     state_text(d, text, sizeof(text));
+    int text_cols = ft_text_columns(text);
+    if (!ui->session_only && ui->since_wall_ns) {
+        char since[32];
+        since_of(d, false, since, sizeof(since));
+        snprintf(agent, sizeof(agent), "agent since %s · ", since);
+    }
 
-    /* From the right: the agent's badge, the other badges, then the state text if it fits. */
+    /* From the right: SESSION, the agent's badge, the other badges, then the state text. */
     int room = r.x + r.w - from - 1;
     int x = r.x + r.w;
+    if (ui->session_only) {
+        struct badge s;
+        session_badge(d, !has_after && nbefore == 0, room - text_cols - 1, &s);
+        int w = ft_text_columns(s.text);
+        x -= w;
+        ft_canvas_text(d->canvas, x, r.y, w, s.style, s.text);
+        x--;
+        room -= w + 1;
+    }
     if (has_after && ft_text_columns(after.text) <= room) {
         int w = ft_text_columns(after.text);
         x -= w;
@@ -659,9 +755,14 @@ static void draw_tab_state(struct ft_top_draw *d, struct ft_rect r, int from)
         x--;
         room -= w + 1;
     }
-    int text_cols = ft_text_columns(text);
-    if (text_cols <= room)
+    int agent_cols = ft_text_columns(agent);
+    if (text_cols + agent_cols <= room) {
+        x -= text_cols;
+        ft_canvas_text(d->canvas, x, r.y, text_cols, fg(FT_COLOR_DIM, false), text);
+        ft_canvas_text(d->canvas, x - agent_cols, r.y, agent_cols, fg(FT_COLOR_DIM, false), agent);
+    } else if (text_cols <= room) {
         ft_canvas_text(d->canvas, x - text_cols, r.y, text_cols, fg(FT_COLOR_DIM, false), text);
+    }
 }
 
 /* Leaders has no Agent row either: its trouble takes the right end of the row from the bar. */
@@ -669,6 +770,12 @@ static struct ft_rect leaders_bar_room(struct ft_top_draw *d, struct ft_rect r, 
 {
     struct badge b;
 
+    if (d->ui->session_only) {
+        int w = ft_text_columns(SESSION_BADGE);
+        ft_canvas_text(d->canvas, r.x + r.w - w, r.y, w, badge_style(d, FT_COLOR_BLUE),
+                       SESSION_BADGE);
+        r.w -= w + 1;
+    }
     if (!agent_badge(d, &b))
         return r;
     int w = ft_text_columns(b.text);
@@ -1097,6 +1204,26 @@ static void draw_too_small(struct ft_top_draw *d)
     ft_canvas_text_cut(c, x, y + 1, cols - x, fg(FT_COLOR_DIM, false), hint, FT_CUT_END);
 }
 
+/* Centered in the table's rows while the first answer is awaited. */
+static void draw_starting(struct ft_top_draw *d, struct ft_rect r)
+{
+    static const char *const frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+    const struct ft_top_ui *ui = d->ui;
+    char text[160];
+
+    snprintf(text, sizeof(text), "%s %" PRIu64 "s",
+             ui->session_only ? "Starting the collector: attaching the kernel probes…"
+                              : "Waiting for the agent's first answer…",
+             ui->starting_ns / FT_NS_PER_SEC);
+    int w = 2 + ft_text_columns(text);
+    int x = r.x + (r.w > w ? (r.w - w) / 2 : 0);
+    int y = r.y + r.h / 2;
+    ft_canvas_text(d->canvas, x, y, 1, fg(FT_COLOR_CYAN, false),
+                   frames[ui->spinner % FT_ARRAY_LEN(frames)]);
+    ft_canvas_text_cut(d->canvas, x + 2, y, r.x + r.w - x - 2, fg(FT_COLOR_TEXT, false), text,
+                       FT_CUT_END);
+}
+
 /* Draws one block with the canvas clipped to its rectangle. */
 #define CLIPPED(rect, call)                                                                        \
     do {                                                                                           \
@@ -1153,6 +1280,8 @@ void ft_top_draw(struct ft_top_draw *d)
         } else {
             CLIPPED(table, ft_top_draw_table(d, ui->mode, l.header, l.table, ui->scroll[ui->mode]));
         }
+        if (ui->starting)
+            CLIPPED(l.table, draw_starting(d, l.table));
         if (l.panel.h > 0) {
             CLIPPED(l.panel, ft_top_draw_panel(d, l.panel));
             ft_canvas_fill(c, (struct ft_rect){l.panel.x + l.panel.w, l.panel.y, 1, l.panel.h},

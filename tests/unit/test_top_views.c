@@ -464,10 +464,102 @@ static void tree_guides(void)
     fixture_free(&f);
 }
 
+static bool row_has(const struct ft_canvas *c, int y, const char *text)
+{
+    return strstr(cells(c, 0, y, ft_canvas_cols(c)), text) != nullptr;
+}
+
+/* Draws the screen and checks its agent row and tabs row for the texts given, "" for none. */
+static void source_screen(struct fixture *f, const struct ft_top_ui *given, int cols, int rows,
+                          const char *agent, const char *tabs, const char *absent)
+{
+    struct ft_top_ui ui = *given;
+    struct ft_canvas *c = ft_canvas_create(cols, rows);
+    struct ft_top_draw d = drawer(c, f, &ui);
+    struct ft_top_layout l;
+
+    ft_top_set_mode(f->m, ui.mode);
+    ft_top_layout(&ui, cols, rows, &l);
+    ft_top_draw(&d);
+    if (agent[0])
+        CHECK(row_has(c, l.head.y + 2, agent));
+    CHECK(row_has(c, l.tabs.y, tabs));
+    if (absent[0])
+        CHECK(!row_has(c, l.tabs.y, absent));
+    ft_canvas_destroy(c);
+}
+
+static void data_source(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+    struct ft_top_ui ui = {.mode = FT_TOP_TRANSFERS, .full_paths = true, .delay_ns = SECOND};
+    char since[32];
+    char text[64];
+
+    ft_top_since_text(WALL - 3600 * SECOND, WALL, true, since, sizeof(since));
+    ui.since_wall_ns = WALL - 3600 * SECOND;
+    snprintf(text, sizeof(text), "Agent: running since %s · backend ok · ringbuf", since);
+    source_screen(&f, &ui, 174, 44, text, "agent since ", "SESSION");
+    /* Narrower, the ring buffer goes first. */
+    snprintf(text, sizeof(text), "Agent: running since %s · backend ok · drops", since);
+    source_screen(&f, &ui, 120, 30, text, "agent since ", "SESSION");
+    ui.mode = FT_TOP_LEADERS;
+    source_screen(&f, &ui, 174, 44, "", "L Leaders", "agent since ");
+
+    ui.mode = FT_TOP_TRANSFERS;
+    ui.session_only = true;
+    snprintf(text, sizeof(text), " SESSION since %s ", since);
+    source_screen(&f, &ui, 174, 44, "Session: collecting since ", text, "agent since");
+    source_screen(&f, &ui, 120, 30, "Session: collecting since ", " SESSION ", "SESSION since");
+    ui.paused = true;
+    source_screen(&f, &ui, 174, 44, "", " SESSION ", "SESSION since");
+    ui.paused = false;
+    for (int mode = FT_TOP_PROCESSES; mode <= FT_TOP_LEADERS; mode++) {
+        ui.mode = (enum ft_top_mode)mode;
+        source_screen(&f, &ui, 120, 30, "", " SESSION ", "agent since");
+    }
+
+    ui.mode = FT_TOP_PROCESSES;
+    ui.collector_lost = true;
+    ui.agent_code = FT_EXIT_NO_AGENT;
+    source_screen(&f, &ui, 174, 44, "", " collector stopped ", "agent unreachable");
+    ui.mode = FT_TOP_TRANSFERS;
+    source_screen(&f, &ui, 120, 30, "Session: collector stopped", " SESSION ", "");
+    fixture_free(&f);
+
+    /* Before the first answer. */
+    struct ft_top_model *empty = ft_top_model_create();
+    struct fixture start = {.m = empty};
+    CHECK(empty != nullptr);
+    ui = (struct ft_top_ui){.mode = FT_TOP_TRANSFERS, .delay_ns = SECOND, .session_only = true};
+    source_screen(&start, &ui, 174, 44, "Session: starting", " SESSION ", "SESSION since");
+    source_screen(&start, &ui, 120, 30, "Session: starting", " SESSION ", "SESSION since");
+
+    struct ft_canvas *c = ft_canvas_create(120, 30);
+    struct ft_top_draw d = drawer(c, &start, &ui);
+    struct ft_top_layout l;
+    bool shown = false;
+    ft_top_layout(&ui, 120, 30, &l);
+    ft_top_draw(&d);
+    for (int y = l.table.y; y < l.table.y + l.table.h; y++)
+        shown |= row_has(c, y, "Starting the collector");
+    CHECK(!shown);
+    ui.starting = true;
+    ui.starting_ns = 3 * SECOND + SECOND / 2;
+    ft_top_draw(&d);
+    for (int y = l.table.y; y < l.table.y + l.table.h; y++)
+        shown |= row_has(c, y, "Starting the collector: attaching the kernel probes… 3s");
+    CHECK(shown);
+    ft_canvas_destroy(c);
+    ft_top_model_destroy(empty);
+}
+
 void test_top_views(void)
 {
     live_modes();
     transfer_columns();
     layout();
     tree_guides();
+    data_source();
 }

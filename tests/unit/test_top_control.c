@@ -469,6 +469,65 @@ static void agent_that_stops_answering(void)
     rig_close(&r);
 }
 
+static unsigned fail_frame(struct rig *r, int code)
+{
+    r->frame.code = code;
+    ft_strlcpy(r->frame.error, "The connection to the agent was lost.", sizeof(r->frame.error));
+    r->frame.request_serial = r->c->sent_serial;
+    return ft_top_control_frame(r->c, &r->frame);
+}
+
+static void collector_session(void)
+{
+    struct rig r;
+    CHECK(rig_open(&r, FT_TOP_TRANSFERS));
+    struct ft_top_ui *ui = &r.c->ui;
+    uint64_t start = 10 * SECOND;
+    uint64_t moment = 300 * FT_NS_PER_MS;
+
+    /* The wait is shown only once it has lasted a moment. */
+    r.c->now_ns = start;
+    ft_top_control_start(r.c, true);
+    CHECK(ui->session_only);
+    CHECK_U64(ft_top_control_deadline(r.c), start + moment);
+    r.c->now_ns = start + moment - 1;
+    ft_top_control_tick(r.c);
+    CHECK(!ui->starting);
+    r.c->now_ns = start + moment;
+    CHECK(ft_top_control_tick(r.c) & FT_TOP_DO_REDRAW);
+    CHECK(ui->starting);
+    r.c->now_ns = start + 3 * SECOND;
+    ft_top_control_tick(r.c);
+    CHECK_U64(ui->starting_ns, 3 * SECOND);
+
+    /* A collector that could not attach ends the run with its reason. */
+    CHECK(fail_frame(&r, FT_EXIT_PERMISSION) & FT_TOP_DO_QUIT);
+    CHECK_U64(r.c->exit_code, FT_EXIT_PERMISSION);
+    CHECK(!ui->starting);
+    rig_close(&r);
+
+    /* One that stops later leaves the last data on the screen. */
+    CHECK(rig_open(&r, FT_TOP_TRANSFERS));
+    ui = &r.c->ui;
+    ft_top_control_start(r.c, true);
+    fill(&r, 3);
+    r.frame.stats.start_wall_ns = WALL;
+    CHECK(!(deliver(&r) & FT_TOP_DO_QUIT));
+    CHECK_U64(ui->since_wall_ns, WALL);
+    CHECK(!(fail_frame(&r, FT_EXIT_NO_AGENT) & FT_TOP_DO_QUIT));
+    CHECK(ui->collector_lost);
+    CHECK_U64(r.c->exit_code, FT_EXIT_OK);
+    CHECK_U64(ft_top_row_count(r.m, FT_TOP_TRANSFERS), 3);
+    rig_close(&r);
+
+    /* An agent that fails is retried, never a reason to end. */
+    CHECK(rig_open(&r, FT_TOP_TRANSFERS));
+    ft_top_control_start(r.c, false);
+    CHECK(!(fail_frame(&r, FT_EXIT_NO_AGENT) & FT_TOP_DO_QUIT));
+    CHECK(!r.c->ui.collector_lost);
+    rig_close(&r);
+}
+
 static void filter_that_does_not_parse(void)
 {
     struct rig r;
@@ -767,6 +826,7 @@ void test_top_control(void)
     selection_and_scroll();
     pause_holds_frames();
     agent_that_stops_answering();
+    collector_session();
     filter_that_does_not_parse();
     clicks_act_as_keys();
     requests();

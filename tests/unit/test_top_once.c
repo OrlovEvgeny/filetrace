@@ -277,7 +277,7 @@ static char *document(const struct ft_top_model *m, enum ft_top_mode mode, bool 
     CHECK(out != nullptr);
     if (!out)
         return strdup("");
-    ft_top_write_document(m, mode, indent, out);
+    ft_top_write_document(m, mode, nullptr, indent, out);
     fclose(out);
     return text;
 }
@@ -390,7 +390,7 @@ static void grouped_and_tree(void)
     ft_top_set_group(f.m, FT_TOP_TRANSFERS, FT_TOP_GROUP_SCRIPT);
     CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 7);
     FILE *null = fopen("/dev/null", "w");
-    CHECK_U64(ft_top_write_document(f.m, FT_TOP_TRANSFERS, false, null), 5);
+    CHECK_U64(ft_top_write_document(f.m, FT_TOP_TRANSFERS, nullptr, false, null), 5);
     fclose(null);
     char *text = document(f.m, FT_TOP_TRANSFERS, false);
     CHECK(json_ok(text));

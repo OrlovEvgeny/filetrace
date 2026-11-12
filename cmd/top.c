@@ -349,7 +349,11 @@ int ft_cmd_top(const struct ft_cli *cli, struct ft_args *a)
     if (!t.opt.json && !isatty(STDOUT_FILENO))
         t.opt.once = true;
 
-    code = ft_session_open(cli, true, &session);
+    /* The screen opens at once and shows the collector attaching; the other outputs wait. */
+    if (t.opt.once || t.opt.json)
+        code = ft_session_open(cli, true, &session);
+    else
+        code = ft_session_start(cli, &session);
     if (code == FT_EXIT_OK) {
         code = ft_top_run(&session, cli, &t.opt);
         ft_session_close(&session);

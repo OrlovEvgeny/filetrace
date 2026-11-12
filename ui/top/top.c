@@ -114,6 +114,8 @@ static void loop(struct run *r)
         if (w == FT_WAIT_WAKE && ft_top_source_take(r->source, &r->frame))
             bits |= ft_top_control_frame(c, &r->frame);
         bits |= ft_top_control_tick(c);
+        if (bits & FT_TOP_DO_QUIT)
+            return;
 
         if (bits & FT_TOP_DO_REQUEST)
             send_request(r);
@@ -149,8 +151,10 @@ static int start(struct run *r, struct ft_session *s, const struct ft_cli *cli,
     r->c->now_ns = ft_clock_mono_ns();
     ft_top_control_request(r->c, first);
     r->source = ft_top_source_start(s, cli, first, err);
-    if (r->source)
+    if (r->source) {
         ft_top_control_sent(r->c, first, 1);
+        ft_top_control_start(r->c, s->collector > 0);
+    }
     free(first);
     return r->source ? FT_EXIT_OK : err->code;
 }
@@ -183,6 +187,9 @@ int ft_top_run(struct ft_session *s, const struct ft_cli *cli, const struct ft_t
         code = start(&r, s, cli, opt, &err);
     if (code == FT_EXIT_OK)
         loop(&r);
+    bool failed = code == FT_EXIT_OK && r.c->exit_code != FT_EXIT_OK;
+    if (failed)
+        code = ft_error_set(&err, r.c->exit_code, "%s", r.c->ui.agent_error);
 
     ft_top_source_stop(r.source);
     ft_screen_close(r.screen);
@@ -194,6 +201,8 @@ int ft_top_run(struct ft_session *s, const struct ft_cli *cli, const struct ft_t
     ft_top_model_destroy(model);
     free(filter);
 
+    if (failed)
+        return ft_session_failed(cli, code, err.msg);
     if (code == FT_EXIT_USAGE)
         ft_usage_error("top", "%s", err.msg);
     else if (code != FT_EXIT_OK)

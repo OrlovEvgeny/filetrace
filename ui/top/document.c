@@ -846,16 +846,21 @@ static size_t write_leaders(struct writer *w, const struct ft_top_model *m, cons
     return rows;
 }
 
-size_t ft_top_write_document(const struct ft_top_model *m, enum ft_top_mode mode, bool indent,
-                             FILE *out)
+size_t ft_top_write_document(const struct ft_top_model *m, enum ft_top_mode mode,
+                             const char *source, bool indent, FILE *out)
 {
     struct writer w = {.out = out, .indent = indent};
+    const struct ft_row_stats *stats = ft_top_totals(m)->stats;
     struct ft_host_info host;
     size_t rows;
 
     ft_sysinfo_host(&host);
     open_container(&w, nullptr, '{');
     put_text(&w, "mode", ft_top_mode_name(mode));
+    if (source)
+        put_text(&w, "source", source);
+    if (stats && stats->start_wall_ns)
+        put_time(&w, "since", stats->start_wall_ns);
     if (mode == FT_TOP_LEADERS)
         rows = write_leaders(&w, m, host.hostname);
     else

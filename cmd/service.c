@@ -4,12 +4,16 @@
 #include "filetrace/format.h"
 
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/* How long a collector has to fail before the screen opens over its start. */
+constexpr int FAIL_FAST_MS = 200;
 
 /* "filetrace top": what to type again with sudo. */
 static void command_text(const struct ft_cli *cli, char *buf, size_t size)
@@ -48,11 +52,16 @@ static int socket_denied(const struct ft_cli *cli)
     return FT_EXIT_PERMISSION;
 }
 
-/* The collector serves only this process and stops when the session closes. */
-static int start_collector(const struct ft_cli *cli, struct ft_session *s)
+/*
+ * The collector serves only this process and stops when the session closes. Returns with *failed
+ * set when it has written its answer, which can only be why it stopped, within wait_ms.
+ */
+static int start_collector(const struct ft_cli *cli, struct ft_session *s, int wait_ms,
+                           bool *failed)
 {
     int pair[2];
 
+    *failed = false;
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
         fprintf(stderr, "filetrace: cannot create a socket pair: %s\n", strerror(errno));
         return FT_EXIT_ERROR;
@@ -72,6 +81,8 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s)
         close(pair[0]);
         /* An interrupt ends the foreground command; the collector stops with its session. */
         signal(SIGINT, SIG_IGN);
+        /* A session closed while the probes attach ends the collector with this signal. */
+        signal(SIGTERM, SIG_DFL);
         if (ft_cli_collector_config(cli))
             cfg = *ft_cli_collector_config(cli);
         else
@@ -87,6 +98,13 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s)
 
     close(pair[1]);
     s->collector = pid;
+    if (wait_ms > 0) {
+        struct pollfd pfd = {.fd = pair[0], .events = POLLIN};
+        int n;
+        while ((n = poll(&pfd, 1, wait_ms)) < 0 && errno == EINTR)
+            continue;
+        *failed = n > 0;
+    }
     s->client = ft_client_adopt(pair[0]);
     if (!s->client) {
         fprintf(stderr, "filetrace: out of memory\n");
@@ -108,6 +126,7 @@ static int first_answer(const struct ft_cli *cli, struct ft_session *s)
         ft_session_close(s);
         return ft_session_failed(cli, code, err.msg);
     }
+    s->answered = true;
     return FT_EXIT_OK;
 }
 
@@ -128,6 +147,7 @@ static int connect_agent(const struct ft_cli *cli, struct ft_session *s, struct 
 int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_session *s)
 {
     struct ft_error err = {0};
+    bool failed;
 
     int code = connect_agent(cli, s, &err);
     if (code != FT_EXIT_NO_AGENT)
@@ -137,7 +157,7 @@ int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_s
         return code;
     }
 
-    code = start_collector(cli, s);
+    code = start_collector(cli, s, 0, &failed);
     if (code == FT_EXIT_OK)
         code = first_answer(cli, s);
     if (code != FT_EXIT_OK)
@@ -147,16 +167,33 @@ int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_s
     return FT_EXIT_OK;
 }
 
+int ft_session_start(const struct ft_cli *cli, struct ft_session *s)
+{
+    struct ft_error err = {0};
+    bool failed;
+
+    int code = connect_agent(cli, s, &err);
+    if (code != FT_EXIT_NO_AGENT)
+        return code;
+    code = start_collector(cli, s, FAIL_FAST_MS, &failed);
+    if (code == FT_EXIT_OK && failed)
+        code = first_answer(cli, s);
+    return code;
+}
+
 void ft_session_close(struct ft_session *s)
 {
     ft_client_close(s->client);
     s->client = nullptr;
     if (s->collector > 0) {
         int status;
+        if (!s->answered)
+            kill(s->collector, SIGTERM);
         while (waitpid(s->collector, &status, 0) < 0 && errno == EINTR)
             continue;
         s->collector = 0;
     }
+    s->answered = false;
 }
 
 static void stats_collect(void *ctx, uint16_t type, const void *payload, size_t size)
