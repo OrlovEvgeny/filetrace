@@ -51,7 +51,7 @@ struct ft_canvas;
 /* A canvas of spaces in the terminal's own colors; nullptr when out of memory. */
 struct ft_canvas *ft_canvas_create(int cols, int rows);
 void ft_canvas_destroy(struct ft_canvas *c);
-/* Clears to the new size; false when out of memory, with the canvas left as it was. */
+/* Clears to cols by rows; false when out of memory, leaving the canvas as it was. */
 bool ft_canvas_resize(struct ft_canvas *c, int cols, int rows);
 int ft_canvas_cols(const struct ft_canvas *c);
 int ft_canvas_rows(const struct ft_canvas *c);
@@ -106,7 +106,6 @@ int ft_canvas_path(struct ft_canvas *c, int x, int y, int width, struct ft_style
 void ft_canvas_mark(struct ft_canvas *c, int x, int y, int width, const char *text, enum ft_cut cut,
                     size_t start, size_t end, struct ft_style s);
 
-/* Columns text takes on the canvas. */
 int ft_text_columns(const char *text);
 
 /* The bytes of the character at the start of text (len > 0) and the columns it takes. */
