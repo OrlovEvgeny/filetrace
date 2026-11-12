@@ -706,13 +706,18 @@ static __always_inline bool held_matches(__u64 wire, __u64 whole)
 }
 
 /*
- * What the window must take of its file: what the thread read of it, in whole copies of the file
- * once it read more than one.
+ * What the window must take of its file: what the thread read of it, up to its size, or as many
+ * copies of the file as the connection took about, when the thread read that many.
  */
 static __always_inline __u64 carry_whole(const struct carry *c)
 {
     __u64 read = c->read > c->read_seen ? c->read : c->read_seen;
-    return c->size && c->size < read ? read - read % c->size : read;
+    if (!c->size || read <= c->size)
+        return read;
+    __u64 copies = (c->wire + c->size / 2) / c->size;
+    if (copies > read / c->size)
+        copies = read / c->size;
+    return (copies ? copies : 1) * c->size;
 }
 
 /*
