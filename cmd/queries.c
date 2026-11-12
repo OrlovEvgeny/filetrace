@@ -767,6 +767,16 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
         usage_line(o, "Flows:", &s->flows);
         usage_line(o, "Files:", &s->files);
         usage_line(o, "Transfers:", &s->transfers);
+        if (s->listed_files.capacity) {
+            ft_format_count(s->listed_files.count, a, sizeof(a));
+            ft_format_count(s->listed_files.capacity, b, sizeof(b));
+            fprintf(o, "%-18s%s of %s", "Listed files:", a, b);
+            if (s->listed_files.evictions) {
+                ft_format_count(s->listed_files.evictions, a, sizeof(a));
+                fprintf(o, " (%s refused)", a);
+            }
+            fputc('\n', o);
+        }
         if (s->leaders_bytes) {
             ft_format_bytes(s->leaders_bytes, a, sizeof(a));
             fprintf(o, "%-18s%s\n", "File rankings:", a);
@@ -837,7 +847,8 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
     usage_json(o, "sockets", &s->sockets, false);
     usage_json(o, "flows", &s->flows, false);
     usage_json(o, "files", &s->files, false);
-    usage_json(o, "transfers", &s->transfers, true);
+    usage_json(o, "transfers", &s->transfers, false);
+    usage_json(o, "listed_files", &s->listed_files, true);
     fprintf(o,
             "},\"network\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
             ",\"bytes_sent_per_second\":%" PRIu64 ",\"bytes_received_per_second\":%" PRIu64

@@ -104,6 +104,9 @@ size_t ft_linux_background_load(int map_fd, const struct ft_backend_config *cfg,
 void ft_linux_background_learn(int map_fd, const struct ft_backend_config *cfg, uint64_t ino,
                                uint32_t dev, const char *path);
 
+/* Returns how many files the background map holds; *refused, how many it had no room for. */
+size_t ft_linux_background_count(int map_fd, uint64_t *refused);
+
 /*
  * Loads the patterns that name files wherever they are, "*" "/" name and "*" ".ext", for the
  * kernel to match the first time a thread reads such a file. Returns how many it holds.

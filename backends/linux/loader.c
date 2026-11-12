@@ -882,6 +882,10 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
     out->events = b->events;
     out->queue_bytes = b->queue_bytes;
     out->queue_peak_bytes = b->queue_peak_bytes;
+    if (b->background_fd >= 0) {
+        out->listed_files = ft_linux_background_count(b->background_fd, &out->listed_refused);
+        out->listed_capacity = FT_BPF_BACKGROUND_MAX;
+    }
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)

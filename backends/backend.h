@@ -74,6 +74,9 @@ struct ft_backend_stats {
     uint64_t events; /* records received from the kernel */
     uint64_t queue_bytes;
     uint64_t queue_peak_bytes;
+    uint64_t listed_files;    /* the kernel's table of listed files: entries */
+    uint64_t listed_capacity; /* 0 when the backend keeps no such table */
+    uint64_t listed_refused;  /* files it had no room for */
 };
 
 struct ft_backend;

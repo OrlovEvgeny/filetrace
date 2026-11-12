@@ -5,7 +5,7 @@
 
 /* Frames use host byte order: both ends of the socket run on the same host. */
 #define FT_WIRE_MAGIC 0x43525446u /* "FTRC" */
-#define FT_WIRE_VERSION 5
+#define FT_WIRE_VERSION 6
 #define FT_WIRE_MAX_PAYLOAD (64u * 1024u)
 
 enum ft_msg_type : uint16_t {
@@ -292,6 +292,7 @@ struct ft_row_stats {
     char mode[16];
     char version[48];
     uint64_t leaders_bytes; /* memory of the rankings of the most sent files; 0 when off */
+    struct ft_table_usage listed_files; /* the kernel's table of listed files; capacity 0: none */
 };
 
 struct ft_row_capability {

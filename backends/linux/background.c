@@ -161,9 +161,12 @@ static int first_match(const char *const *patterns, size_t count, const char *pa
     return -1;
 }
 
+static uint64_t refused;
+
 static void table_full(void)
 {
     static bool warned;
+    refused++;
     if (!warned)
         ft_log(FT_LOG_WARN,
                "[correlation] the table of listed files is full (%d): a file made from now on "
@@ -191,6 +194,21 @@ void ft_linux_background_learn(int map_fd, const struct ft_backend_config *cfg, 
     struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
     if (bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST) != 0 && errno == E2BIG)
         table_full();
+}
+
+size_t ft_linux_background_count(int map_fd, uint64_t *refused_out)
+{
+    struct ft_bpf_background_key key;
+    struct ft_bpf_background_key next;
+    size_t count = 0;
+    bool more = bpf_map_get_next_key(map_fd, nullptr, &key) == 0;
+    while (more) {
+        count++;
+        more = bpf_map_get_next_key(map_fd, &key, &next) == 0;
+        key = next;
+    }
+    *refused_out = refused;
+    return count;
 }
 
 static void scan(struct key_set *set, const char *const *patterns, size_t count)
