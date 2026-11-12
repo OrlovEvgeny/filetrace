@@ -209,14 +209,18 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
         return 0;
 
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
-    if (background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk)) {
-        thread_set_background(ts, file, inode, &fk, magic);
+    bool background = background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
+    bool side = !background && side_read(ts, &fk, (__u64)ret);
+    if (background || side) {
+        thread_set_background(ts, file, inode, &fk, magic, side);
         ts->bg_pending += (__u64)ret;
         ts->bg_unreported += (__u64)ret;
         ts->bg_last_ns = bpf_ktime_get_boot_ns();
         ts->bg_fresh = 1;
         return 0;
     }
+    if (side_held(ts, &fk))
+        side_promote(ts, bpf_ktime_get_boot_ns());
     thread_set_file(ts, file, inode, &fk, magic);
 
     if (!ts->pending) {

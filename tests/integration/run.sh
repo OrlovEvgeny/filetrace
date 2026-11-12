@@ -236,6 +236,35 @@ expect "read before a handshake: upload after a bundle by name bytes" \
 expect "read before a handshake: bundle by name not reported" \
     "$(ft files --path "$data/ca-bundle.crt" --format csv | rows)" 0
 
+# A small file read beside the upload, a private CA or a client key, does not take its place,
+# read after the upload or before it.
+"$workload" readhandshake "$data/upload-private-ca.bin" 300000 "$data/private-ca.pem" 1111 \
+    >/dev/null
+"$workload" readbundlefirst "$data/upload-key-first.bin" 300000 "$data/client.key" 1704 >/dev/null
+settle
+expect "side read: upload after a private CA bytes" \
+    "$(ft files --path "$data/upload-private-ca.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "side read: private CA not reported" \
+    "$(ft files --path "$data/private-ca.pem" --format csv | rows)" 0
+expect "side read: upload after a key read first bytes" \
+    "$(ft files --path "$data/upload-key-first.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "side read: key read first not reported" \
+    "$(ft files --path "$data/client.key" --format csv | rows)" 0
+
+# Sent on a connection that was open before the large read, the file read beside it is what
+# went, as the last read is.
+"$workload" readsendother "$data/checksummed.bin" 300000 "$data/sent-instead.bin" 20000 >/dev/null
+"$workload" readsendother "$data/checksummed-too.bin" 300000 "$data/sent-small.bin" 2000 >/dev/null
+settle
+expect "side read sent elsewhere: bytes" \
+    "$(ft files --path "$data/sent-instead.bin" --format csv | column transfer.bytes_sent)" 20000
+expect "side read sent elsewhere: large read not reported" \
+    "$(ft files --path "$data/checksummed.bin" --format csv | rows)" 0
+expect "side read sent elsewhere: small bytes" \
+    "$(ft files --path "$data/sent-small.bin" --format csv | column transfer.bytes_sent)" 2000
+expect "side read sent elsewhere: large read before a small one not reported" \
+    "$(ft files --path "$data/checksummed-too.bin" --format csv | rows)" 0
+
 # A compiled module loaded before an upload from memory is not what was uploaded.
 "$workload" readmemory "$data/idna.cpython-313.pyc" 25000 300000 >/dev/null
 settle

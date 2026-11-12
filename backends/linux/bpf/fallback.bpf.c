@@ -131,7 +131,7 @@ static __always_inline struct thread_state *thread_now(bool create)
 }
 
 SEC("kprobe/vfs_read")
-int BPF_KPROBE(ft_vfs_read, struct file *file)
+int BPF_KPROBE(ft_vfs_read, struct file *file, char *buf, size_t count)
 {
     struct inode *inode = BPF_CORE_READ(file, f_inode);
     struct super_block *sb = BPF_CORE_READ(inode, i_sb);
@@ -155,14 +155,20 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
         .gen = BPF_CORE_READ(inode, i_generation),
     };
     struct task_struct *task = (void *)bpf_get_current_task();
-    if (background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk)) {
-        thread_set_background(ts, file, inode, &fk, magic);
+    /* What the call will read is not known yet; what it asks for bounds it. */
+    __u64 size = BPF_CORE_READ(inode, i_size);
+    bool background = background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
+    bool side = !background && side_read(ts, &fk, count < size ? count : size);
+    if (background || side) {
+        thread_set_background(ts, file, inode, &fk, magic, side);
         ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
         ts->bg_read_ns = bpf_ktime_get_boot_ns();
         ts->bg_reading = 1;
         ts->reading = 0;
         return 0;
     }
+    if (side_held(ts, &fk))
+        side_promote(ts, bpf_ktime_get_boot_ns());
     thread_set_file(ts, file, inode, &fk, magic);
 
     ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
@@ -355,6 +361,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     carry_flight_send(ts, (__u64)sk, now);
     if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
         foreground_reset(ts);
+    side_send(ts, (__u64)sk, now);
 
     t->claim_kind = FT_BPF_AGG_READ_SEND;
     t->claim_tgid = (__u32)(ids >> 32);

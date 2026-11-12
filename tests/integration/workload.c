@@ -268,10 +268,11 @@ static void scenario_read_then_recv(const char *path, size_t size)
 /*
  * readhandshake <path> <bytes> <bundle> <bundle bytes>: an upload over a fresh connection, as
  * an HTTPS client makes it. The file is read whole, then a CA bundle unless its size is 0;
- * then the peers trade a hello each way, and only then is the file sent.
+ * then the peers trade a hello each way, and only then is the file sent. readbundlefirst reads
+ * the bundle before the file.
  */
 static void scenario_read_handshake(const char *path, size_t size, const char *bundle,
-                                    size_t bundle_size)
+                                    size_t bundle_size, bool bundle_first)
 {
     struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
@@ -281,16 +282,18 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
     char greeting[6];
     if (!contents || !trust)
         die("malloc");
-    int file = open_file(path);
-    if (read(file, contents, size) != (ssize_t)size)
-        die("read");
     int ca = -1;
     if (bundle_size) {
         make_file(bundle, bundle_size);
         ca = open_file(bundle);
-        if (read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+        if (bundle_first && read(ca, trust, bundle_size) != (ssize_t)bundle_size)
             die("read");
     }
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    if (ca >= 0 && !bundle_first && read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+        die("read");
     int sock = connect_sink(&sink);
     send_all(sock, "hello\n", 6);
     if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
@@ -303,6 +306,42 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
     free(contents);
     free(trust);
     report("readhandshake", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * readsendother <path> <bytes> <other> <other bytes>: over a connection that has already heard
+ * from its peer, reads the file whole and sends nothing of it, as a checksum pass does, then
+ * reads the other file and sends that.
+ */
+static void scenario_read_send_other(const char *path, size_t size, const char *other,
+                                     size_t other_size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    make_file(path, size);
+    make_file(other, other_size);
+
+    char *contents = malloc(size);
+    char *upload = malloc(other_size);
+    char greeting[6];
+    if (!contents || !upload)
+        die("malloc");
+    int sock = connect_sink(&sink);
+    if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
+        die("recv");
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    int up = open_file(other);
+    if (read(up, upload, other_size) != (ssize_t)other_size)
+        die("read");
+    send_all(sock, upload, other_size);
+    close(sock);
+    close(up);
+    close(file);
+    free(contents);
+    free(upload);
+    report("readsendother", other, other_size, sink.port);
     stop_sink(&sink);
 }
 
@@ -928,7 +967,11 @@ int main(int argc, char **argv)
     else if (strcmp(name, "readthenrecv") == 0 && argc == 4)
         scenario_read_then_recv(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readhandshake") == 0 && argc == 6)
-        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), false);
+    else if (strcmp(name, "readbundlefirst") == 0 && argc == 6)
+        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), true);
+    else if (strcmp(name, "readsendother") == 0 && argc == 6)
+        scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "exchange") == 0 && argc == 6)
         scenario_exchange(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "readhello") == 0 && argc == 4)

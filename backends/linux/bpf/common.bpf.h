@@ -130,6 +130,8 @@ struct thread_state {
     __u64 bg_unreported;
     __u64 bg_last_ns;
     __u64 bg_read_ns;
+    __u64 bg_size; /* bg_file's size at its last read */
+    __u8 bg_side;  /* bg_file was read beside the file, see side_read */
 };
 
 struct {
@@ -496,6 +498,31 @@ static __always_inline bool background_read(const struct thread_state *ts,
     return background_by_name(dname, fk);
 }
 
+/* Whether the file is the one the thread has been reading beside its large read. */
+static __always_inline bool side_held(const struct thread_state *ts, const struct file_key *fk)
+{
+    return ts->bg_side && ts->bg_file.ino == fk->ino && ts->bg_file.dev == fk->dev &&
+           ts->bg_gen == fk->gen;
+}
+
+/*
+ * A file read while a large one waits to go over a connection the thread is setting up, such as
+ * a CA file, a client key or a library: it does not take the large one's place while it is
+ * small, since then it could not be what such a connection carries. The first send decides,
+ * by where it goes; see side_send. more: what this read adds.
+ */
+static __always_inline bool side_read(const struct thread_state *ts, const struct file_key *fk,
+                                      __u64 more)
+{
+    if (ts->pending < CARRY_FLOOR ||
+        (ts->file.ino == fk->ino && ts->file.dev == fk->dev && ts->gen == fk->gen))
+        return false;
+    if (ts->last_sent_ns >= ts->read_start_ns && !ts->carry_sock)
+        return false;
+    __u64 side = side_held(ts, fk) ? ts->bg_pending : 0;
+    return side + more < CARRY_FLOOR;
+}
+
 /* Adds a send of up to *pending bytes of the file to the counters, and takes it off *pending. */
 static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
                                         const struct file_ref *file, __u8 background, __u32 script,
@@ -620,6 +647,12 @@ static __always_inline void carry_flight_send(struct thread_state *ts, __u64 sk,
         carry_close_slot(&ts->flight_sock, false, now);
 }
 
+/* Whether a send on the socket goes where the thread's read was carried. */
+static __always_inline bool carry_dialed(const struct thread_state *ts, __u64 sk)
+{
+    return sk && (ts->carry_sock == sk || (ts->dialed == sk && ts->dialed_ns >= ts->read_start_ns));
+}
+
 /*
  * The window a send of the thread's read belongs in: the one open on the socket for the same
  * file, or a new one when the thread dialed the socket after it began the read, or when the
@@ -645,7 +678,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     }
 
     __u8 kind;
-    if (ts->dialed == sk && ts->dialed_ns >= ts->read_start_ns)
+    if (carry_dialed(ts, sk))
         kind = CARRY_DIALED;
     else if (!sock_heard(sk) && !sock_flown(sk))
         kind = CARRY_FLIGHT;
@@ -701,6 +734,37 @@ static __always_inline void carry_add(struct carry *c, __u64 sent, __u64 read, _
 }
 
 /*
+ * The thread sends somewhere other than over a connection it set up for its large read: the
+ * file it read beside that one since takes its place, as any later read does.
+ */
+static __always_inline void side_promote(struct thread_state *ts, __u64 now)
+{
+    carry_close_thread(ts, now);
+    ts->displaced = ts->pending >= CARRY_FLOOR;
+    ts->file = ts->bg_file;
+    ts->gen = ts->bg_gen;
+    ts->forgotten = ts->bg_forgotten;
+    ts->file_size = ts->bg_size;
+    ts->pending = ts->bg_pending;
+    ts->unreported = ts->bg_unreported;
+    ts->fresh = ts->bg_fresh;
+    ts->reading = ts->bg_reading;
+    ts->last_ns = ts->bg_last_ns;
+    ts->read_start_ns = ts->bg_last_ns;
+    ts->carried = 0;
+    background_reset(ts);
+    ts->bg_reading = 0;
+    ts->bg_side = 0;
+}
+
+/* Promotes the thread's side read unless the send goes where its large read was carried. */
+static __always_inline void side_send(struct thread_state *ts, __u64 sk, __u64 now)
+{
+    if (ts->bg_side && ts->bg_pending && (!ts->pending || !carry_dialed(ts, sk)))
+        side_promote(ts, now);
+}
+
+/*
  * Attributes a send to the file this thread just read, up to what of it is still unsent, or,
  * when no such read accounts for it, to the background file the thread read last. A send over
  * a connection opened after the read began is held in that connection's window.
@@ -713,6 +777,7 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
         return;
     if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
         foreground_reset(ts);
+    side_send(ts, sk, now);
     if (ts->pending) {
         struct carry *c = carry_window(ts, sk, cookie, tgid, now);
         if (c) {
@@ -980,8 +1045,8 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
     ts->file_size = FT_READ(inode, i_size);
     if (ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen) {
         carry_close_thread(ts, bpf_ktime_get_boot_ns());
-        /* What a loader reads of a library, its first 832 bytes, is no candidate to displace. */
-        ts->displaced = ts->pending >= 1024;
+        /* A smaller file could not be what a connection set up after it carries. */
+        ts->displaced = ts->pending >= CARRY_FLOOR;
         ts->file.ino = fk->ino;
         ts->file.dev = fk->dev;
         ts->file.instance = 0;
@@ -1002,8 +1067,9 @@ static __always_inline void thread_set_file(struct thread_state *ts, struct file
 /* Points the thread's background slot at the file, starting it over if that is another file. */
 static __always_inline void thread_set_background(struct thread_state *ts, struct file *file,
                                                   struct inode *inode, const struct file_key *fk,
-                                                  __u64 fs_magic)
+                                                  __u64 fs_magic, bool side)
 {
+    ts->bg_size = FT_READ(inode, i_size);
     if (ts->bg_file.ino != fk->ino || ts->bg_file.dev != fk->dev || ts->bg_gen != fk->gen) {
         ts->bg_file.ino = fk->ino;
         ts->bg_file.dev = fk->dev;
@@ -1011,6 +1077,7 @@ static __always_inline void thread_set_background(struct thread_state *ts, struc
         ts->bg_gen = fk->gen;
         background_reset(ts);
     }
+    ts->bg_side = side;
     if (ts->bg_forgotten != forgotten_files) {
         ts->bg_forgotten = forgotten_files;
         ts->bg_file.instance = 0;
