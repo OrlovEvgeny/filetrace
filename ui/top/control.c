@@ -374,46 +374,6 @@ static bool toggle_term(const char *text, const char *term, char *out, size_t si
     return true;
 }
 
-/* The glob of the one file: term of a Leaders filter, when that term is positive and a glob. */
-static void leader_glob(const char *text, char *out, size_t size)
-{
-    char token[FT_PATH_MAX];
-    char value[FT_PATH_MAX] = "";
-    size_t terms = 0;
-    bool negated = false;
-
-    out[0] = '\0';
-    for (const char *p = text; *p;) {
-        size_t n = 0;
-        bool quoted = false;
-        while (*p == ' ')
-            p++;
-        if (!*p)
-            break;
-        while (*p && (quoted || *p != ' ')) {
-            if (*p == '"') {
-                quoted = !quoted;
-                p++;
-                continue;
-            }
-            if (quoted && *p == '\\' && p[1])
-                p++;
-            if (n + 1 < sizeof(token))
-                token[n++] = *p;
-            p++;
-        }
-        token[n] = '\0';
-        const char *t = token[0] == '!' ? token + 1 : token;
-        if (strncasecmp(t, "file:", 5) != 0)
-            continue;
-        terms++;
-        negated = negated || t != token;
-        ft_strlcpy(value, t + 5, sizeof(value));
-    }
-    if (terms == 1 && !negated && strpbrk(value, "*?") && strlen(value) < size)
-        ft_strlcpy(out, value, size);
-}
-
 static bool set_filter_text(struct ft_top_controller *c, enum ft_top_mode mode, const char *text)
 {
     struct ft_error err = {0};
@@ -2018,8 +1978,8 @@ void ft_top_control_request(const struct ft_top_controller *c, struct ft_top_req
         req->key = ui->key;
         req->by = wire_measure(ui->by);
         req->limit = c->limit;
-        leader_glob(ft_top_filter_of(c->model, FT_TOP_LEADERS), req->leader_path,
-                    sizeof(req->leader_path));
+        ft_top_filter_leader_path(ft_top_filter_of(c->model, FT_TOP_LEADERS), req->leader_path,
+                                  sizeof(req->leader_path));
     } else {
         /* One scope narrows every mode, so only the mode on screen may set it. */
         ft_top_filter_pushdown(ft_top_filter_get(c->model, ui->mode), &req->scope);

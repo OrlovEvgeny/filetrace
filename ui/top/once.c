@@ -238,6 +238,8 @@ static void make_request(struct ft_top_request *req, const struct ft_top_options
         req->key = FT_LEADER_FILE;
         req->by = opt->by;
         req->limit = opt->limit;
+        ft_top_filter_leader_path(ft_top_filter_of(m, FT_TOP_LEADERS), req->leader_path,
+                                  sizeof(req->leader_path));
         return;
     }
     req->live = true;

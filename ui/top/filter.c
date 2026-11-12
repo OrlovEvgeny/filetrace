@@ -613,6 +613,45 @@ void ft_top_filter_pushdown(const struct ft_top_filter *f, struct ft_query *q)
         q->confidence = t->code;
 }
 
+void ft_top_filter_leader_path(const char *text, char *out, size_t size)
+{
+    char token[FT_PATH_MAX];
+    char value[FT_PATH_MAX] = "";
+    size_t terms = 0;
+    bool negated = false;
+
+    out[0] = '\0';
+    for (const char *p = text; *p;) {
+        size_t n = 0;
+        bool quoted = false;
+        while (*p == ' ')
+            p++;
+        if (!*p)
+            break;
+        while (*p && (quoted || *p != ' ')) {
+            if (*p == '"') {
+                quoted = !quoted;
+                p++;
+                continue;
+            }
+            if (quoted && *p == '\\' && p[1])
+                p++;
+            if (n + 1 < sizeof(token))
+                token[n++] = *p;
+            p++;
+        }
+        token[n] = '\0';
+        const char *t = token[0] == '!' ? token + 1 : token;
+        if (strncasecmp(t, "file:", 5) != 0)
+            continue;
+        terms++;
+        negated = negated || t != token;
+        ft_strlcpy(value, t + 5, sizeof(value));
+    }
+    if (terms == 1 && !negated && strpbrk(value, "*?") && strlen(value) < size)
+        ft_strlcpy(out, value, size);
+}
+
 const char *ft_top_filter_needle(const struct ft_top_filter *f, enum ft_top_field field,
                                  size_t *len)
 {

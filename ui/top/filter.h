@@ -82,6 +82,9 @@ bool ft_top_filter_match_leader(const struct ft_top_filter *f,
 /* Copies into q the terms the agent applies with the same meaning; the rest stay client-side. */
 void ft_top_filter_pushdown(const struct ft_top_filter *f, struct ft_query *q);
 
+/* The glob of a Leaders filter's one file: term, when that term is positive and a glob. */
+void ft_top_filter_leader_path(const char *text, char *out, size_t size);
+
 /* The text of the first positive term on field, or on any field, to highlight; nullptr if none. */
 const char *ft_top_filter_needle(const struct ft_top_filter *f, enum ft_top_field field,
                                  size_t *len);
