@@ -351,6 +351,14 @@ static void unpack_strings(const char *buf, size_t size, const char *out[3], siz
     }
 }
 
+/* Truncates x into uint64_t, saturating where a cast would be undefined. */
+static uint64_t to_u64(double x)
+{
+    if (!(x > 0.0))
+        return 0;
+    return x < 0x1p64 ? (uint64_t)x : UINT64_MAX;
+}
+
 /* 2^-x without libm, which the build does not link. */
 static double half_power(double x)
 {
@@ -583,7 +591,7 @@ static size_t take_transfers(struct ft_top_model *m, const struct ft_rows *rows,
         t->remote = row->remote;
         ft_endpoint_format(&row->remote, t->remote_text, sizeof(t->remote_text));
         t->is_public = row->remote.family != 0 && !ft_addr_is_private(&row->remote);
-        t->rate = (uint64_t)(e->smoothed + 0.5);
+        t->rate = to_u64(e->smoothed + 0.5);
         t->bytes = row->bytes;
         t->size = row->file_size;
         t->progress = row->file_size ? (double)row->bytes / (double)row->file_size : -1.0;
@@ -732,7 +740,7 @@ static void set_trend(struct ft_top_destination_entry *d, uint64_t slot, uint64_
         uint64_t span_ns = back == 0 ? into_slot_ns : FT_TOP_TREND_SLOT_NS;
         if (span_ns < FT_NS_PER_SEC)
             span_ns = FT_NS_PER_SEC;
-        d->pub.trend[i] = (uint64_t)((double)bytes * (double)FT_NS_PER_SEC / (double)span_ns);
+        d->pub.trend[i] = to_u64((double)bytes * (double)FT_NS_PER_SEC / (double)span_ns);
     }
 }
 
@@ -774,7 +782,7 @@ static void update_destinations(struct ft_top_model *m, uint64_t dt_ns)
             d->last_slot = slot;
         }
         d->slot_bytes[slot % FT_TOP_TREND] +=
-            (uint64_t)((double)e->raw_rate * (double)dt_ns / (double)FT_NS_PER_SEC);
+            to_u64((double)e->raw_rate * (double)dt_ns / (double)FT_NS_PER_SEC);
     }
 
     for (size_t i = m->ndestinations; i-- > 0;) {
@@ -1225,7 +1233,11 @@ void ft_top_leader_fill(const struct ft_top_model *m, const struct ft_row_leader
         }
     }
     out->is_new = compared && row->previous_rank == 0;
-    out->rank_change = row->previous_rank ? (int32_t)row->previous_rank - (int32_t)row->rank : 0;
+    int64_t change = row->previous_rank ? (int64_t)row->previous_rank - (int64_t)row->rank : 0;
+    /* Clamped symmetrically, as the screens print a fall negated. */
+    out->rank_change = (int32_t)(change > INT32_MAX    ? INT32_MAX
+                                 : change < -INT32_MAX ? -INT32_MAX
+                                                       : change);
     out->bar = top_value > 0 ? (double)ranked_value(row, by) / top_value : 0.0;
     out->share = span_bytes > 0 ? (double)row->bytes / span_bytes : 0.0;
 }

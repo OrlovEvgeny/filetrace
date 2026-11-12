@@ -773,7 +773,7 @@ static bool emit_sections(struct ft_top_model *m, struct ft_top_mode_state *ms, 
         }
         items[i].index = s;
         ms->sections[s].rows++;
-        ms->sections[s].rate += (uint64_t)items[i].rate;
+        ms->sections[s].rate += items[i].rate < 0x1p64 ? (uint64_t)items[i].rate : UINT64_MAX;
     }
 
     /* Items by section, keeping their order; then each section's distinct counts. */
