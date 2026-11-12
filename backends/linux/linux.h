@@ -112,7 +112,7 @@ void ft_linux_php_attach_pid(struct ft_linux_php *php, uint32_t pid);
 size_t ft_linux_php_binaries(const struct ft_linux_php *php);
 
 /* Remembers the path the probes reported for a script id; nullptr for an unknown id. */
-void ft_linux_php_script_seen(struct ft_linux_php *php, uint32_t id, uint32_t tgid,
+void ft_linux_php_script_seen(struct ft_linux_php *php, uint32_t id, uint32_t tgid, uint64_t hash,
                               const char *path, size_t len);
 const char *ft_linux_php_script(const struct ft_linux_php *php, uint32_t id);
 

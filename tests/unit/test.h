@@ -53,5 +53,6 @@ void test_metrics(void);
 void test_grpc(void);
 void test_otlp(void);
 void test_process(void);
+void test_scripts(void);
 
 #endif

@@ -747,6 +747,7 @@ int BPF_UPROBE(ft_php_execute_script, void *handle)
             s->ev.tgid = tgid;
             s->ev.len = (__u32)n - 1;
             s->ev.pad = 0;
+            s->ev.hash = h.hash;
             __u64 len = (__u64)n;
             if (len > FT_BPF_SCRIPT_MAX)
                 len = FT_BPF_SCRIPT_MAX;

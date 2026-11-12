@@ -1,8 +1,10 @@
 #include "backends/linux/linux.h"
 
 #include "filetrace/format.h"
+#include "filetrace/scripts.h"
 #include "filetrace/sysinfo.h"
 
+#include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -30,14 +32,10 @@ struct php_binary {
     struct bpf_link *end;
 };
 
-struct php_script {
-    uint32_t id;
-    char *path;
-};
-
 struct ft_linux_php {
     struct bpf_program *start_prog;
     struct bpf_program *end_prog;
+    int known_scripts_fd;
     struct php_binary binaries[MAX_BINARIES];
     size_t count;
     struct {
@@ -45,7 +43,7 @@ struct ft_linux_php {
         ino_t ino;
     } skipped[MAX_SKIPPED]; /* inodes looked at that are not PHP, or that refused the probe */
     size_t skipped_count;
-    struct php_script scripts[SCRIPT_SLOTS];
+    struct ft_script_names *names;
 };
 
 static bool read_at(int fd, void *buf, size_t size, uint64_t off)
@@ -272,13 +270,20 @@ struct ft_linux_php *ft_linux_php_open(struct bpf_object *obj)
 {
     struct bpf_program *start = bpf_object__find_program_by_name(obj, "ft_php_execute_script");
     struct bpf_program *end = bpf_object__find_program_by_name(obj, "ft_php_request_shutdown");
-    if (!start || !end || bpf_program__fd(start) < 0 || bpf_program__fd(end) < 0)
+    struct bpf_map *scripts = bpf_object__find_map_by_name(obj, "known_scripts");
+    if (!start || !end || !scripts || bpf_program__fd(start) < 0 || bpf_program__fd(end) < 0)
         return nullptr;
     struct ft_linux_php *php = calloc(1, sizeof(*php));
     if (!php)
         return nullptr;
+    php->names = ft_script_names_create(SCRIPT_SLOTS);
+    if (!php->names) {
+        free(php);
+        return nullptr;
+    }
     php->start_prog = start;
     php->end_prog = end;
+    php->known_scripts_fd = bpf_map__fd(scripts);
     return php;
 }
 
@@ -287,7 +292,7 @@ size_t ft_linux_php_binaries(const struct ft_linux_php *php)
     return php ? php->count : 0;
 }
 
-void ft_linux_php_script_seen(struct ft_linux_php *php, uint32_t id, uint32_t tgid,
+void ft_linux_php_script_seen(struct ft_linux_php *php, uint32_t id, uint32_t tgid, uint64_t hash,
                               const char *path, size_t len)
 {
     char full[FT_BPF_SCRIPT_MAX + PATH_MAX + 2];
@@ -315,21 +320,14 @@ void ft_linux_php_script_seen(struct ft_linux_php *php, uint32_t id, uint32_t tg
         }
     }
 
-    struct php_script *slot = &php->scripts[id % SCRIPT_SLOTS];
-    char *copy = strdup(full);
-    if (!copy)
-        return;
-    free(slot->path);
-    slot->id = id;
-    slot->path = copy;
+    uint64_t evicted = 0;
+    if (ft_script_names_put(php->names, id, hash, full, &evicted))
+        bpf_map_delete_elem(php->known_scripts_fd, &evicted);
 }
 
 const char *ft_linux_php_script(const struct ft_linux_php *php, uint32_t id)
 {
-    if (!php || !id)
-        return nullptr;
-    const struct php_script *slot = &php->scripts[id % SCRIPT_SLOTS];
-    return slot->id == id ? slot->path : nullptr;
+    return php ? ft_script_names_get(php->names, id) : nullptr;
 }
 
 void ft_linux_php_close(struct ft_linux_php *php)
@@ -340,7 +338,6 @@ void ft_linux_php_close(struct ft_linux_php *php)
         bpf_link__destroy(php->binaries[i].end);
         bpf_link__destroy(php->binaries[i].start);
     }
-    for (size_t i = 0; i < SCRIPT_SLOTS; i++)
-        free(php->scripts[i].path);
+    ft_script_names_destroy(php->names);
     free(php);
 }

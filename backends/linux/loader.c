@@ -641,7 +641,7 @@ static int on_ring_event(void *ctx, void *data, size_t size)
         if (size >= sizeof(struct ft_bpf_ev_script) && b->php) {
             const struct ft_bpf_ev_script *e = data;
             size_t len = e->len < size - sizeof(*e) ? e->len : size - sizeof(*e);
-            ft_linux_php_script_seen(b->php, e->id, e->tgid, (const char *)(e + 1), len);
+            ft_linux_php_script_seen(b->php, e->id, e->tgid, e->hash, (const char *)(e + 1), len);
         }
         break;
     default:

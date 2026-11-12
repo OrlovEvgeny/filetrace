@@ -103,6 +103,7 @@ struct ft_bpf_ev_script {
     __u32 tgid; /* the process that ran it, against whose directory a relative path is resolved */
     __u32 len;
     __u32 pad;
+    __u64 hash; /* the key of the id in known_scripts */
 };
 
 enum ft_bpf_agg_kind {
