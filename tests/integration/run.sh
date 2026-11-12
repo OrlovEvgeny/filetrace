@@ -368,6 +368,8 @@ expect "first flight: second of two files bytes" \
 
 # A file streamed in pieces after the connection, its first piece read before it, goes whole.
 "$workload" readstream "$data/stream-after-dial.bin" 300000 65536 >/dev/null
+# So does one whose first bytes were only looked at before the connection.
+"$workload" readsniff "$data/stream-sniffed.bin" 1048576 512 >/dev/null
 # Sent to two servers over connections opened after the read, it is reported for both; sent to
 # one while another connection makes small requests, once.
 "$workload" fanout "$data/fanout.bin" 300000 >/dev/null
@@ -395,7 +397,7 @@ mkdir -p "$data/etc/php/8.4/cli"
 "$workload" readlater "$data/later-large.bin" 300000 "$data/later-small.bin" 20000 3 3000 \
     >/dev/null
 settle
-for pair in stream-after-dial:300000 chatty:300000 two-a:300000 two-d:200000 \
+for pair in stream-after-dial:300000 stream-sniffed:1048576 chatty:300000 two-a:300000 two-d:200000 \
     reply-thread:300000 small-before:20000 side-bg-small:20000; do
     name=${pair%%:*}
     path=$(ls "$data/$name".* | head -1)
