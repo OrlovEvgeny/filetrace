@@ -2,6 +2,14 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.7.4 (2026-11-12)
+
+### Bug Fix
+
+- Forget a script id in the kernel when its name loses its slot ([7c5104c](https://github.com/OrlovEvgeny/filetrace/commit/7c5104cae02747372271ab55f78320d04e724353))
+- Open PHP libraries as mapped and probe each real file once ([80a2668](https://github.com/OrlovEvgeny/filetrace/commit/80a26683f7e77b679935ec1ff0e77ae0048db117))
+- Log the path and process of each probed PHP binary ([1eb91c6](https://github.com/OrlovEvgeny/filetrace/commit/1eb91c6c9f7408195ba67dd6495f0129f5ed3967))
+
 ## 26.11.6.5 (2026-11-12)
 
 ### New Feature
