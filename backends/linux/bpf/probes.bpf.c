@@ -210,7 +210,7 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
 
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
     bool background = background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
-    bool side = !background && side_read(ts, &fk, (__u64)ret);
+    bool side = !background && side_read(ts, &fk, (__u64)ret, 0);
     if (background || side) {
         thread_set_background(ts, file, inode, &fk, magic, side);
         ts->bg_pending += (__u64)ret;

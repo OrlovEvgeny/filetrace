@@ -509,12 +509,13 @@ static __always_inline bool side_held(const struct thread_state *ts, const struc
  * A file read while a large one waits to go over a connection the thread is setting up, such as
  * a CA file, a client key or a library: it does not take the large one's place while it is
  * small, since then it could not be what such a connection carries. The first send decides,
- * by where it goes; see side_send. more: what this read adds.
+ * by where it goes; see side_send. more: what this read adds; held: what of the large read a
+ * send has taken and not yet accounted.
  */
 static __always_inline bool side_read(const struct thread_state *ts, const struct file_key *fk,
-                                      __u64 more)
+                                      __u64 more, __u64 held)
 {
-    if (ts->pending < CARRY_FLOOR ||
+    if (ts->pending + held < CARRY_FLOOR ||
         (ts->file.ino == fk->ino && ts->file.dev == fk->dev && ts->gen == fk->gen))
         return false;
     if (ts->last_sent_ns >= ts->read_start_ns && !ts->carry_sock)

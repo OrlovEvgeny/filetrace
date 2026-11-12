@@ -130,6 +130,17 @@ static __always_inline struct thread_state *thread_now(bool create)
                                 create ? BPF_LOCAL_STORAGE_GET_F_CREATE : 0);
 }
 
+/* What the thread's last send over its carried connection claimed of its read and still holds. */
+static __always_inline __u64 claim_held(const struct thread_state *ts)
+{
+    __u64 sk = ts->carry_sock;
+    struct sock_track *t = sk ? bpf_map_lookup_elem(&socks, &sk) : NULL;
+    if (!t || t->claim_kind != FT_BPF_AGG_READ_SEND || !t->claim_carried ||
+        t->claim_tid != (__u32)bpf_get_current_pid_tgid())
+        return 0;
+    return t->claim_bytes;
+}
+
 SEC("kprobe/vfs_read")
 int BPF_KPROBE(ft_vfs_read, struct file *file, char *buf, size_t count)
 {
@@ -158,7 +169,7 @@ int BPF_KPROBE(ft_vfs_read, struct file *file, char *buf, size_t count)
     /* What the call will read is not known yet; what it asks for bounds it. */
     __u64 size = BPF_CORE_READ(inode, i_size);
     bool background = background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
-    bool side = !background && side_read(ts, &fk, count < size ? count : size);
+    bool side = !background && side_read(ts, &fk, count < size ? count : size, claim_held(ts));
     if (background || side) {
         thread_set_background(ts, file, inode, &fk, magic, side);
         ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);

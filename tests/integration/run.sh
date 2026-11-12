@@ -241,6 +241,7 @@ expect "read before a handshake: bundle by name not reported" \
 "$workload" readhandshake "$data/upload-private-ca.bin" 300000 "$data/private-ca.pem" 1111 \
     >/dev/null
 "$workload" readbundlefirst "$data/upload-key-first.bin" 300000 "$data/client.key" 1704 >/dev/null
+"$workload" readbundlelate "$data/upload-ca-late.bin" 300000 "$data/late-ca.pem" 1111 >/dev/null
 settle
 expect "side read: upload after a private CA bytes" \
     "$(ft files --path "$data/upload-private-ca.bin" --format csv | column transfer.bytes_sent)" 300000
@@ -250,6 +251,10 @@ expect "side read: upload after a key read first bytes" \
     "$(ft files --path "$data/upload-key-first.bin" --format csv | column transfer.bytes_sent)" 300000
 expect "side read: key read first not reported" \
     "$(ft files --path "$data/client.key" --format csv | rows)" 0
+expect "side read: upload with a CA read after the hello bytes" \
+    "$(ft files --path "$data/upload-ca-late.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "side read: CA read after the hello not reported" \
+    "$(ft files --path "$data/late-ca.pem" --format csv | rows)" 0
 
 # Sent on a connection that was open before the large read, the file read beside it is what
 # went, as the last read is.

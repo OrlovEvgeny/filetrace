@@ -265,14 +265,21 @@ static void scenario_read_then_recv(const char *path, size_t size)
     stop_sink(&sink);
 }
 
+/* When a client that uploads over a fresh connection reads its CA bundle. */
+enum bundle_order {
+    BUNDLE_AFTER_FILE,
+    BUNDLE_FIRST,
+    BUNDLE_AFTER_HELLO, /* as curl reads --cacert */
+};
+
 /*
  * readhandshake <path> <bytes> <bundle> <bundle bytes>: an upload over a fresh connection, as
  * an HTTPS client makes it. The file is read whole, then a CA bundle unless its size is 0;
  * then the peers trade a hello each way, and only then is the file sent. readbundlefirst reads
- * the bundle before the file.
+ * the bundle before the file, readbundlelate after sending the hello.
  */
 static void scenario_read_handshake(const char *path, size_t size, const char *bundle,
-                                    size_t bundle_size, bool bundle_first)
+                                    size_t bundle_size, enum bundle_order order)
 {
     struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
     make_file(path, size);
@@ -286,16 +293,20 @@ static void scenario_read_handshake(const char *path, size_t size, const char *b
     if (bundle_size) {
         make_file(bundle, bundle_size);
         ca = open_file(bundle);
-        if (bundle_first && read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+        if (order == BUNDLE_FIRST && read(ca, trust, bundle_size) != (ssize_t)bundle_size)
             die("read");
     }
     int file = open_file(path);
     if (read(file, contents, size) != (ssize_t)size)
         die("read");
-    if (ca >= 0 && !bundle_first && read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+    if (ca >= 0 && order == BUNDLE_AFTER_FILE &&
+        read(ca, trust, bundle_size) != (ssize_t)bundle_size)
         die("read");
     int sock = connect_sink(&sink);
     send_all(sock, "hello\n", 6);
+    if (ca >= 0 && order == BUNDLE_AFTER_HELLO &&
+        read(ca, trust, bundle_size) != (ssize_t)bundle_size)
+        die("read");
     if (recv(sock, greeting, sizeof(greeting), MSG_WAITALL) != (ssize_t)sizeof(greeting))
         die("recv");
     send_all(sock, contents, size);
@@ -967,9 +978,14 @@ int main(int argc, char **argv)
     else if (strcmp(name, "readthenrecv") == 0 && argc == 4)
         scenario_read_then_recv(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "readhandshake") == 0 && argc == 6)
-        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), false);
+        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
+                                BUNDLE_AFTER_FILE);
     else if (strcmp(name, "readbundlefirst") == 0 && argc == 6)
-        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]), true);
+        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
+                                BUNDLE_FIRST);
+    else if (strcmp(name, "readbundlelate") == 0 && argc == 6)
+        scenario_read_handshake(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]),
+                                BUNDLE_AFTER_HELLO);
     else if (strcmp(name, "readsendother") == 0 && argc == 6)
         scenario_read_send_other(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "exchange") == 0 && argc == 6)
