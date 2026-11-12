@@ -427,7 +427,7 @@ static bool ingest_file(struct ft_state *st, const struct ft_event *ev)
 }
 
 /* Bytes that preceded the association's first report are counted when it is reported. */
-static void count_transfer(struct ft_state *st, struct ft_transfer *t)
+static void count_transfer(struct ft_state *st, struct ft_transfer *t, struct ft_process *p)
 {
     enum ft_confidence conf;
     uint32_t evidence;
@@ -439,8 +439,9 @@ static void count_transfer(struct ft_state *st, struct ft_transfer *t)
         ft_series_add(st->series, FT_SERIES_TRANSFERS_STARTED, t->comm, t->method, conf, 1);
     }
     if (t->bytes > t->counted_bytes) {
-        ft_series_add(st->series, FT_SERIES_FILE_SENT, t->comm, t->method, conf,
-                      t->bytes - t->counted_bytes);
+        uint64_t delta = t->bytes - t->counted_bytes;
+        ft_series_add(st->series, FT_SERIES_FILE_SENT, t->comm, t->method, conf, delta);
+        p->file_bytes += delta;
         t->counted_bytes = t->bytes;
     }
 }
@@ -496,7 +497,7 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     t->ops += e->ops;
     t->alternations += e->alternations;
     ft_rate_add(&t->rate, ev->ts_ns, e->bytes);
-    count_transfer(st, t);
+    count_transfer(st, t, p);
     return true;
 }
 

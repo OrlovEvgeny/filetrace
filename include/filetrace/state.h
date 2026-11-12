@@ -78,6 +78,7 @@ struct ft_process {
     uint64_t last_ns;
     uint64_t tx_bytes;
     uint64_t rx_bytes;
+    uint64_t file_bytes; /* attributed to files in reported transfers */
     struct ft_rate tx_rate;
     struct ft_rate rx_rate;
     int32_t exit_status;
@@ -96,6 +97,7 @@ struct ft_process {
     /* Per-query working values. */
     uint64_t q_tx;
     uint64_t q_rx;
+    uint64_t q_file_bytes;
     uint64_t q_tx_rate;
     uint64_t q_rx_rate;
     uint32_t q_connections;

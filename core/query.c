@@ -186,6 +186,7 @@ static bool prepare_processes(struct ft_state *st, const struct ft_query *q, uin
          p = ft_table_next(st->processes, p)) {
         p->q_tx = p->tx_bytes;
         p->q_rx = p->rx_bytes;
+        p->q_file_bytes = p->file_bytes;
         p->q_tx_rate = ft_rate_per_second(&p->tx_rate, now_ns);
         p->q_rx_rate = ft_rate_per_second(&p->rx_rate, now_ns);
         p->q_connections = 0;
@@ -243,6 +244,7 @@ static bool prepare_processes(struct ft_state *st, const struct ft_query *q, uin
                 break;
             a->q_tx += c->tx_bytes;
             a->q_rx += c->rx_bytes;
+            a->q_file_bytes += c->file_bytes;
             a->q_tx_rate += ft_rate_per_second(&c->tx_rate, now_ns);
             a->q_rx_rate += ft_rate_per_second(&c->rx_rate, now_ns);
             a->q_connections += c->q_own_connections;
@@ -328,6 +330,7 @@ static bool query_processes(struct ft_state *st, const struct ft_query *q, uint6
             .rx_bytes = p->q_rx,
             .tx_rate = p->q_tx_rate,
             .rx_rate = p->q_rx_rate,
+            .file_bytes = p->q_file_bytes,
             .cgroup_id = p->cgroup_id,
             .pid = p->pid,
             .ppid = p->ppid,
