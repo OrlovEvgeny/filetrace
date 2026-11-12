@@ -1267,7 +1267,7 @@ expect "no minimum agent exit code" "$?" 0
 cat >"$work/background.toml" <<CONFIG
 [correlation]
 background_paths = ["$data/bg-*", "$data/ns-view/*", "*.both", "*.mixed"]
-strict_paths = ["$data/strict-*", "/etc/passwd", "*.both", "*/special.mixed", "*.fill"]
+strict_paths = ["$data/strict-*", "/etc/passwd", "*.both", "*/special.mixed", "*.fill", "*.so.*"]
 no_minimum_paths = ["/etc/passwd"]
 CONFIG
 # The agent resolves the patterns to inodes when it starts, so the files exist by then.
@@ -1364,6 +1364,21 @@ expect "background: file read before a late bundle bytes" \
 expect "background: late bundle not reported" \
     "$(ft files --path "$data/bg-late.crt" --format csv | rows)" 0
 rm -rf "$data/flood"
+
+# Files named by a part of their name, as *.so.* names versioned libraries, are the kernel's to
+# know: reading them leaves the agent's table of listed files as it was.
+listed() {
+    ft stats --json |
+        sed -n "s/.*\"listed_files\":{\"entries\":\([0-9]*\),\"capacity\":\([0-9]*\).*/\\$1/p"
+}
+expect "stats: capacity of the table of listed files" "$(listed 2)" 16384
+listed_before=$(listed 1)
+mkdir -p "$data/libs"
+"$workload" readmany "$data/libs" 300 .so.1 >/dev/null
+settle
+expect "libraries named by a part of their name: table of listed files unchanged" \
+    "$(listed 1)" "$listed_before"
+rm -rf "$data/libs"
 
 # So is one whose path matches only inside another mount namespace, as in a container.
 head -c 200000 /dev/zero >"$data/ns-source/bundle.crt"
