@@ -88,7 +88,7 @@ bool ft_top_control_init(struct ft_top_controller *c, struct ft_top_model *m,
 void ft_top_control_free(struct ft_top_controller *c);
 
 /* Records where the data comes from and that the first request went out at now_ns. */
-void ft_top_control_start(struct ft_top_controller *c, bool session_only);
+void ft_top_control_start(struct ft_top_controller *c, bool session_only, bool mode_overridden);
 
 /* Applies one input to the state and the model; says what the loop must do next. */
 unsigned ft_top_control(struct ft_top_controller *c, const struct ft_input *in);

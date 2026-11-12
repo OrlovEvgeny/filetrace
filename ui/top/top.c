@@ -153,7 +153,7 @@ static int start(struct run *r, struct ft_session *s, const struct ft_cli *cli,
     r->source = ft_top_source_start(s, cli, first, err);
     if (r->source) {
         ft_top_control_sent(r->c, first, 1);
-        ft_top_control_start(r->c, s->collector > 0);
+        ft_top_control_start(r->c, s->collector > 0, s->mode_overridden);
     }
     free(first);
     return r->source ? FT_EXIT_OK : err->code;

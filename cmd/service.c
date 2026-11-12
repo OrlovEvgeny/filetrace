@@ -94,6 +94,8 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s, int w
             cfg = *ft_cli_collector_config(cli);
         else
             ft_agent_config_defaults(&cfg);
+        /* A command that collects for itself is asked for files, whatever the service is given. */
+        cfg.backend_cfg.mode = FT_MODE_STANDARD;
         cfg.socket_path = nullptr;
         cfg.session_fd = pair[1];
         /* Exporting is the agent's business, not that of one command's collector. */
@@ -105,6 +107,8 @@ static int start_collector(const struct ft_cli *cli, struct ft_session *s, int w
 
     close(pair[1]);
     s->collector = pid;
+    s->mode_overridden = ft_cli_collector_config(cli) &&
+                         ft_cli_collector_config(cli)->backend_cfg.mode == FT_MODE_MINIMAL;
     if (wait_ms > 0) {
         struct pollfd pfd = {.fd = pair[0], .events = POLLIN};
         int n;
@@ -171,6 +175,9 @@ int ft_session_open(const struct ft_cli *cli, bool allow_foreground, struct ft_s
         return code;
     fprintf(stderr, "The Filetrace agent is not running; monitoring in the foreground for this\n"
                     "session. Only activity from now on is shown.\n");
+    if (s->mode_overridden)
+        fprintf(stderr, "The configuration file asks for minimal mode; this session collects in\n"
+                        "standard mode, with files.\n");
     return FT_EXIT_OK;
 }
 

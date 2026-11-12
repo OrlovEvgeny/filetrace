@@ -90,10 +90,11 @@ struct ft_top_ui {
     uint64_t lag_ns;       /* how late the latest data is beyond one refresh; 0 when on time */
 
     /* Where the data comes from. */
-    bool session_only;      /* no agent: a collector of this command's own, gone when it ends */
-    bool collector_lost;    /* that collector stopped; there is nothing to connect to again */
-    bool starting;          /* the first answer has been awaited for longer than a moment */
-    uint64_t starting_ns;   /* how long it has been awaited */
+    bool session_only;    /* no agent: a collector of this command's own, gone when it ends */
+    bool collector_lost;  /* that collector stopped; there is nothing to connect to again */
+    bool mode_overridden; /* it runs in standard mode though the configuration file says minimal */
+    bool starting;        /* the first answer has been awaited for longer than a moment */
+    uint64_t starting_ns; /* how long it has been awaited */
     uint64_t since_wall_ns; /* when the agent or the collector started; 0 until known */
 };
 

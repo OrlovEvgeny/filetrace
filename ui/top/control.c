@@ -2313,9 +2313,10 @@ bool ft_top_control_init(struct ft_top_controller *c, struct ft_top_model *m,
     return true;
 }
 
-void ft_top_control_start(struct ft_top_controller *c, bool session_only)
+void ft_top_control_start(struct ft_top_controller *c, bool session_only, bool mode_overridden)
 {
     c->ui.session_only = session_only;
+    c->ui.mode_overridden = session_only && mode_overridden;
     c->start_ns = c->now_ns;
 }
 

@@ -1214,7 +1214,12 @@ static void help_source(struct ft_top_draw *d, int x, int y, int width)
     if (ui->since_wall_ns)
         ft_top_since_text(ui->since_wall_ns, ft_top_totals(d->model)->now_wall_ns, true, since,
                           sizeof(since));
-    if (ui->session_only && since[0])
+    if (ui->session_only && ui->mode_overridden)
+        snprintf(text, sizeof(text),
+                 "No agent is running: this screen collects by itself%s%s, in standard mode though "
+                 "the configuration file says minimal.",
+                 since[0] ? " since " : "", since);
+    else if (ui->session_only && since[0])
         snprintf(text, sizeof(text),
                  "No agent is running: this screen collects by itself, since %s, and stops when "
                  "it closes.",

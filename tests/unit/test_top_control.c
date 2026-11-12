@@ -487,7 +487,7 @@ static void collector_session(void)
 
     /* The wait is shown only once it has lasted a moment. */
     r.c->now_ns = start;
-    ft_top_control_start(r.c, true);
+    ft_top_control_start(r.c, true, false);
     CHECK(ui->session_only);
     CHECK_U64(ft_top_control_deadline(r.c), start + moment);
     r.c->now_ns = start + moment - 1;
@@ -509,7 +509,7 @@ static void collector_session(void)
     /* One that stops later leaves the last data on the screen. */
     CHECK(rig_open(&r, FT_TOP_TRANSFERS));
     ui = &r.c->ui;
-    ft_top_control_start(r.c, true);
+    ft_top_control_start(r.c, true, false);
     fill(&r, 3);
     r.frame.stats.start_wall_ns = WALL;
     CHECK(!(deliver(&r) & FT_TOP_DO_QUIT));
@@ -522,7 +522,7 @@ static void collector_session(void)
 
     /* An agent that fails is retried, never a reason to end. */
     CHECK(rig_open(&r, FT_TOP_TRANSFERS));
-    ft_top_control_start(r.c, false);
+    ft_top_control_start(r.c, false, false);
     CHECK(!(fail_frame(&r, FT_EXIT_NO_AGENT) & FT_TOP_DO_QUIT));
     CHECK(!r.c->ui.collector_lost);
     rig_close(&r);

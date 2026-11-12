@@ -181,6 +181,7 @@ struct ft_session {
     struct ft_client *client;
     pid_t collector; /* a collector started for this session, or 0 */
     bool answered;   /* the collector has answered; it stops by itself when the session closes */
+    bool mode_overridden; /* the collector runs in standard mode though the file says minimal */
 };
 
 /* With allow_foreground, starts a collector for the session when no agent is reachable. */

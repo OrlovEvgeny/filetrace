@@ -1525,6 +1525,17 @@ expect_match "watch output" "$out" 'ACTIVE FILE TRANSFERS'
 expect_match "watch output" "$out" '^PROCESSES$'
 expect_match "watch notice" "$(cat "$work/watch.err")" 'monitoring in the foreground'
 
+# A command that collects for itself shows files whatever mode the configuration file asks for.
+printf '[agent]\nmode = "minimal"\n' >"$work/minimal.toml"
+"$workload" steady "$data/session.bin" 8000000 6 >/dev/null &
+session_job=$!
+out=$(timeout -s INT 4 "$bin/filetrace" --config "$work/minimal.toml" --socket "$work/none.sock" \
+    top --json 2>"$work/session.err" | tail -1)
+wait "$session_job"
+expect_match "session: files despite a minimal configuration" "$out" 'session\.bin'
+expect_match "session: says that it overrides the mode" "$(cat "$work/session.err")" \
+    'asks for minimal mode'
+
 # Without an agent, top collects for its own session on a terminal, and no collector outlives
 # it: not when q or an interrupt ends it, nor when it is killed. The badge names the time the
 # session started once the collector has answered; before that it is the bare word.
