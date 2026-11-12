@@ -227,7 +227,7 @@ static void put_time(struct writer *w, const char *name, uint64_t wall_ns)
     ft_json_string(w->out, text);
 }
 
-/* Items for one CSV cell, joined by commas. */
+/* Items for one CSV cell, joined as the other commands join them. */
 struct list {
     char *text;
     size_t len;
@@ -246,7 +246,7 @@ static void list_add(struct list *l, const char *item)
         l->text = grown;
         l->size = size;
     }
-    l->len += (size_t)snprintf(l->text + l->len, l->size - l->len, "%s%s", l->len ? "," : "", item);
+    l->len += (size_t)snprintf(l->text + l->len, l->size - l->len, "%s%s", l->len ? ";" : "", item);
 }
 
 static void put_list(struct writer *w, const char *name, const struct list *l)

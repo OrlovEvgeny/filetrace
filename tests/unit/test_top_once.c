@@ -588,12 +588,12 @@ static void lists(void)
     char *text = csv(f.m, FT_TOP_FILES, &rows);
     CHECK_U64(rows, 1);
     CHECK_U64(csv_records(text, &columns), 2);
-    CHECK(has(text, ",\"nginx,php-fpm\",sendfile,"));
+    CHECK(has(text, ",nginx;php-fpm,sendfile,"));
     free(text);
     text = csv(f.m, FT_TOP_DESTINATIONS, &rows);
     CHECK_U64(csv_records(text, &columns), 2);
     CHECK(has(text, ",trend\n"));
-    CHECK(has(text, ",\"0,0,0,0,0,0,0,0,0,0,0,"));
+    CHECK(has(text, ",0;0;0;0;0;0;0;0;0;0;0;"));
     free(text);
     fixture_free(&f);
 }
