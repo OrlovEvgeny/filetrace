@@ -10,6 +10,7 @@
 #include <string.h>
 
 constexpr uint32_t MAX_TRANSFERS = 1'000'000;
+constexpr size_t TABLE_ENTRIES = 131072;
 
 static void on_signal(int signo)
 {
@@ -123,14 +124,14 @@ int main(int argc, char **argv)
     ft_agent_config_defaults(&cfg);
     cfg.backend = ft_sim_backend();
     cfg.socket_path = socket_path;
-    if (strcmp(opt.scenario, "storm") == 0) {
-        size_t room = (size_t)opt.transfers * 3;
-        if (room > cfg.state_cfg.max_transfers) {
-            cfg.state_cfg.max_transfers = room;
-            cfg.state_cfg.max_sockets = room;
-            cfg.state_cfg.max_flows = room;
-        }
-    }
+    /* Room for a couple of hours of history; the storm needs more for itself. */
+    size_t room = TABLE_ENTRIES;
+    if (strcmp(opt.scenario, "storm") == 0 && (size_t)opt.transfers * 3 > room)
+        room = (size_t)opt.transfers * 3;
+    cfg.state_cfg.max_sockets = room;
+    cfg.state_cfg.max_flows = room;
+    cfg.state_cfg.max_files = room;
+    cfg.state_cfg.max_transfers = room;
 
     struct sigaction sa = {.sa_handler = on_signal};
     sigemptyset(&sa.sa_mask);
