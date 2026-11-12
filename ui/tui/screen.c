@@ -38,6 +38,8 @@ struct ft_screen {
     int cursor_y;
     bool has_pending;
     struct tb_event pending;
+    uint64_t escape_held_ms; /* since when termbox2 holds an Esc with bytes after it; 0: none */
+    bool escape_release;     /* the next extraction gives that Esc up as a key */
     struct cell_colors colors[FT_COLOR_COUNT][FT_COLOR_COUNT][8];
 };
 
@@ -239,6 +241,8 @@ static int init_termbox(void)
     return rv;
 }
 
+static int extract_escape(struct tb_event *ev, size_t *consumed);
+
 static bool enter(struct ft_screen *s, struct ft_error *err)
 {
     static const int modes[] = {
@@ -258,11 +262,14 @@ static bool enter(struct ft_screen *s, struct ft_error *err)
     }
     tb_set_output_mode(modes[s->depth]);
     tb_set_input_mode(TB_INPUT_ESC);
+    tb_set_func(TB_FUNC_EXTRACT_PRE, extract_escape);
     tb_set_clear_attrs(blank.fg, blank.bg);
     tb_send(MOUSE_ON, sizeof(MOUSE_ON) - 1);
     if (s->cursor_x >= 0)
         tb_set_cursor(s->cursor_x, s->cursor_y);
     s->has_pending = false;
+    s->escape_held_ms = 0;
+    s->escape_release = false;
     s->hangup = false;
     return true;
 }
@@ -414,7 +421,10 @@ static int take_event(struct ft_screen *s, struct tb_event *ev, int timeout_ms)
         s->has_pending = false;
         return TB_OK;
     }
-    return tb_peek_event(ev, timeout_ms);
+    int rv = tb_peek_event(ev, timeout_ms);
+    if (rv == TB_OK)
+        s->escape_held_ms = 0;
+    return rv;
 }
 
 static void put_back(struct ft_screen *s, const struct tb_event *ev)
@@ -699,6 +709,23 @@ static uint64_t now_ms(void)
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1'000'000;
 }
 
+/*
+ * termbox2 holds an Esc with the start of a sequence after it until more bytes come, however
+ * long that takes; once released, the Esc is a key and after_escape reads the bytes behind it.
+ */
+static int extract_escape(struct tb_event *ev, size_t *consumed)
+{
+    if (!screen.escape_release) {
+        if (!screen.escape_held_ms)
+            screen.escape_held_ms = now_ms();
+        return TB_ERR;
+    }
+    screen.escape_release = false;
+    *ev = (struct tb_event){.type = TB_EVENT_KEY, .key = TB_KEY_ESC};
+    *consumed = 1;
+    return TB_OK;
+}
+
 enum ft_wait ft_screen_wait(struct ft_screen *s, int timeout_ms, int wake_fd, struct ft_input *in)
 {
     uint64_t deadline = timeout_ms > 0 ? now_ms() + (uint64_t)timeout_ms : 0;
@@ -715,7 +742,9 @@ enum ft_wait ft_screen_wait(struct ft_screen *s, int timeout_ms, int wake_fd, st
             return FT_WAIT_INPUT;
         }
 
-        switch (take_input(s, in)) {
+        enum taken taken = take_input(s, in);
+        s->escape_release = false;
+        switch (taken) {
         case TAKEN_INPUT:
             return FT_WAIT_INPUT;
         case TAKEN_SKIPPED:
@@ -728,13 +757,21 @@ enum ft_wait ft_screen_wait(struct ft_screen *s, int timeout_ms, int wake_fd, st
         if (s->hangup)
             return FT_WAIT_QUIT;
 
+        uint64_t now = now_ms();
+        uint64_t stale = s->escape_held_ms ? s->escape_held_ms + SEQUENCE_MS : 0;
+        if (stale && now >= stale) {
+            s->escape_held_ms = 0;
+            s->escape_release = true;
+            continue;
+        }
         int wait = -1;
         if (timeout_ms >= 0) {
-            uint64_t now = now_ms();
             if (timeout_ms == 0 || now >= deadline)
                 return FT_WAIT_TIMEOUT;
             wait = (int)(deadline - now);
         }
+        if (stale && (wait < 0 || stale - now < (uint64_t)wait))
+            wait = (int)(stale - now);
 
         int tty = -1;
         int resize = -1;
