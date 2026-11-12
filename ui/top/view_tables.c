@@ -914,6 +914,15 @@ static void section_cells(struct row_draw *rd, struct ft_rect row, const struct 
         put(rd, &x, end, ft_top_fg(FT_COLOR_DIM, false), sums, FT_TOP_FIELD_COUNT);
 }
 
+/* The selection over a finished row: a dim bar, so the row is seen to fade while it stays. */
+static void fade_row(struct ft_top_draw *d, struct ft_rect row)
+{
+    struct ft_style s = {.fg = FT_COLOR_BG, .bg = FT_COLOR_DIM};
+    if (d->depth == FT_DEPTH_NONE)
+        s.attrs = FT_ATTR_REVERSE;
+    ft_canvas_restyle(d->canvas, row, s);
+}
+
 static void draw_row(struct ft_top_draw *d, enum ft_top_mode mode, const struct columns *cols,
                      struct ft_rect row, size_t index, const struct ft_top_row *r)
 {
@@ -960,7 +969,10 @@ static void draw_row(struct ft_top_draw *d, enum ft_top_mode mode, const struct 
         if (rd.tagged)
             ft_canvas_text(d->canvas, row.x + row.w - 1, row.y, 1, ft_top_fg(FT_COLOR_BG, true),
                            "•");
-        ft_top_select_row(d, row);
+        if (rd.done)
+            fade_row(d, row);
+        else
+            ft_top_select_row(d, row);
     }
     for (size_t i = 0; i < rd.npieces; i++) {
         const struct piece *p = &rd.pieces[i];
