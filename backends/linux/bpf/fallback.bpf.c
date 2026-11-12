@@ -14,8 +14,9 @@ struct sock_track {
     __u32 rx_seq; /* copied_seq, without a consumed FIN, up to which received bytes are */
     __u32 tx_tgid;
     __u32 rx_tgid;
-    __u32 tx_tid; /* the thread whose bytes write_seq has grown by since tx_seq */
-    __u8 tx_live; /* tx_seq is a baseline that write_seq still advances from */
+    __u32 tx_tid;   /* the thread whose bytes write_seq has grown by since tx_seq */
+    __u64 tx_asked; /* what the last send of tx_tid was given */
+    __u8 tx_live;   /* tx_seq is a baseline that write_seq still advances from */
     __u8 rx_live;
     __u8 claim_kind; /* enum ft_bpf_agg_kind, or 0 */
     __u8 claim_fresh;
@@ -252,16 +253,17 @@ static __always_inline void tcp_settle_tx(void *map, struct sock *sk, struct soc
     if (spliced && (__u32)bpf_get_current_pid_tgid() == t->claim_tid)
         sendfile_read(thread_now(false), t->claim_file.ino, t->claim_file.dev);
     if (t->carrying)
-        carry_wire((__u64)sk, delta - spliced, t->tx_tid);
+        carry_wire((__u64)sk, delta - spliced, t->tx_tid, spliced ? 0 : t->tx_asked, seq);
     claim_settle(map, sk, t, delta, now);
 }
 
-static __always_inline void carry_settle(void *map, __u64 sk, __u64 now)
+static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
 {
     struct sock_track *t = bpf_map_lookup_elem(&socks, &sk);
     if (!t)
-        return;
+        return false;
     tcp_settle_tx(map, (struct sock *)sk, t, now);
+    return t->claim_kind != 0;
 }
 
 /* Returns whether the receiver has consumed anything since the socket was last looked at. */
@@ -332,13 +334,18 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     tcp_settle_tx(map, sk, t, now);
     t->tx_tgid = (__u32)(ids >> 32);
     t->tx_tid = (__u32)ids;
+    t->tx_asked = 0;
 
     /* Pages spliced in by sendfile belong to the claim that sendfile made. */
     if (!cfg.file_corr || (BPF_CORE_READ(msg, msg_flags) & MSG_SPLICE_PAGES))
         return 0;
 
-    if (t->carrying)
-        carry_sent(map, (__u64)sk, 0, size, now);
+    /* What the send takes, and what it was given, count as the socket is settled. */
+    t->tx_asked = size;
+    if (t->carrying) {
+        carry_send_starts(map, (__u64)sk, 0, now);
+        carry_send_counted((__u64)sk, 0, 0, now);
+    }
     struct thread_state *ts = thread_now(false);
     claim_release(t, ts, (__u32)ids);
     if (!ts)
@@ -357,7 +364,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     }
     bool skip;
     struct carry *c =
-        carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, size, now, true, &skip);
+        carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, 0, now, true, &skip);
     if (c) {
         t->carrying = 1;
         if (c->read_seen < ts->file_read)

@@ -595,8 +595,11 @@ static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
     *fresh = 0;
 }
 
-/* Brings what the socket took up to date before its window is judged. */
-static __always_inline void carry_settle(void *map, __u64 sk, __u64 now);
+/*
+ * Brings what the socket took up to date before its window is judged. Returns whether a send has
+ * claimed bytes of a file that the socket has not taken yet.
+ */
+static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now);
 
 static __always_inline bool sock_heard(__u64 sk)
 {
@@ -797,13 +800,13 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
     if (!c->last_ns || now - c->last_ns <= cfg.corr_window_ns)
         return 0;
     /* A send the socket is still taking keeps the window open. */
+    bool claimed = carry_settle(map, sk, now);
     __u32 seq = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
-    if (seq != c->seq_seen) {
+    if (claimed || seq != c->seq_seen) {
         c->seq_seen = seq;
         c->last_ns = now;
         return 0;
     }
-    carry_settle(map, sk, now);
     if (c->kind != CARRY_EPISODE && c->wire < CARRY_FLIGHT_MAX)
         return 0;
     if (__sync_val_compare_and_swap(&c->judged, 0, 1))
@@ -939,18 +942,19 @@ static __always_inline void carry_send_counted(__u64 sk, __u64 bytes, __u64 aske
     c->seq_seen = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
 }
 
-static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 asked, __u64 now)
-{
-    carry_send_starts(map, sk, bytes, now);
-    carry_send_counted(sk, bytes, asked, now);
-}
-
-/* Counts what the socket took into its windows, as the socket is settled; tid sent it. */
-static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid)
+/*
+ * Counts what the socket took into its windows, as the socket is settled: tid sent it in sends
+ * given up to asked, and write_seq stands at seq.
+ */
+static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid, __u64 asked, __u32 seq)
 {
     struct carry *c = carry_get(sk);
-    if (c && c->tid == tid)
+    if (c && c->tid == tid) {
         __sync_fetch_and_add(&c->wire, bytes);
+        if (asked > c->asked)
+            c->asked = asked;
+        c->seq_seen = seq;
+    }
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (d) {
         __sync_fetch_and_add(&d->wire, bytes);

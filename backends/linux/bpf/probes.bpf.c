@@ -5,8 +5,9 @@
 #include "common.bpf.h"
 
 /* Sends are counted as they return, so a window is always up to date. */
-static __always_inline void carry_settle(void *map, __u64 sk, __u64 now)
+static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
 {
+    return false;
 }
 
 SEC("tp_btf/inet_sock_set_state")
