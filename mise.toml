@@ -97,6 +97,10 @@ run = [
     "tools/dev/vm.sh 6.12 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'",
 ]
 
+[tasks."shots:top"]
+description = "Save every screen of filetrace top as text, HTML and PNG, from the simulated agent"
+run = "tools/dev/top-shots.sh"
+
 [tasks.dist]
 description = "Build the static Linux binaries into dist/"
 run = "tools/dist/build.sh"

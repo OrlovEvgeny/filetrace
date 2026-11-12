@@ -32,6 +32,15 @@ A change to packaging, the service definitions or the installer is checked by
 the package tests, which need Docker: `mise run dist`, `mise run package`,
 then `mise run test:package`.
 
+A change to the screen of `filetrace top` is judged by looking at it.
+`mise run shots:top` draws every screen from the simulated agent
+(`tests/sim`) and prints the directory, under the system's temporary one,
+where it saved them as text, HTML and PNG. It builds on
+`tools/dev/tuishot.py`, which runs any terminal program on a pseudo-terminal,
+presses the keys it is given and saves the screen. Both need only `python3`
+(3.9 or later, no packages); the PNG files are rendered by Chrome or Chromium
+and are left out where neither is installed.
+
 ## Commits and branches
 
 Work happens on a branch named `<type>/<short-description>`. A contribution
