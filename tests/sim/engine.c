@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Clients that come back, and now and then one that has not been seen. */
+/* Clients that come back, and some that have not been seen before. */
 constexpr size_t CLIENT_POOL = 150;
 constexpr uint64_t NEW_CLIENT_PERCENT = 10;
 constexpr uint64_t JITTER_MAX_NS = 30 * FT_NS_PER_MS;
@@ -18,7 +18,6 @@ constexpr uint32_t NETNS = 4026531840u;
 static const char *const host_addrs[4] = {"10.0.0.10", "203.0.113.10", "fd00:10::10",
                                           "2001:db8:10::10"};
 
-/* The first two bytes of the residential and business ranges the clients come from. */
 static const uint8_t client_prefixes[][2] = {
     {81, 2},    {62, 45}, {84, 241}, {145, 53}, {188, 207}, {77, 162}, {85, 144},  {92, 68},
     {213, 127}, {86, 83}, {89, 99},  {31, 21},  {176, 10},  {94, 208}, {82, 73},   {95, 96},
@@ -286,10 +285,6 @@ static size_t store_path(struct ft_sim_engine *e, const char *path)
     return off;
 }
 
-/* ------------------------------------------------------------------------------------------ */
-/* Events that a kernel queues one by one                                                     */
-/* ------------------------------------------------------------------------------------------ */
-
 static void ring_process(struct ft_sim_engine *e, enum ft_event_type type, const struct proc_rt *p,
                          uint64_t ts)
 {
@@ -375,10 +370,6 @@ static void ring_file(struct ft_sim_engine *e, uint64_t ts, const struct ft_file
     ft_strlcpy(r->ev.file.fs_type, fs_type ? fs_type : "ext4", sizeof(r->ev.file.fs_type));
 }
 
-/* ------------------------------------------------------------------------------------------ */
-/* Hosts, clients and files                                                                   */
-/* ------------------------------------------------------------------------------------------ */
-
 static void endpoint_v4(struct ft_endpoint *ep, uint8_t a, uint8_t b, uint8_t c, uint8_t d,
                         uint16_t port)
 {
@@ -410,7 +401,6 @@ static void random_v6(struct ft_sim_engine *e, struct ft_endpoint *ep)
     endpoint_v6(ep, raw, 0);
 }
 
-/* Any address a client on the internet could have, v6 now and then. */
 static void random_public(struct ft_sim_engine *e, struct ft_endpoint *ep)
 {
     static const uint8_t reserved[] = {0, 10, 100, 127, 169, 172, 192, 198, 203};
@@ -519,10 +509,6 @@ static struct ft_file_id file_identity(const char *path, uint64_t instance)
         .instance = (uint32_t)instance,
     };
 }
-
-/* ------------------------------------------------------------------------------------------ */
-/* Processes                                                                                  */
-/* ------------------------------------------------------------------------------------------ */
 
 static char *build_args(const struct ft_sim_process *d, size_t *len)
 {
@@ -664,10 +650,6 @@ static void recycle_due(struct ft_sim_engine *e, uint64_t t0, uint64_t t1)
         e->failed = true;
     e->next_recycle_ns = at + rng_range(&e->rng, r->min_s, r->max_s) * FT_NS_PER_SEC;
 }
-
-/* ------------------------------------------------------------------------------------------ */
-/* Transfers                                                                                  */
-/* ------------------------------------------------------------------------------------------ */
 
 static void pick_destination(struct ft_sim_engine *e, const struct ft_sim_generator *g,
                              const struct slot *s, struct ft_endpoint *remote)
@@ -910,7 +892,7 @@ static void transfer_finish(struct ft_sim_engine *e, struct slot *s, const struc
         end_ns + rng_range(&e->rng, g->def->pause_min_ms, g->def->pause_max_ms) * FT_NS_PER_MS;
 }
 
-/* A rate that wanders a few percent around its mean and now and then dips. */
+/* A rate that wanders a few percent around its mean and sometimes dips. */
 static double wobble(struct ft_sim_engine *e, struct slot *s)
 {
     double noise = (rng_unit(&e->rng) - 0.5) * 0.04;
@@ -968,10 +950,6 @@ static void slot_run(struct ft_sim_engine *e, struct slot *s, uint64_t t0, uint6
         cursor = end_ns;
     }
 }
-
-/* ------------------------------------------------------------------------------------------ */
-/* Delivery                                                                                   */
-/* ------------------------------------------------------------------------------------------ */
 
 static int compare_order(const void *a, const void *b)
 {
@@ -1152,10 +1130,6 @@ bool ft_sim_engine_process_text(const struct ft_sim_engine *e, uint32_t pid,
     ft_strlcpy(out->cwd, p->def->cwd, sizeof(out->cwd));
     return true;
 }
-
-/* ------------------------------------------------------------------------------------------ */
-/* Creation                                                                                   */
-/* ------------------------------------------------------------------------------------------ */
 
 static bool start_generators(struct ft_sim_engine *e, uint64_t at)
 {

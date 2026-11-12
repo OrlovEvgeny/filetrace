@@ -161,7 +161,7 @@ static int backend_poll_fd(struct ft_backend *b)
     return -1;
 }
 
-/* A few percent of the queue is in use, and what it holds now and then is larger. */
+/* A few percent of the queue is in use; bursts of queued events raise it. */
 static void update_queue(struct ft_backend *b)
 {
     uint64_t queued = ft_sim_engine_queued_events(b->engine);

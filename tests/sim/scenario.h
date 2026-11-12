@@ -49,7 +49,7 @@ struct ft_sim_flavor {
 enum ft_sim_dest_kind : uint8_t {
     FT_SIM_DEST_LIST,          /* the generator's own addresses, one per slot in turn */
     FT_SIM_DEST_PUBLIC,        /* clients from a pool that favours a few */
-    FT_SIM_DEST_PUBLIC_RANDOM, /* a new public address every time */
+    FT_SIM_DEST_PUBLIC_RANDOM, /* a different public address each time */
     FT_SIM_DEST_PRIVATE,       /* 10.0.x.y */
 };
 
@@ -78,11 +78,11 @@ struct ft_sim_generator {
     const struct ft_sim_dest *dests;
     uint16_t local_port; /* the service port of accepted connections */
     uint32_t chunk;      /* bytes per read or send call */
-    bool rotates;        /* every file of a flavor is a new file under the same path */
+    bool rotates;        /* each file of a flavor is a different file under the same path */
     const struct ft_sim_flavor *flavors;
 };
 
-/* From time to time one child of `parent` that is idle exits and a new process replaces it. */
+/* Occasionally an idle child of `parent` exits and another process takes its place. */
 struct ft_sim_recycle {
     uint32_t parent; /* 0: nothing is replaced */
     uint32_t min_s;
