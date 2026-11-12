@@ -811,6 +811,10 @@ if ft stats | grep -q 'eBPF (kprobes)'; then
     stall_send=$!
 fi
 "$workload" twosenders "$data/token.txt" 2000 150 2100 >/dev/null
+# Nor is a small file a pool thread reads for a reply far from its size, while other threads'
+# replies on the same kept-alive connection are still open: ten threads, more than a socket keeps.
+mkdir -p "$data/pool"
+"$workload" poolreply "$data/pool" 10 >/dev/null
 "$workload" latebody "$data/client.conf" 5000 200 4 5000 >/dev/null
 sleep 2
 expect "held reply never answered: strict file bytes" \
@@ -833,6 +837,8 @@ expect "reply cut short, given less than the file read before it: not reported" 
     "$(ft files --path "$data/cut-other.cfg" --format csv | rows)" 0
 expect "reply with another thread's bytes on the connection not reported" \
     "$(ft files --path "$data/token.txt" --format csv | rows)" 0
+expect "pool threads answering one connection in turn: small files not reported" \
+    "$(ft files --path "$data/pool/*" --format csv | rows)" 0
 expect "body long after a small file's read not reported" \
     "$(ft files --path "$data/client.conf" --format csv | rows)" 0
 wait "$held_strict" "$held_page" "$held_cfg" "$slow_flight" "$cut_reply" "$cut_other" "$reused" \

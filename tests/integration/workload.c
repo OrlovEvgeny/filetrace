@@ -1580,6 +1580,87 @@ static void scenario_hold_open(const char *path, size_t size, size_t body, size_
     stop_sink(&sink);
 }
 
+/* The three replies of a pool: a page from a template, a page with a small setting, a health check.
+ */
+static const struct {
+    const char *name;
+    size_t size;
+    size_t reply;
+} pool_shapes[] = {
+    {"layout.tpl", 5000, 20300}, {"app.env", 1500, 20300}, {"health.yml", 5000, 2000}};
+
+struct pool_worker {
+    int sock;
+    char path[4096];
+    size_t size;
+    size_t reply;
+};
+
+static void *pool_worker_main(void *arg)
+{
+    struct pool_worker *w = arg;
+    char request[2];
+    if (recv(w->sock, request, sizeof(request), MSG_WAITALL) != (ssize_t)sizeof(request))
+        die("recv");
+    char *contents = read_whole_file(w->path, w->size);
+    char *out = calloc(1, w->reply);
+    if (!out)
+        die("malloc");
+    memcpy(out, contents, w->size < w->reply ? w->size : w->reply);
+    send_all(w->sock, out, w->reply);
+    free(out);
+    free(contents);
+    return nullptr;
+}
+
+/*
+ * poolreply <dir> <threads>: serves one kept-alive connection from a pool of threads in turn, each
+ * hearing one request, reading a small file and answering with a reply far from its size, a
+ * fifth of a second apart.
+ */
+static void scenario_pool_reply(const char *dir, size_t threads)
+{
+    struct sockaddr_storage addr;
+    socklen_t len = loopback(false, &addr);
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0 || bind(listener, (struct sockaddr *)&addr, len) != 0 ||
+        getsockname(listener, (struct sockaddr *)&addr, &len) != 0 || listen(listener, 1) != 0)
+        die("listen");
+    pid_t client = fork();
+    if (client < 0)
+        die("fork");
+    if (client == 0) {
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0 || connect(sock, (struct sockaddr *)&addr, len) != 0)
+            _exit(1);
+        char *reply = malloc(65536);
+        for (size_t i = 0; i < threads && reply; i++) {
+            size_t want = pool_shapes[i % 3].reply;
+            if (send(sock, "R\n", 2, 0) != 2 ||
+                recv(sock, reply, want, MSG_WAITALL) != (ssize_t)want)
+                _exit(1);
+            usleep(200 * 1000);
+        }
+        _exit(0);
+    }
+    int sock = accept(listener, nullptr, nullptr);
+    if (sock < 0)
+        die("accept");
+    for (size_t i = 0; i < threads; i++) {
+        struct pool_worker w = {
+            .sock = sock, .size = pool_shapes[i % 3].size, .reply = pool_shapes[i % 3].reply};
+        snprintf(w.path, sizeof(w.path), "%s/%zu-%s", dir, i, pool_shapes[i % 3].name);
+        pthread_t thread;
+        if (pthread_create(&thread, nullptr, pool_worker_main, &w) != 0)
+            die("pthread_create");
+        pthread_join(thread, nullptr);
+    }
+    waitpid(client, nullptr, 0);
+    close(sock);
+    close(listener);
+    report("poolreply", dir, threads, 0);
+}
+
 struct side_send {
     int sock;
     size_t bytes;
@@ -3527,6 +3608,8 @@ int main(int argc, char **argv)
         scenario_cut_reply(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "holdopen") == 0 && argc == 6)
         scenario_hold_open(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
+    else if (strcmp(name, "poolreply") == 0 && argc == 4)
+        scenario_pool_reply(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "twosenders") == 0 && argc == 6)
         scenario_two_senders(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "latebody") == 0 && argc == 7)
