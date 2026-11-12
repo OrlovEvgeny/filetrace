@@ -1,0 +1,115 @@
+# What each scenario must show, from what really left: OK when every file sent is listed with
+# its bytes and nothing else is; LIMIT when a documented limit or residue explains a deviation,
+# with that reason in the last column. The release columns hold what release 26.11.7.4 showed
+# on this suite: OK, BUG, the failed runs out of those made (1/4), or '-' when not measured.
+# runs is how many times a row runs on each probe set; a flaky row needs more than one.
+#
+# scenario                                             finding auto  kprobe release release runs reason
+#                                                                           auto    kprobe
+config-read-then-api-calls                             F001    OK    OK     -       -       1
+keys-and-config-read-while-connecting                  F002    OK    OK     -       -       1
+upload-then-private-ca-before-handshake                F003    OK    OK     -       -       1
+lazy-loads-between-read-and-connect                    F004    OK    OK     -       -       1
+config-read-per-request                                F005    OK    OK     -       -       1
+php-tls-uploads                                        F006    OK    OK     -       -       1
+nginx-tls-downloads                                    F007    OK    OK     -       -       1
+stale-reads-then-memory-30s                            F008    OK    OK     -       -       1
+stale-reads-then-memory-5s                             F008    OK    OK     -       -       1
+stale-reads-then-memory-2500ms                         F008    OK    OK     -       -       1
+side-reads-then-small-file                             F008    OK    OK     -       -       1
+unsent-file-then-streamed-upload                       F009    OK    OK     -       -       1
+first-piece-read-before-connect-then-stream            F009    OK    OK     -       -       1
+sniffed-head-then-stream                               F009    OK    OK     -       -       1
+checksum-then-sendfile                                 F010    OK    OK     -       -       1
+strict-named-uploads-by-order                          F011    OK    OK     -       -       1
+config-then-strict-named-upload                        F012    OK    OK     -       -       1
+resolver-read-after-connect                            F013    OK    OK     -       -       1
+uploads-soon-after-agent-start                         F014    OK    OK     -       -       1
+small-file-after-connect                               F015    OK    OK     -       -       1
+module-sized-bodies                                    F016    OK    OK     -       -       1
+head-then-small-body                                   F017    OK    OK     -       -       1
+upload-then-chat                                       F018    OK    OK     -       -       1
+sendfile-reply-then-memory-64k                         F019    OK    OK     -       -       1
+sendfile-reply-then-memory-300k                        F019    OK    OK     -       -       1
+memory-reply-then-sendfile                             F019    LIMIT LIMIT  BUG     BUG     1    a file sent with sendfile after a memory body of its size is listed twice (residue)
+sendfile-then-memory-without-reply                     F019    LIMIT LIMIT  -       -       1    a thread that reads a file and sends unrelated memory without hearing back is credited with it (residue)
+datagram-of-py-file                                    F020    OK    OK     -       -       1
+datagram-of-passwd                                     F020    OK    OK     -       -       1
+datagram-of-js-file                                    F020    OK    OK     -       -       1
+datagram-of-php-file                                   F020    OK    OK     -       -       1
+unconnected-datagram-of-py-file                        F020    OK    OK     -       -       1
+datagrams-of-large-file                                F020    OK    OK     -       -       1
+datagrams-of-large-py-file                             F020    OK    OK     -       -       1
+datagram-of-ordinary-file                              F020    OK    OK     -       -       1
+kept-alive-small-uploads                               F021    OK    OK     -       -       1
+strict-named-uploads-tls-and-after-file                F022    OK    OK     -       -       1
+server-pread-database-then-script                      F023    OK    OK     -       -       1
+old-connection-unsent-file-then-stream                 F024    OK    OK     -       -       1
+server-page-after-metrics-datagram                     F025    OK    OK     -       -       1
+server-page-after-metrics-line                         F025    OK    OK     -       -       1
+one-way-sender-resends-status                          F026    OK    OK     -       -       1
+one-read-two-sockets                                   F027    OK    OK     -       -       1
+token-read-other-thread-sends                          F028    OK    OK     -       -       1
+flask-send-small-file                                  F029    OK    OK     -       -       1
+connect-read-send                                      -       OK    OK     -       -       1
+unsent-file-then-memory-on-second-dial                 -       LIMIT LIMIT  -       -       1    a thread that reads a file and sends unrelated memory without hearing back is credited with it (residue)
+chatty-65536-500x100                                   -       OK    OK     -       -       1
+chatty-307200-500x100                                  -       OK    OK     -       -       1
+chatty-2097152-500x100                                 -       OK    OK     -       -       1
+chatty-65536-3100x100                                  -       OK    OK     -       -       1
+chatty-307200-3100x100                                 -       OK    OK     -       -       1
+chatty-2097152-3100x100                                -       OK    OK     -       -       1
+chatty-65536-9216x100                                  -       LIMIT LIMIT  BUG     BUG     1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
+chatty-307200-9216x100                                 -       LIMIT LIMIT  -       -       1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
+chatty-2097152-9216x100                                -       OK    OK     -       -       1
+chatty-65536-20480x100                                 -       LIMIT LIMIT  -       -       1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
+chatty-307200-20480x100                                -       LIMIT LIMIT  -       -       1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
+chatty-2097152-20480x100                               -       OK    OK     -       -       1
+chatty-307200-32768x10                                 -       LIMIT LIMIT  -       -       1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
+chatty-307200-49152x7                                  -       LIMIT LIMIT  -       -       1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
+chatty-307200-65536x5                                  -       LIMIT LIMIT  -       -       1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
+chatty-1048576-16384x64                                -       OK    OK     -       -       1
+chatty-1048576-32768x32                                -       OK    OK     -       -       1
+chatty-1048576-65536x16                                -       OK    OK     -       -       1
+small-file-after-pread-small.json                      -       OK    OK     -       -       1
+small-file-after-pread-x.js                            -       OK    OK     -       -       1
+small-file-after-pread-x.so                            -       OK    OK     -       -       1
+one-way-stream                                         -       OK    OK     -       -       1
+one-way-stream-paused                                  -       OK    OK     -       -       1
+parts-over-fresh-connections                           -       OK    OK     -       -       1
+same-size-files-over-fresh-connections                 -       OK    OK     -       -       1
+stream-beside-idle-connection                          -       OK    OK     -       -       1
+stream-beside-connection-with-line                     -       OK    OK     -       -       1
+late-send-on-dialed-connection                         -       OK    OK     -       -       1
+slow-upload-with-reply-midway                          -       OK    OK     -       -       1
+one-way-sender-tails-log                               -       OK    OK     -       -       1
+two-files-on-fresh-connection-2500-2500                -       OK    OK     -       -       1
+two-files-on-fresh-connection-3000-3000                -       OK    OK     -       -       1
+two-files-on-fresh-connection-5000-6000                -       OK    OK     -       -       1
+upload-read-before-connect-token-after                 -       OK    OK     -       -       1
+config-then-memory-requests                            -       OK    OK     -       -       1
+small-file-behind-head-2600                            -       OK    OK     -       -       1
+small-file-behind-head-2800                            -       OK    OK     -       -       1
+small-file-behind-head-2999                            -       OK    OK     -       -       1
+small-script-behind-head-2800                          -       OK    OK     -       -       1
+cut-reply-from-memory                                  -       OK    OK     -       -       1
+full-reply-from-memory                                 -       OK    OK     -       -       1
+cut-reply-of-file                                      -       OK    OK     -       -       1
+cut-reply-of-large-file                                -       OK    OK     -       -       1
+cut-replies-on-six-connections                         -       LIMIT LIMIT  BUG     BUG     1    a reply whose size falls inside the small file's band (90% of the file up to the file plus 1 KB) is reported whether or not the send was cut
+upload-answered-then-next-request                      -       OK    OK     -       -       1
+upload-unanswered-connection-open                      F031    OK    OK     OK      BUG     4
+large-upload-unanswered-connection-open                F031    OK    OK     -       -       4
+status-resent-on-never-heard-connection                -       OK    OK     -       -       1
+two-files-on-never-heard-connection                    -       OK    OK     OK      OK      1
+three-files-on-never-heard-connection                  -       OK    OK     -       -       1
+two-php-files-on-never-heard-connection                -       OK    OK     -       -       1
+script-then-file-after-pause-on-never-heard-connection -       OK    OK     -       -       1
+writer-thread-page-reader-thread-echoes                -       OK    OK     OK      OK      1
+writer-thread-stream-reader-thread-hears-once          -       OK    OK     -       -       1
+one-blocking-send-to-slow-reader                       -       OK    OK     -       -       1
+one-blocking-send-reader-thread-hears                  -       OK    OK     -       -       1
+script-read-then-memory-requests                       F032    OK    OK     -       -       4
+config-read-after-connect-then-large-memory            -       OK    OK     -       -       1
+token-read-then-unanswered-request-while-open          -       OK    OK     BUG     OK      1
+token-read-then-unanswered-request-at-close            -       LIMIT LIMIT  BUG     1/4     4    a small request that is all a fresh connection sends is reported at close (first-flight rule)
