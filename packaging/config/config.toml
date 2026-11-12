@@ -46,13 +46,19 @@
 # Files whose read-write transfers are reported at any size, below the two
 # minimums above, such as "/home/*/.ssh/*". '*' matches any run of characters.
 # no_minimum_paths = []
-# Files that programs read on their way to a connection, such as CA bundles.
+# Files that programs read on their way to a connection and that nobody sends by
+# reading them: trust stores, resolver files, time zones, locale data, interpreter
+# configuration. Reading one does not change what the thread is sending, and it is
+# never taken as sent from a read and a send; sendfile of one is still reported.
 # "*/name" and "*.ext" name such files wherever they are, from their first read.
-# Reading one does not make it a candidate for what the thread sends next; it
-# is reported only when a send takes all that was read of it. A file counts
-# once a pattern names it: when the agent starts, every 30 seconds, and after
-# the first read of its path, also inside a container. [] turns this off.
-# background_paths = ["/etc/ssl/certs/*", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/*", "/etc/pki/ca-trust/extracted/*", "/etc/ca-certificates/extracted/*", "/usr/share/ca-certificates/*", "/usr/local/share/ca-certificates/*", "/etc/pki/ca-trust/source/*", "/usr/share/pki/ca-trust-source/*", "/etc/pki/trust/*", "/usr/share/pki/trust/*", "/etc/ca-certificates/trust-source/*", "/etc/ssl/openssl.cnf", "/etc/php/*", "*/php.ini", "/etc/pki/tls/openssl.cnf", "/usr/lib/ssl/openssl.cnf", "/etc/hosts", "/etc/host.conf", "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/passwd", "/etc/group", "/usr/share/zoneinfo/*", "/etc/localtime", "*/cacert.pem", "*/cacerts", "*/ca-bundle.crt", "*/ca-certificates.crt", "*.pyc", "*.py", "*.rb", "*.js", "*.mjs", "*.cjs", "*.node", "*.jar", "*.class", "*.pm", "*.pl", "*.php", "*.so", "*.so.*", "*.mo"]
+# A file counts once a pattern names it: when the agent starts, every 30 seconds,
+# and after the first read of its path, also inside a container. [] turns this off.
+# background_paths = ["/etc/ssl/certs/*", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/*", "/etc/pki/ca-trust/extracted/*", "/etc/ca-certificates/extracted/*", "/usr/share/ca-certificates/*", "/usr/local/share/ca-certificates/*", "/etc/pki/ca-trust/source/*", "/usr/share/pki/ca-trust-source/*", "/etc/pki/trust/*", "/usr/share/pki/trust/*", "/etc/ca-certificates/trust-source/*", "/etc/ssl/openssl.cnf", "/etc/pki/tls/openssl.cnf", "/usr/lib/ssl/openssl.cnf", "/etc/php/*", "*/php.ini", "/etc/hosts", "/etc/host.conf", "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/gai.conf", "/usr/share/zoneinfo/*", "/etc/localtime", "/usr/lib/locale/*", "*.mo", "*/cacert.pem", "*/cacerts", "*/ca-bundle.crt", "*/ca-certificates.crt"]
+# Files that programs load as they run and that people also send: account
+# databases, modules, shared libraries. Reading one does not change what the thread
+# is sending either; it is taken as sent only when what a connection took matches
+# its size. Matched as background_paths is.
+# strict_paths = ["/etc/passwd", "/etc/group", "*.pyc", "*.py", "*.rb", "*.js", "*.mjs", "*.cjs", "*.node", "*.jar", "*.class", "*.pm", "*.pl", "*.php", "*.so", "*.so.*"]
 
 # Entries per table; the least recently used go first.
 [limits]

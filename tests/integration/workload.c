@@ -872,6 +872,32 @@ static void scenario_read_reply_thread(const char *path, size_t size)
 }
 
 /*
+ * sendlisted <before|after|heard> <path> <bytes> [<small> <small bytes>]: sends a file whole,
+ * read before the connection, after it, or over one that has heard from its peer; a small
+ * file is read first if one is named.
+ */
+static void scenario_send_listed(const char *shape, const char *path, size_t size,
+                                 const char *small, size_t small_size)
+{
+    bool heard = strcmp(shape, "heard") == 0;
+    bool before = strcmp(shape, "before") == 0;
+    struct sink sink = start_sink(SOCK_STREAM, false, heard ? SINK_GREET : SINK_DISCARD);
+    char *other = small ? read_whole_file(small, small_size) : nullptr;
+    char *contents = before ? read_whole_file(path, size) : nullptr;
+    int sock = connect_sink(&sink);
+    if (heard)
+        hear(sock);
+    if (!contents)
+        contents = read_whole_file(path, size);
+    send_all(sock, contents, size);
+    close(sock);
+    free(contents);
+    free(other);
+    report("sendlisted", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * readmemory <path> <file bytes> <body bytes>: reads the file, then connects, sends a hello the
  * size of a TLS ClientHello with a post-quantum key share, hears one back and sends the body
  * from memory, as a client that loads a module, a service model or a bundle before it uploads.
@@ -1556,6 +1582,9 @@ int main(int argc, char **argv)
                          argc - 5);
     else if (strcmp(name, "respondtwo") == 0 && argc == 5)
         scenario_respond_two(argv[2], arg_size(argv[3]), arg_size(argv[4]));
+    else if (strcmp(name, "sendlisted") == 0 && (argc == 5 || argc == 7))
+        scenario_send_listed(argv[2], argv[3], arg_size(argv[4]), argc == 7 ? argv[5] : nullptr,
+                             argc == 7 ? arg_size(argv[6]) : 0);
     else if (strcmp(name, "readmemory") == 0 && argc == 5)
         scenario_read_memory(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readrefused") == 0 && argc == 4)

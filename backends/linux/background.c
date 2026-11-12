@@ -104,30 +104,58 @@ static bool contains(const struct key_set *set, const struct ft_bpf_background_k
     return bsearch(key, set->keys, set->count, sizeof(*key), key_cmp) != nullptr;
 }
 
-void ft_linux_background_learn(int map_fd, const char *const *patterns, size_t count, uint64_t ino,
+void ft_linux_background_learn(int map_fd, const struct ft_backend_config *cfg, uint64_t ino,
                                uint32_t dev, const char *path)
 {
-    for (size_t i = 0; i < count; i++) {
-        if (ft_glob_match(patterns[i], path)) {
-            struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
-            uint8_t learned = FT_BPF_BACKGROUND_LEARNED;
-            bpf_map_update_elem(map_fd, &key, &learned, BPF_NOEXIST);
-            return;
-        }
+    uint8_t value = 0;
+    for (size_t i = 0; i < cfg->background_path_count && !value; i++) {
+        if (ft_glob_match(cfg->background_paths[i], path))
+            value = FT_BPF_BACKGROUND_LEARNED;
+    }
+    for (size_t i = 0; i < cfg->strict_path_count && !value; i++) {
+        if (ft_glob_match(cfg->strict_paths[i], path))
+            value = FT_BPF_BACKGROUND_LEARNED | FT_BPF_BACKGROUND_STRICT;
+    }
+    if (value) {
+        struct ft_bpf_background_key key = {.ino = ino, .dev = dev};
+        bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST);
     }
 }
 
-size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t count,
-                                bool *truncated)
+static void scan(struct key_set *set, const char *const *patterns, size_t count)
 {
-    struct key_set set = {.capacity = FT_BPF_BACKGROUND_MAX};
+    for (size_t i = 0; i < count && !set->full; i++)
+        expand(set, patterns[i]);
+    qsort(set->keys, set->count, sizeof(*set->keys), key_cmp);
+}
+
+/* Writes the keys with the value, once each; returns how many the map took. */
+static size_t store(int map_fd, const struct key_set *set, uint8_t value)
+{
+    size_t held = 0;
+    for (size_t i = 0; i < set->count; i++) {
+        if (i > 0 && key_cmp(&set->keys[i - 1], &set->keys[i]) == 0)
+            continue;
+        if (bpf_map_update_elem(map_fd, &set->keys[i], &value, BPF_ANY) == 0)
+            held++;
+    }
+    return held;
+}
+
+size_t ft_linux_background_load(int map_fd, const struct ft_backend_config *cfg, bool *truncated)
+{
+    struct key_set background = {.capacity = FT_BPF_BACKGROUND_MAX};
+    struct key_set strict = {.capacity = FT_BPF_BACKGROUND_MAX};
     *truncated = false;
-    set.keys = calloc(set.capacity, sizeof(*set.keys));
-    if (!set.keys)
+    background.keys = calloc(background.capacity, sizeof(*background.keys));
+    strict.keys = calloc(strict.capacity, sizeof(*strict.keys));
+    if (!background.keys || !strict.keys) {
+        free(background.keys);
+        free(strict.keys);
         return 0;
-    for (size_t i = 0; i < count && !set.full; i++)
-        expand(&set, patterns[i]);
-    qsort(set.keys, set.count, sizeof(*set.keys), key_cmp);
+    }
+    scan(&background, cfg->background_paths, cfg->background_path_count);
+    scan(&strict, cfg->strict_paths, cfg->strict_path_count);
 
     /* Drop what the patterns no longer name before adding what they do. */
     struct ft_bpf_background_key key;
@@ -136,22 +164,18 @@ size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t 
     while (more) {
         more = bpf_map_get_next_key(map_fd, &key, &next) == 0;
         uint8_t source = 0;
-        bool learned =
-            bpf_map_lookup_elem(map_fd, &key, &source) == 0 && source == FT_BPF_BACKGROUND_LEARNED;
-        if (!learned && !contains(&set, &key))
+        bool learned = bpf_map_lookup_elem(map_fd, &key, &source) == 0 &&
+                       (source & ~FT_BPF_BACKGROUND_STRICT) == FT_BPF_BACKGROUND_LEARNED;
+        if (!learned && !contains(&background, &key) && !contains(&strict, &key))
             bpf_map_delete_elem(map_fd, &key);
         key = next;
     }
-    uint8_t scanned = FT_BPF_BACKGROUND_SCANNED;
-    size_t held = 0;
-    for (size_t i = 0; i < set.count; i++) {
-        if (i > 0 && key_cmp(&set.keys[i - 1], &set.keys[i]) == 0)
-            continue;
-        if (bpf_map_update_elem(map_fd, &set.keys[i], &scanned, BPF_ANY) == 0)
-            held++;
-    }
-    *truncated = set.full;
-    free(set.keys);
+    /* A file both lists name is background. */
+    size_t held = store(map_fd, &strict, FT_BPF_BACKGROUND_SCANNED | FT_BPF_BACKGROUND_STRICT);
+    held += store(map_fd, &background, FT_BPF_BACKGROUND_SCANNED);
+    *truncated = background.full || strict.full;
+    free(background.keys);
+    free(strict.keys);
     return held;
 }
 
@@ -160,30 +184,38 @@ static bool plain(const char *text)
     return text[0] && !strpbrk(text, "*?/");
 }
 
-size_t ft_linux_background_names(int names_fd, int suffixes_fd, const char *const *patterns,
-                                 size_t count)
+static void load_names(int names_fd, int suffixes_fd, const char *const *patterns, size_t count,
+                       uint8_t kind, uint32_t *suffixes, size_t *held)
 {
-    size_t held = 0;
-    uint32_t suffixes = 0;
-    uint8_t one = 1;
-
     for (size_t i = 0; i < count; i++) {
         const char *p = patterns[i];
         if (strncmp(p, "*/", 2) == 0 && plain(p + 2) && strlen(p + 2) < FT_BPF_BACKGROUND_NAME) {
             char name[FT_BPF_BACKGROUND_NAME] = {0};
             memcpy(name, p + 2, strlen(p + 2));
-            if (bpf_map_update_elem(names_fd, name, &one, BPF_ANY) == 0)
-                held++;
+            if (bpf_map_update_elem(names_fd, name, &kind, BPF_ANY) == 0)
+                (*held)++;
         } else if (p[0] == '*' && p[1] == '.' && plain(p + 1) &&
                    strlen(p + 1) <= FT_BPF_BACKGROUND_SUFFIX &&
-                   suffixes < FT_BPF_BACKGROUND_SUFFIXES) {
-            struct ft_bpf_background_suffix suffix = {.len = (uint32_t)strlen(p + 1)};
+                   *suffixes < FT_BPF_BACKGROUND_SUFFIXES) {
+            struct ft_bpf_background_suffix suffix = {.len = (uint32_t)strlen(p + 1), .kind = kind};
             memcpy(suffix.text, p + 1, suffix.len);
-            if (bpf_map_update_elem(suffixes_fd, &suffixes, &suffix, BPF_ANY) == 0) {
-                suffixes++;
-                held++;
+            if (bpf_map_update_elem(suffixes_fd, suffixes, &suffix, BPF_ANY) == 0) {
+                (*suffixes)++;
+                (*held)++;
             }
         }
     }
+}
+
+size_t ft_linux_background_names(int names_fd, int suffixes_fd, const struct ft_backend_config *cfg)
+{
+    size_t held = 0;
+    uint32_t suffixes = 0;
+
+    /* Background goes last, so that a name both lists name is background. */
+    load_names(names_fd, suffixes_fd, cfg->strict_paths, cfg->strict_path_count,
+               FT_BPF_LISTED_STRICT, &suffixes, &held);
+    load_names(names_fd, suffixes_fd, cfg->background_paths, cfg->background_path_count,
+               FT_BPF_LISTED_BACKGROUND, &suffixes, &held);
     return held;
 }
