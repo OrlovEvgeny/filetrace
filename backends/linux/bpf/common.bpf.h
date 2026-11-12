@@ -582,10 +582,14 @@ static __always_inline bool sock_heard(__u64 sk)
     return BPF_CORE_READ((struct tcp_sock *)sk, bytes_received) != 0;
 }
 
-/* Whether the socket has sent more than a first flight that is only a handshake or a request. */
-static __always_inline bool sock_flown(__u64 sk)
+/*
+ * Whether the socket had sent more than a first flight that is only a handshake or a request
+ * before a send of the given bytes, which the counter already holds.
+ */
+static __always_inline bool sock_flown(__u64 sk, __u64 sending)
 {
-    return BPF_CORE_READ((struct tcp_sock *)sk, bytes_sent) >= CARRY_FLIGHT_MAX;
+    __u64 sent = BPF_CORE_READ((struct tcp_sock *)sk, bytes_sent);
+    return sent >= sending + CARRY_FLIGHT_MAX;
 }
 
 /* Why a window closes, which decides a first flight's judgement. */
@@ -845,7 +849,7 @@ static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 n
         carry_close(map, sk, CARRY_AGAIN, now);
         return;
     }
-    if (c->kind == CARRY_FLIGHT && sock_flown(sk)) {
+    if (c->kind == CARRY_FLIGHT && sock_flown(sk, bytes)) {
         /* No hello: a small or a strict file is judged by the whole of what goes. */
         if (!c->strict_read && !(c->size && c->size < CARRY_FLOOR)) {
             carry_close(map, sk, CARRY_QUIET, now);
@@ -1078,7 +1082,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     if (c)
         carry_close(map, sk, CARRY_NEXT, now);
     __u8 kind;
-    if (!sock_heard(sk) && !sock_flown(sk))
+    if (!sock_heard(sk) && !sock_flown(sk, wire))
         kind = CARRY_FLIGHT;
     else if (!foreground || (ts->file_size && ts->file_size < CARRY_FLOOR))
         kind = CARRY_EPISODE;
