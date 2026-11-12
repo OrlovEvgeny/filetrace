@@ -619,6 +619,19 @@ expect "small file sent round after round: bytes" \
 expect "file tailed to a peer that never answers: bytes" \
     "$(ft files --path "$data/tailed.log" --format csv | column transfer.bytes_sent)" 10000
 
+# A first flight that one large send takes past a handshake is judged by what went when it holds
+# a small file: a large upload does not carry a token read after the connection, nor a large
+# request the configuration read before it.
+"$workload" readbeside "$data/beside-upload.bin" 300000 "$data/beside-token.txt" 20000 >/dev/null
+"$workload" exchange "$data/big-request.conf" 3000 2 130000 >/dev/null
+settle
+expect "one large send: upload bytes" \
+    "$(ft files --path "$data/beside-upload.bin" --format csv | column transfer.bytes_sent)" 300000
+expect "one large send: token read after the connection not reported" \
+    "$(ft files --path "$data/beside-token.txt" --format csv | rows)" 0
+expect "large requests: configuration read before them not reported" \
+    "$(ft files --path "$data/big-request.conf" --format csv | rows)" 0
+
 # A reply its peer never answers is judged once the correlation window has passed, while the
 # connection is still open: by what went, and as the base rule took it when that is short.
 "$workload" holdopen "$data/held.js" 20000 20300 10 >/dev/null &

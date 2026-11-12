@@ -1605,6 +1605,24 @@ static void scenario_cut_reply(const char *path, size_t size)
 }
 
 /*
+ * readbeside <path> <bytes> <other> <other bytes>: reads the file, connects, reads the other file
+ * and sends the first one in a single send, then closes.
+ */
+static void scenario_read_beside(const char *path, size_t size, const char *other,
+                                 size_t other_size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char *contents = read_whole_file(path, size);
+    int sock = connect_sink(&sink);
+    free(read_whole_file(other, other_size));
+    send_all(sock, contents, size);
+    close(sock);
+    free(contents);
+    report("readbeside", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
  */
@@ -2285,6 +2303,8 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readbeside") == 0 && argc == 6)
+        scenario_read_beside(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "slowflight") == 0 && argc == 6)
         scenario_slow_flight(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "cutreply") == 0 && argc == 4)
