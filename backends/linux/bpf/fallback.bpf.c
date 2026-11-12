@@ -258,6 +258,8 @@ static __always_inline void tcp_settle_tx(void *map, struct sock *sk, struct soc
     __u64 spliced = 0;
     if (t->claim_kind == FT_BPF_AGG_SENDFILE)
         spliced = delta < t->claim_bytes ? delta : t->claim_bytes;
+    if (spliced && (__u32)bpf_get_current_pid_tgid() == t->claim_tid)
+        sendfile_read(thread_now(false), t->claim_file.ino, t->claim_file.dev);
     if (t->carrying)
         carry_wire((__u64)sk, delta - spliced);
     claim_settle(map, sk, t, delta, now);
@@ -564,7 +566,6 @@ int BPF_KPROBE(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out
         .gen = BPF_CORE_READ(inode, i_generation),
     };
     __u32 instance = file_instance(in, inode, &fk, BPF_CORE_READ(sb, s_magic));
-    sendfile_read(ts, &fk);
 
     /* The call can move no more than what is left of the file. */
     loff_t pos = 0;
