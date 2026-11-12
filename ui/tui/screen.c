@@ -605,7 +605,7 @@ static bool after_escape(struct ft_screen *s, struct ft_input *in)
         char c = (char)next.ch;
         if (n < sizeof(seq))
             seq[n++] = c;
-        complete = intro == 'O' || (c >= 0x40 && !(n == 1 && c == '['));
+        complete = c >= 0x40 && !(n == 1 && c == '[');
     }
     if (n == 0) {
         *in = (struct ft_input){
