@@ -720,8 +720,8 @@ static __always_inline void carry_close(void *map, __u64 sk, enum carry_end end,
 }
 
 /*
- * Judges a window that nothing touched for the correlation window as it stands. The agent runs
- * it over the windows once a second. A first flight its peer answered was a hello.
+ * Judges a reply that nothing touched for the correlation window as it stands. The agent runs it
+ * over the windows once a second. A first flight waits for its peer, however slow.
  */
 SEC("iter/bpf_map_elem")
 int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
@@ -732,12 +732,11 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
     if (!key || !c || !map)
         return 0;
     __u64 now = bpf_ktime_get_boot_ns();
-    if (now - c->last_ns <= cfg.corr_window_ns)
+    if (c->kind != CARRY_EPISODE || now - c->last_ns <= cfg.corr_window_ns)
         return 0;
     __u64 sk = *key;
     carry_settle(map, sk, now);
-    enum carry_end end = c->kind == CARRY_FLIGHT && sock_heard(sk) ? CARRY_AGAIN : CARRY_AGED;
-    carry_judge(map, sk, c, end);
+    carry_judge(map, sk, c, CARRY_AGED);
     bpf_map_delete_elem(&carries, &sk);
     return 0;
 }
