@@ -454,6 +454,144 @@ static void single_rows(void)
     fixture_free(&f);
 }
 
+static char *csv(const struct ft_top_model *m, enum ft_top_mode mode, size_t *rows)
+{
+    char *text = nullptr;
+    size_t size = 0;
+    FILE *out = open_memstream(&text, &size);
+
+    CHECK(out != nullptr);
+    if (!out)
+        return strdup("");
+    *rows = ft_top_write_csv(m, mode, out);
+    fclose(out);
+    return text;
+}
+
+/* Reads one record, counting its fields; quoted fields may hold commas, quotes and newlines. */
+static bool csv_record(const char **cursor, size_t *fields)
+{
+    const char *p = *cursor;
+    bool quoted = false;
+
+    if (!*p)
+        return false;
+    *fields = 1;
+    for (; *p; p++) {
+        if (quoted) {
+            if (*p == '"' && p[1] == '"')
+                p++;
+            else if (*p == '"')
+                quoted = false;
+        } else if (*p == '"') {
+            quoted = true;
+        } else if (*p == ',') {
+            (*fields)++;
+        } else if (*p == '\n') {
+            p++;
+            break;
+        }
+    }
+    *cursor = p;
+    return true;
+}
+
+/* Every record has as many fields as the header; returns how many records there are. */
+static size_t csv_records(const char *text, size_t *columns)
+{
+    const char *cursor = text;
+    size_t fields = 0;
+    size_t records = 0;
+
+    while (csv_record(&cursor, &fields)) {
+        if (records == 0)
+            *columns = fields;
+        CHECK_U64(fields, *columns);
+        records++;
+    }
+    return records;
+}
+
+static void tables(void)
+{
+    struct fixture f;
+    size_t rows;
+    size_t columns = 0;
+
+    fixture_init(&f);
+    process(&f, 100, 1, "nginx", "nginx: master process /usr/sbin/nginx", "", 0);
+    process(&f, 101, 100, "nginx", "nginx: worker process", "", 1000);
+    transfer(&f, (struct xfer){.id = 1, .pid = 101, .rate = 400, .path = "/srv/a,b.bin"});
+    transfer(&f, (struct xfer){.id = 2, .pid = 101, .rate = 300, .path = "/srv/say \"hi\".bin"});
+    transfer(&f, (struct xfer){.id = 3, .pid = 101, .rate = 200, .path = AWKWARD, .ino = 7});
+    transfer(&f, (struct xfer){.id = 4, .pid = 101, .rate = 100, .path = "/srv/plain.bin"});
+    sample(&f, 0);
+
+    char *text = csv(f.m, FT_TOP_TRANSFERS, &rows);
+    CHECK_U64(rows, 4);
+    CHECK_U64(csv_records(text, &columns), 5);
+    CHECK(starts(text, "id,pid,user,process,comm,script,file,device,inode,size,bytes_sent,"));
+    CHECK(has(text, ",remote.address,remote.port,remote.public,remote.host,age_seconds,"));
+    CHECK(has(text, ",\"/srv/a,b.bin\","));
+    CHECK(has(text, ",\"/srv/say \"\"hi\"\".bin\","));
+    CHECK(has(text, ",\"/srv/q\"\"u\\o\nt\xc3\xa9.bin\","));
+    CHECK(has(text, ",/srv/plain.bin,"));
+    /* An absent value is an empty cell. */
+    CHECK(has(text, "tr_4,101,root,nginx: worker process,nginx,,/srv/plain.bin,2049,4,,0,"));
+    free(text);
+
+    /* A group is a column; a heading is not a record. */
+    ft_top_set_group(f.m, FT_TOP_TRANSFERS, FT_TOP_GROUP_PROCESS);
+    text = csv(f.m, FT_TOP_TRANSFERS, &rows);
+    CHECK_U64(rows, 4);
+    CHECK_U64(csv_records(text, &columns), 5);
+    CHECK(starts(text, "group,id,"));
+    CHECK(has(text, "\nnginx: worker process,tr_1,"));
+    free(text);
+
+    /* The tree has the columns of its processes, folds and transfers, empty where a row lacks. */
+    ft_top_set_tree(f.m, true);
+    ft_top_toggle_expanded(f.m, FT_TOP_PROCESSES, 1);
+    text = csv(f.m, FT_TOP_PROCESSES, &rows);
+    CHECK_U64(csv_records(text, &columns), rows + 1);
+    CHECK(starts(text, "depth,pid,ppid,user,process,command_line,script,rate,total,files,"));
+    CHECK(has(text, ",fold.process,fold.count,fold.pids,fold.rate,"));
+    CHECK(has(text, ",transfer.id,transfer.pid,transfer.user,"));
+    CHECK(has(text, ",transfer.remote.address,transfer.remote.port,"));
+    CHECK(has(text, "\n0,100,1,root,"));
+    CHECK(has(text, ",tr_1,101,root,"));
+    free(text);
+
+    fixture_free(&f);
+}
+
+static void lists(void)
+{
+    struct fixture f;
+    size_t rows;
+    size_t columns = 0;
+
+    fixture_init(&f);
+    process(&f, 10, 1, "nginx", "nginx", "", 0);
+    process(&f, 11, 1, "php-fpm", "php-fpm", "", 0);
+    transfer(&f, (struct xfer){.id = 1, .pid = 10, .rate = 400, .ino = 5});
+    transfer(&f, (struct xfer){.id = 2, .pid = 11, .rate = 300, .ino = 5});
+    sample(&f, 0);
+
+    /* The senders of a file are named in one cell, the points of a trend are all there. */
+    char *text = csv(f.m, FT_TOP_FILES, &rows);
+    CHECK_U64(rows, 1);
+    CHECK_U64(csv_records(text, &columns), 2);
+    CHECK(has(text, ",\"nginx,php-fpm\",sendfile,"));
+    free(text);
+    text = csv(f.m, FT_TOP_DESTINATIONS, &rows);
+    CHECK_U64(csv_records(text, &columns), 2);
+    CHECK(has(text, ",trend\n"));
+    CHECK(has(text, ",\"0,0,0,0,0,0,0,0,0,0,0,"));
+    free(text);
+    fixture_free(&f);
+}
+
 static void leader(struct ft_rows *rows, uint32_t rank, uint32_t previous, const char *text,
                    uint64_t bytes, const char *sender)
 {
@@ -566,4 +704,6 @@ void test_top_once(void)
     grouped_and_tree();
     leaders();
     single_rows();
+    tables();
+    lists();
 }
