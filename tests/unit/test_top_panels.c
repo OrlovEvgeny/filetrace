@@ -417,7 +417,7 @@ static void panel_sorts(struct fixture *f, enum ft_top_mode mode)
 {
     struct ft_canvas *c = canvas(174, 44);
     struct ft_top_draw d = drawing(f, c);
-    struct ft_rect r = {0, 1, 25, 40};
+    struct ft_rect r = {0, 1, 24, 40};
     size_t n;
     const struct ft_top_sort_option *sorts = ft_top_mode_sorts(mode, &n);
     enum ft_top_sort key;
@@ -436,7 +436,6 @@ static void panel_sorts(struct fixture *f, enum ft_top_mode mode)
         CHECK_STR(text_at(c, 1, 2 + (int)i, ft_text_columns(expected)), expected);
     }
     CHECK(ft_canvas_at(c, 3, 2 + (int)n)->rune == UNTOUCHED);
-    CHECK(ft_canvas_at(c, 24, 1)->rune == U'│');
     ft_canvas_destroy(c);
 }
 

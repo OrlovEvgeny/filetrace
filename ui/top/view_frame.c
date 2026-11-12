@@ -1158,7 +1158,12 @@ void ft_top_draw(struct ft_top_draw *d)
         ft_canvas_repeat(c, l.rule.x, l.rule.y, l.rule.h > 0 ? l.rule.w : 0, U'─',
                          fg(FT_COLOR_RULE, false));
         if (leaders) {
-            CLIPPED(l.context, ft_top_draw_leaders_legend(d, l.context));
+            /* Leaders has no status row, so a message takes the legend's for as long as it shows.
+             */
+            if (ui->message_kind != FT_TOP_MESSAGE_NONE && ui->message[0])
+                CLIPPED(l.context, draw_status(d, l.context));
+            else
+                CLIPPED(l.context, ft_top_draw_leaders_legend(d, l.context));
         } else {
             CLIPPED(l.context, draw_context(d, l.context));
             CLIPPED(l.status, draw_status(d, l.status));

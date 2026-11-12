@@ -165,15 +165,13 @@ void ft_top_draw_panel(struct ft_top_draw *d, struct ft_rect r)
     enum ft_top_sort key;
     bool descending;
     enum ft_top_group group = ft_top_group_of(d->model, mode);
-    int width = r.w - 1;
+    int width = r.w;
     int bottom = r.y + r.h;
 
     if (r.w < 2 || r.h <= 0)
         return;
     struct ft_rect clip = ft_canvas_clip(d->canvas, r);
     ft_top_sort_of(d->model, mode, &key, &descending);
-    ft_canvas_fill(d->canvas, (struct ft_rect){r.x + r.w - 1, r.y, 1, r.h}, U'│',
-                   plain(FT_COLOR_RULE));
 
     /* Rows the panel can do without, given up in this order when it is short. */
     int lists = 1 + (int)nsorts + 2 + 1 + (int)ngroups;

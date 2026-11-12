@@ -1673,13 +1673,16 @@ static unsigned toggle_freeze(struct ft_top_controller *c)
 
 static unsigned next_delay(struct ft_top_controller *c)
 {
+    uint64_t next = delays[0];
+
     for (size_t i = 0; i < FT_ARRAY_LEN(delays); i++) {
         if (delays[i] > c->ui.delay_ns) {
-            c->ui.delay_ns = delays[i];
-            return FT_TOP_DO_REDRAW;
+            next = delays[i];
+            break;
         }
     }
-    c->ui.delay_ns = delays[0];
+    c->ui.delay_ns = next;
+    say(c, FT_TOP_MESSAGE_INFO, "Refreshing every %.1f s", (double)next / (double)FT_NS_PER_SEC);
     return FT_TOP_DO_REDRAW;
 }
 
