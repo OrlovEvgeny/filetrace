@@ -5,20 +5,74 @@ const DOCS_HOST = "filetrace.mintlify.site";
 
 const DOWNLOADS = /^\/(?:(?:install\.sh|gpg\.key)$|(?:apt|rpm|apk|dist|channels|versions)\/)/;
 
+// Files this site hosts itself, from the R2 bucket: an AI usage policy, the
+// security contact and the credits. They are not pages on the docs site, so
+// there is nothing to fall back to.
+const OWN = new Set(["/ai.txt", "/security.txt", "/.well-known/security.txt", "/humans.txt"]);
+
+// Files the docs site generates for crawlers and language models: robots.txt,
+// sitemap.xml, llms.txt and llms-full.txt. A copy is kept in R2 and served from
+// the domain, and refreshed through the docs proxy when it has gone stale.
+const MIRROR = new Set(["/robots.txt", "/sitemap.xml", "/llms.txt", "/llms-full.txt"]);
+const MIRROR_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
 // Mintlify names its own hosts in the files that list the pages: sitemap.xml,
 // robots.txt, llms.txt and the Markdown copies of the pages.
 const MINTLIFY_ORIGINS = /https:\/\/filetrace\.mintlify\.(?:app|site)/g;
 const TEXT_TYPES = /^(?:text\/(?:plain|markdown|xml)|application\/xml)\b/;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (DOWNLOADS.test(url.pathname)) {
+    if (DOWNLOADS.test(url.pathname) || OWN.has(url.pathname)) {
       return download(request, env.SITE, url.pathname);
+    }
+    if (MIRROR.has(url.pathname)) {
+      return mirror(request, env, ctx, url);
     }
     return docs(request, url);
   },
 };
+
+// Serves one of the generated discovery files, preferring the R2 copy. A copy
+// older than MIRROR_MAX_AGE_MS is refreshed from the docs site in the
+// background, so the file stays current without a request ever waiting on R2.
+async function mirror(request, env, ctx, url) {
+  const bucket = env.SITE;
+  const key = url.pathname.slice(1);
+
+  if (request.method === "GET" || request.method === "HEAD") {
+    try {
+      const object =
+        request.method === "HEAD" ? await bucket.head(key) : await bucket.get(key);
+      if (object && Date.now() - object.uploaded.getTime() < MIRROR_MAX_AGE_MS) {
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        headers.set("etag", object.httpEtag);
+        headers.set("last-modified", object.uploaded.toUTCString());
+        headers.set("cache-control", "public, max-age=300");
+        headers.set("accept-ranges", "bytes");
+        if (request.method === "HEAD") {
+          headers.set("content-length", String(object.size));
+          return new Response(null, { headers });
+        }
+        return new Response(object.body, { headers });
+      }
+    } catch {
+      // A missing or unreadable copy just falls through to the docs site.
+    }
+  }
+
+  const response = await docs(request, url);
+  const type = response.headers.get("content-type") ?? "";
+  if (request.method === "GET" && response.status === 200 && TEXT_TYPES.test(type)) {
+    const body = response.clone().arrayBuffer();
+    ctx.waitUntil(
+      body.then((bytes) => bucket.put(key, bytes, { httpMetadata: { contentType: type } })),
+    );
+  }
+  return response;
+}
 
 async function download(request, bucket, pathname) {
   if (request.method !== "GET" && request.method !== "HEAD") {

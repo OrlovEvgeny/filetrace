@@ -1,0 +1,11 @@
+/* TEAM */
+Project: Filetrace
+Source: https://github.com/OrlovEvgeny/filetrace
+Issues: https://github.com/OrlovEvgeny/filetrace/issues
+
+/* SITE */
+Site: https://filetrace.eorlov.org
+Documentation: https://filetrace.eorlov.org
+Standards: HTML5, CSS3
+Software: Mintlify, Cloudflare Workers, Cloudflare R2
+Language: English
