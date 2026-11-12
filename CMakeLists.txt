@@ -253,11 +253,13 @@ add_library(ft_cli STATIC
     exporters/json.c
     ui/table.c
     ui/terminal.c
+    ui/top/document.c
     ui/top/draw.c
     ui/top/filter.c
     ui/top/model.c
     ui/top/once.c
     ui/top/options.c
+    ui/top/plain.c
     ui/top/rows.c
     ui/top/source.c
     ui/top/top.c

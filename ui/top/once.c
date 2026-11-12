@@ -18,11 +18,3 @@ bool ft_top_export(const struct ft_top_model *m, enum ft_top_mode mode, const ch
     ft_error_set(err, FT_EXIT_UNSUPPORTED, "Export is not available");
     return false;
 }
-
-void ft_top_row_json(const struct ft_top_model *m, enum ft_top_mode mode, size_t index, FILE *out)
-{
-    (void)m;
-    (void)mode;
-    (void)index;
-    (void)out;
-}
