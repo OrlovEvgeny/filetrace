@@ -93,8 +93,14 @@ static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
     if (s.pid == 0) {
         char buf[65536];
         if (type == SOCK_DGRAM) {
-            while (recv(fd, buf, sizeof(buf), 0) > 0)
-                continue;
+            struct sockaddr_storage peer;
+            socklen_t len = sizeof(peer);
+            while (recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&peer, &len) > 0) {
+                if (mode == SINK_ANSWER &&
+                    sendto(fd, "hello\n", 6, 0, (struct sockaddr *)&peer, len) != 6)
+                    _exit(1);
+                len = sizeof(peer);
+            }
             _exit(0);
         }
         for (;;) {
@@ -353,6 +359,208 @@ static void scenario_read_send_other(const char *path, size_t size, const char *
     free(contents);
     free(upload);
     report("readsendother", other, other_size, sink.port);
+    stop_sink(&sink);
+}
+
+/* Makes the file and reads it whole into memory. */
+static char *read_whole_file(const char *path, size_t size)
+{
+    make_file(path, size);
+    char *contents = malloc(size ? size : 1);
+    if (!contents)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    close(file);
+    return contents;
+}
+
+static void hear(int sock)
+{
+    char answer[6];
+    if (recv(sock, answer, sizeof(answer), MSG_WAITALL) != (ssize_t)sizeof(answer))
+        die("recv");
+}
+
+/*
+ * readlookup <path> <bytes> and readnotify <path> <bytes>: read the file, send a datagram, as a
+ * name lookup or a metric does, and with readlookup hear the answer; then connect, trade a
+ * hello each way and send the file.
+ */
+static void scenario_read_lookup(const char *path, size_t size, bool answered)
+{
+    struct sink resolver = start_sink(SOCK_DGRAM, false, answered ? SINK_ANSWER : SINK_DISCARD);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    char *contents = read_whole_file(path, size);
+    char query[40] = {0};
+
+    int udp = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udp < 0 || sendto(udp, query, sizeof(query), 0, (struct sockaddr *)&resolver.addr,
+                          resolver.addr_len) != (ssize_t)sizeof(query))
+        die("sendto");
+    if (answered)
+        hear(udp);
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    send_all(sock, contents, size);
+    close(sock);
+    close(udp);
+    free(contents);
+    report(answered ? "readlookup" : "readnotify", path, size, sink.port);
+    stop_sink(&sink);
+    stop_sink(&resolver);
+}
+
+/*
+ * readretry <path> <bytes>: reads the file, connects, sends a hello and gives the connection
+ * up, then sends the file over a second one after trading a hello each way.
+ */
+static void scenario_read_retry(const char *path, size_t size)
+{
+    struct sink first = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    char *contents = read_whole_file(path, size);
+    char hello[1566] = {0};
+
+    int abandoned = connect_sink(&first);
+    send_all(abandoned, hello, sizeof(hello));
+    close(abandoned);
+    int sock = connect_sink(&sink);
+    send_all(sock, hello, sizeof(hello));
+    hear(sock);
+    send_all(sock, contents, size);
+    close(sock);
+    free(contents);
+    report("readretry", path, size, sink.port);
+    stop_sink(&sink);
+    stop_sink(&first);
+}
+
+/*
+ * twoflights <path> <bytes>: opens two connections, reads the file, as a client reads a CA
+ * file for each, and sends a hello on each before either answers; then a request on each.
+ */
+static void scenario_two_flights(const char *path, size_t size)
+{
+    struct sink one = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    struct sink two = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char hello[1566] = {0};
+    char request[600] = {0};
+
+    int a = connect_sink(&one);
+    int b = connect_sink(&two);
+    char *contents = read_whole_file(path, size);
+    send_all(a, hello, sizeof(hello));
+    send_all(b, hello, sizeof(hello));
+    hear(a);
+    hear(b);
+    send_all(a, request, sizeof(request));
+    send_all(b, request, sizeof(request));
+    hear(a);
+    hear(b);
+    close(a);
+    close(b);
+    free(contents);
+    report("twoflights", path, size, one.port);
+    stop_sink(&two);
+    stop_sink(&one);
+}
+
+/*
+ * readsideconnect <path> <bytes>: over a connection that has heard from its peer, reads the
+ * file, connects to another service and sends it a little, then sends the file over the first.
+ */
+static void scenario_read_side_connect(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    struct sink side = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char note[80] = {0};
+
+    int sock = connect_sink(&sink);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    int other = connect_sink(&side);
+    send_all(other, note, sizeof(note));
+    send_all(sock, contents, size);
+    close(other);
+    close(sock);
+    free(contents);
+    report("readsideconnect", path, size, sink.port);
+    stop_sink(&side);
+    stop_sink(&sink);
+}
+
+/*
+ * readsidehandshake <path> <bytes>: reads the file, connects and trades a hello each way, then
+ * makes a small request over a second connection, as a client checks a certificate's status,
+ * and sends the file over the first.
+ */
+static void scenario_read_side_handshake(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    struct sink side = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char note[80] = {0};
+
+    char *contents = read_whole_file(path, size);
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    int other = connect_sink(&side);
+    send_all(other, note, sizeof(note));
+    hear(other);
+    send_all(sock, contents, size);
+    close(other);
+    close(sock);
+    free(contents);
+    report("readsidehandshake", path, size, sink.port);
+    stop_sink(&side);
+    stop_sink(&sink);
+}
+
+/*
+ * twofiles <path> <other> <bytes>: over a fresh connection that never answers, reads and sends
+ * one file whole, then the other.
+ */
+static void scenario_two_files(const char *path, const char *other, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    int sock = connect_sink(&sink);
+    char *first = read_whole_file(path, size);
+    send_all(sock, first, size);
+    char *second = read_whole_file(other, size);
+    send_all(sock, second, size);
+    close(sock);
+    free(first);
+    free(second);
+    report("twofiles", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * readkeepalive <path> <bytes> <next bytes>: reads the file, connects, trades a hello each way,
+ * sends the file and hears the answer, then makes another request over the same connection.
+ */
+static void scenario_read_keepalive(const char *path, size_t size, size_t next)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    char *contents = read_whole_file(path, size);
+    char *request = calloc(1, next);
+    if (!request)
+        die("malloc");
+
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    send_all(sock, contents, size);
+    hear(sock);
+    send_all(sock, request, next);
+    hear(sock);
+    close(sock);
+    free(contents);
+    free(request);
+    report("readkeepalive", path, size, sink.port);
     stop_sink(&sink);
 }
 
@@ -994,6 +1202,22 @@ int main(int argc, char **argv)
         scenario_read_hello(argv[2], arg_size(argv[3]), false);
     else if (strcmp(name, "smallupload") == 0 && argc == 4)
         scenario_read_hello(argv[2], arg_size(argv[3]), true);
+    else if (strcmp(name, "readlookup") == 0 && argc == 4)
+        scenario_read_lookup(argv[2], arg_size(argv[3]), true);
+    else if (strcmp(name, "readnotify") == 0 && argc == 4)
+        scenario_read_lookup(argv[2], arg_size(argv[3]), false);
+    else if (strcmp(name, "readretry") == 0 && argc == 4)
+        scenario_read_retry(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "twoflights") == 0 && argc == 4)
+        scenario_two_flights(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readsideconnect") == 0 && argc == 4)
+        scenario_read_side_connect(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "readsidehandshake") == 0 && argc == 4)
+        scenario_read_side_handshake(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "twofiles") == 0 && argc == 5)
+        scenario_two_files(argv[2], argv[3], arg_size(argv[4]));
+    else if (strcmp(name, "readkeepalive") == 0 && argc == 5)
+        scenario_read_keepalive(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readmemory") == 0 && argc == 5)
         scenario_read_memory(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "readrefused") == 0 && argc == 4)

@@ -26,7 +26,7 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
     if (newstate == TCP_CLOSE && cfg.file_corr) {
         void *map = agg_map_now();
         if (map)
-            carry_close(map, (__u64)sk, false, bpf_ktime_get_boot_ns());
+            carry_close(map, (__u64)sk, CARRY_QUIET, bpf_ktime_get_boot_ns());
     }
 
     struct ft_bpf_ev_sock *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
@@ -137,17 +137,20 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     if (!cfg.file_corr)
         return 0;
     struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
+    bool tcp = proto == IPPROTO_TCP;
     if (dir == FT_BPF_TX) {
-        bool tcp = proto == IPPROTO_TCP;
-        if (ts && tcp) {
-            thread_sent(ts, sk, now);
-            carry_flight_send(ts, (__u64)sk, now);
+        if (tcp) {
+            if (ts)
+                thread_sent(ts, sk, now);
+            carry_sent(map, (__u64)sk, (__u64)ret, now);
         }
         if (!spliced)
             correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret, now);
-        if (ts && tcp && (ts->carry_sock == (__u64)sk || ts->flight_sock == (__u64)sk))
-            carry_wire((__u64)sk, (__u64)ret);
-    } else if (ts && handshake_receive(ts, sk, now)) {
+        return 0;
+    }
+    if (tcp)
+        carry_heard(map, (__u64)sk, now);
+    if (ts && (handshake_receive(ts, sk, now) || carry_tolerates(ts, (__u64)sk, 0))) {
         background_reset(ts);
         ts->carried = 1;
     } else if (ts) {
@@ -226,7 +229,9 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
     if (!ts->pending) {
         ts->read_start_ns = bpf_ktime_get_boot_ns();
         ts->carried = 0;
+        ts->ep_read = 0;
     }
+    ts->ep_read += (__u64)ret;
     ts->pending += (__u64)ret;
     ts->unreported += (__u64)ret;
     ts->last_ns = bpf_ktime_get_boot_ns();

@@ -117,7 +117,9 @@ static __always_inline void read_sync(struct thread_state *ts)
     if (!ts->pending) {
         ts->read_start_ns = ts->read_ns;
         ts->carried = 0;
+        ts->ep_read = 0;
     }
+    ts->ep_read += delta;
     ts->pending += delta;
     ts->unreported += delta;
     ts->last_ns = ts->read_ns;
@@ -343,6 +345,29 @@ static __always_inline void claim_release(struct sock_track *t, struct thread_st
     t->claim_fresh = 0;
 }
 
+/* A connection the thread closes itself hands back what its last send claimed and did not take. */
+static __always_inline void claim_return(struct sock_track *t)
+{
+    __u32 tid = (__u32)bpf_get_current_pid_tgid();
+    if (t->claim_kind == FT_BPF_AGG_READ_SEND && t->claim_tid == tid)
+        claim_release(t, thread_now(false), tid);
+}
+
+/*
+ * A send elsewhere takes back what the thread's last send over the connection its read was
+ * carried to claimed and did not take, so that the read goes where the thread sends.
+ */
+static __always_inline void claim_recall(void *map, struct thread_state *ts, struct sock *sk,
+                                         __u64 now)
+{
+    __u64 key = ts->carry_sock;
+    struct sock_track *w = key && key != (__u64)sk ? bpf_map_lookup_elem(&socks, &key) : NULL;
+    if (!w)
+        return;
+    tcp_settle_tx(map, (struct sock *)key, w, now);
+    claim_release(w, ts, (__u32)bpf_get_current_pid_tgid());
+}
+
 SEC("kprobe/tcp_sendmsg")
 int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
 {
@@ -362,6 +387,8 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     if (!cfg.file_corr || (BPF_CORE_READ(msg, msg_flags) & MSG_SPLICE_PAGES))
         return 0;
 
+    if (t->carrying)
+        carry_sent(map, (__u64)sk, 0, now);
     struct thread_state *ts = thread_now(false);
     claim_release(t, ts, (__u32)ids);
     if (ts)
@@ -369,7 +396,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     if (!ts)
         return 0;
     read_sync(ts);
-    carry_flight_send(ts, (__u64)sk, now);
+    claim_recall(map, ts, sk, now);
     if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
         foreground_reset(ts);
     side_send(ts, (__u64)sk, now);
@@ -380,8 +407,10 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     t->claim_received = ts->received;
     t->claim_script = ts->script;
     if (ts->pending) {
-        bool carried = carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), now) != NULL;
-        if (!carried && ts->carried) {
+        bool skip;
+        bool carried =
+            carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, now, &skip) != NULL;
+        if (!carried && skip) {
             t->claim_kind = 0;
             return 0;
         }
@@ -431,6 +460,8 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
     t->rx_tgid = tgid;
 
     if (cfg.file_corr) {
+        if (t->carrying)
+            carry_heard(map, (__u64)sk, now);
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
@@ -438,7 +469,8 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
             bool claimed = t->claim_kind == FT_BPF_AGG_READ_SEND && !t->claim_background &&
                            t->claim_tid == (__u32)bpf_get_current_pid_tgid() &&
                            t->claim_received == ts->received;
-            if ((ts->pending || claimed) && !ts->displaced && handshake_socket(ts, sk, now)) {
+            if (((ts->pending || claimed) && !ts->displaced && handshake_socket(ts, sk, now)) ||
+                carry_tolerates(ts, (__u64)sk, claim_held(ts))) {
                 background_reset(ts);
                 ts->carried = 1;
             } else {
@@ -497,14 +529,18 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
             t->tx_tgid = tgid;
         tcp_settle_tx(map, sk, t, now);
         if (t->carrying && cfg.file_corr)
-            carry_close(map, (__u64)sk, false, now);
+            carry_close(map, (__u64)sk, CARRY_QUIET, now);
+        if (cfg.file_corr)
+            claim_return(t);
         t->tx_live = 0;
         break;
     case TCP_CLOSE:
         /* A disconnect rewrites both positions right after this. */
         tcp_settle_tx(map, sk, t, now);
         if (t->carrying && cfg.file_corr)
-            carry_close(map, (__u64)sk, false, now);
+            carry_close(map, (__u64)sk, CARRY_QUIET, now);
+        if (cfg.file_corr)
+            claim_return(t);
         t->tx_live = 0;
         break;
     case TCP_LISTEN:
@@ -725,9 +761,14 @@ int BPF_KPROBE(ft_skb_consume_udp, struct sock *sk, struct sk_buff *skb, int len
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
-            carry_close_thread(ts, now);
-            thread_reset(ts);
-            ts->received++;
+            if (carry_tolerates(ts, (__u64)sk, claim_held(ts))) {
+                background_reset(ts);
+                ts->carried = 1;
+            } else {
+                carry_close_thread(ts, now);
+                thread_reset(ts);
+                ts->received++;
+            }
         }
     }
     return 0;

@@ -291,7 +291,7 @@ expect "upload from memory: larger file read before it not reported" \
 
 # Nor when the connection only makes a few small requests, each answered.
 "$workload" exchange "$data/settings.bin" 8192 4 452 >/dev/null
-"$workload" exchange "$data/dataset.bin" 300000 4 2000 >/dev/null
+"$workload" exchange "$data/dataset.bin" 300000 4 5000 >/dev/null
 settle
 expect "requests after a read: small file not reported" \
     "$(ft files --path "$data/settings.bin" --format csv | rows)" 0
@@ -309,6 +309,40 @@ expect "first flight: CA file read before the hello not reported" \
 csv=$(ft files --path "$data/small-upload.json" --format csv)
 expect "first flight: small upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "first flight: small upload bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 2000
+
+# An upload whose answer comes before the next request over the same connection is judged at
+# the answer.
+"$workload" readkeepalive "$data/upload-keepalive.bin" 300000 20000 >/dev/null
+# A name lookup between the read and the connection, or a metric sent there, leaves the read.
+"$workload" readlookup "$data/upload-lookup.bin" 300000 >/dev/null
+"$workload" readnotify "$data/upload-notify.bin" 300000 >/dev/null
+# So does a first connection given up after its hello.
+"$workload" readretry "$data/upload-retry.bin" 300000 >/dev/null
+# A connection to another service opened after the read does not take it, before or after the
+# upload's own handshake.
+"$workload" readsideconnect "$data/upload-sideconnect.bin" 300000 >/dev/null
+"$workload" readsidehandshake "$data/upload-sidehandshake.bin" 300000 >/dev/null
+settle
+for name in keepalive lookup notify retry sidehandshake; do
+    expect "upload over a fresh connection, $name: bytes" \
+        "$(ft files --path "$data/upload-$name.bin" --format csv | column transfer.bytes_sent)" \
+        300000
+done
+expect "upload over an open connection after a side connection: bytes" \
+    "$(ft files --path "$data/upload-sideconnect.bin" --format csv | column transfer.bytes_sent)" \
+    299920
+
+# Two first flights in progress at once: the CA file read for them is neither one's.
+"$workload" twoflights "$data/two-flights-ca.pem" 3000 >/dev/null
+# Two files sent whole, one after the other, in a first flight that is never answered are both.
+"$workload" twofiles "$data/flight-a.json" "$data/flight-b.json" 1500 >/dev/null
+settle
+expect "first flights: CA file read for two not reported" \
+    "$(ft files --path "$data/two-flights-ca.pem" --format csv | rows)" 0
+expect "first flight: first of two files bytes" \
+    "$(ft files --path "$data/flight-a.json" --format csv | column transfer.bytes_sent)" 1500
+expect "first flight: second of two files bytes" \
+    "$(ft files --path "$data/flight-b.json" --format csv | column transfer.bytes_sent)" 1500
 
 # Below 64 KB, a file read before its connection is not told from a request of its size.
 "$workload" readhandshake "$data/upload-small.json" 20000 "$data/no-bundle.crt" 0 >/dev/null
