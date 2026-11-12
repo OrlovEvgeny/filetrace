@@ -1,9 +1,11 @@
 #!/bin/sh
 # usage: run.sh [-j jobs] [-n runs] [-w window] <directory with filetrace and filetrace-agent> [scenario or finding...]
+#        run.sh [-n runs] --list [scenario or finding...]
 # Runs the scenarios of expected.txt, or those named, each in a privileged container of its
 # own on both probe sets, as many times as its row or -n asks, and compares the verdicts
-# with the expected ones; -w sets the agent's correlation window. Exits 77 when Docker is
-# not available and 1 on any deviation.
+# with the expected ones; -w sets the agent's correlation window. --list prints each
+# selected scenario with its number of runs. Exits 77 when Docker is not available and 1 on
+# any deviation.
 set -eu
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -27,6 +29,7 @@ fi
 
 jobs=1
 min_runs=1
+list=
 FILETRACE_ACCEPTANCE_WINDOW=${FILETRACE_ACCEPTANCE_WINDOW:-}
 while [ $# -gt 0 ]; do
     case $1 in
@@ -41,6 +44,10 @@ while [ $# -gt 0 ]; do
         -w)
             FILETRACE_ACCEPTANCE_WINDOW=$2
             shift 2
+            ;;
+        --list)
+            list=1
+            shift
             ;;
         *) break ;;
     esac
@@ -66,8 +73,12 @@ selected() {
     done
 }
 
+if [ -n "$list" ]; then
+    selected "$@"
+    exit 0
+fi
 if [ $# -lt 1 ]; then
-    sed -n '2s/^# //p' "$0" >&2
+    sed -n '2,3s/^# //p' "$0" >&2
     exit 2
 fi
 bin=$(CDPATH='' cd -- "$1" && pwd)

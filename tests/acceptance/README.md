@@ -25,6 +25,17 @@ at files under `/data/acceptance`. Load changes timing; parallel runs make flaky
 `run.sh` copies this directory into the output directory and the containers mount that copy,
 so the checkout can be edited or rebased while a run goes on.
 
+## Other kernels
+
+`tools/dev/vm/acceptance.sh <6.1|6.12> <output directory> [scenario...]` builds the tree, boots
+that kernel under QEMU with this image's filesystem as the root and runs the scenarios there
+one after another through `guest.sh`, writing logs and verdicts as `run.sh` does; `-p` keeps
+the scenarios of `scenarios.py`. The CPUs are emulated, so the agent's correlation window is
+raised to 10 s by default. Read such a run against a container run of the same commit with
+the same window, not only against `expected.txt`: `compare.sh <run> <run>` lists the
+scenarios whose verdicts differ, so a difference comes from the kernel or the probe set and
+not from the scenario.
+
 ## expected.txt
 
 One row per scenario: its finding, the expected verdict on each probe set, what release
