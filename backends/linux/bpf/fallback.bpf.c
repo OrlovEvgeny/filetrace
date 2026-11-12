@@ -118,6 +118,8 @@ static __always_inline void read_sync(struct thread_state *ts)
         ts->bg_fresh = 1;
         return;
     }
+    if (!ts->pending)
+        ts->read_start_ns = ts->read_ns;
     ts->pending += delta;
     ts->unreported += delta;
     ts->last_ns = ts->read_ns;
@@ -319,6 +321,8 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
 
     struct thread_state *ts = thread_now(false);
     claim_release(t, ts, (__u32)ids);
+    if (ts)
+        thread_sent(ts, sk, now);
     if (!ts)
         return 0;
     read_sync(ts);
@@ -378,8 +382,16 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
-            thread_reset(ts);
-            ts->received++;
+            /* What the thread read may be held by the claim its first send on the socket made. */
+            bool claimed = t->claim_kind == FT_BPF_AGG_READ_SEND && !t->claim_background &&
+                           t->claim_tid == (__u32)bpf_get_current_pid_tgid() &&
+                           t->claim_received == ts->received;
+            if ((ts->pending || claimed) && handshake_socket(ts, sk, now)) {
+                background_reset(ts);
+            } else {
+                thread_reset(ts);
+                ts->received++;
+            }
         }
     }
     return 0;
@@ -408,6 +420,12 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         t->tx_tgid = tgid;
         t->tx_live = 0;
         t->rx_live = 0;
+        if (cfg.file_corr) {
+            struct thread_state *ts = thread_now(false);
+            if (ts)
+                read_sync(ts);
+            thread_dialed(sk, now);
+        }
         break;
     case TCP_ESTABLISHED:
         /* Nothing has been sent or consumed on the connection yet. */

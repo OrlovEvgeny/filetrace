@@ -110,9 +110,14 @@ struct thread_state {
     __u8 fresh;
     __u8 reading; /* the read counter has grown only by reads of this file */
     __u8 bg_fresh;
-    __u8 bg_reading; /* the read counter has grown only by reads of bg_file */
-    __u32 received;  /* receives seen; a claim made before the last one is not handed back */
-    __u32 script;    /* the PHP request running on this thread, as ft_bpf_ev_script names it */
+    __u8 bg_reading;     /* the read counter has grown only by reads of bg_file */
+    __u32 received;      /* receives seen; a claim made before the last one is not handed back */
+    __u32 script;        /* the PHP request running on this thread, as ft_bpf_ev_script names it */
+    __u64 read_start_ns; /* when pending last grew from nothing */
+    __u64 dialed;        /* the TCP socket the thread connected last */
+    __u64 dialed_ns;
+    __u64 last_sent; /* the TCP socket the thread sent on last */
+    __u64 last_sent_ns;
     struct file_ref bg_file;
     __u32 bg_gen;
     __u32 bg_forgotten;
@@ -312,6 +317,42 @@ static __always_inline void thread_reset(struct thread_state *ts)
 {
     foreground_reset(ts);
     background_reset(ts);
+}
+
+/* Notes a connection a thread opens after reading what it may send there. */
+static __always_inline void thread_dialed(struct sock *sk, __u64 now)
+{
+    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
+    if (ts && ts->pending) {
+        ts->dialed = (__u64)sk;
+        ts->dialed_ns = now;
+    }
+}
+
+static __always_inline void thread_sent(struct thread_state *ts, const struct sock *sk, __u64 now)
+{
+    ts->last_sent = (__u64)sk;
+    ts->last_sent_ns = now;
+}
+
+/*
+ * A client that reads a file, then opens a connection to send it, hears from the peer before it
+ * sends: a TLS handshake, or an HTTP 100 Continue. A receive soon after on the connection it
+ * opened last, when anything it sent since the read went there too, does not end the read; a
+ * connection it opened first may have been an address that failed.
+ */
+static __always_inline bool handshake_socket(const struct thread_state *ts, const struct sock *sk,
+                                             __u64 now)
+{
+    return ts->dialed == (__u64)sk && ts->dialed_ns >= ts->read_start_ns &&
+           now - ts->dialed_ns <= cfg.corr_window_ns &&
+           (ts->last_sent_ns < ts->read_start_ns || ts->last_sent == (__u64)sk);
+}
+
+static __always_inline bool handshake_receive(const struct thread_state *ts, const struct sock *sk,
+                                              __u64 now)
+{
+    return ts->pending && handshake_socket(ts, sk, now);
 }
 
 static __always_inline bool is_background(const struct file_key *fk)

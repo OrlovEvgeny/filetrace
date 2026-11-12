@@ -16,6 +16,8 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
     __u16 family = sk->__sk_common.skc_family;
     if (family != AF_INET && family != AF_INET6)
         return 0;
+    if (newstate == TCP_SYN_SENT && cfg.file_corr)
+        thread_dialed(sk, bpf_ktime_get_boot_ns());
 
     struct ft_bpf_ev_sock *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e) {
@@ -125,11 +127,19 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     if (!cfg.file_corr)
         return 0;
     if (dir == FT_BPF_TX) {
+        if (BPF_CORE_READ(sock, sk, sk_protocol) == IPPROTO_TCP) {
+            struct thread_state *ts =
+                bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
+            if (ts)
+                thread_sent(ts, BPF_CORE_READ(sock, sk), now);
+        }
         if (!spliced)
             correlate_send(map, key.cookie, key.tgid, (__u64)ret, now);
     } else {
         struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
-        if (ts && (ts->pending || ts->bg_pending))
+        if (ts && handshake_receive(ts, BPF_CORE_READ(sock, sk), now))
+            background_reset(ts);
+        else if (ts && (ts->pending || ts->bg_pending))
             thread_reset(ts);
     }
     return 0;
@@ -196,6 +206,8 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
     }
     thread_set_file(ts, file, inode, &fk, magic);
 
+    if (!ts->pending)
+        ts->read_start_ns = bpf_ktime_get_boot_ns();
     ts->pending += (__u64)ret;
     ts->unreported += (__u64)ret;
     ts->last_ns = bpf_ktime_get_boot_ns();
