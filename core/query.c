@@ -58,6 +58,12 @@ static const char *script_of(const struct ft_state *st, uint32_t pid)
     return p ? p->script : nullptr;
 }
 
+/* A transfer made during a PHP request names that request's script rather than the worker's. */
+static const char *transfer_script(const struct ft_state *st, const struct ft_transfer *t)
+{
+    return t->script ? t->script : script_of(st, t->pid);
+}
+
 static bool match_addr(const struct ft_endpoint *filter, uint8_t host_bits,
                        const struct ft_endpoint *ep)
 {
@@ -574,6 +580,7 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
                           ft_row_fn *emit, void *ctx, struct ft_row_transfer *row)
 {
     const struct ft_socket *s;
+    const char *request_script = nullptr;
     uint32_t pid;
 
     memset(row, 0, offsetof(struct ft_row_transfer, path) + 1);
@@ -597,6 +604,8 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
         const struct ft_transfer *t = cand->entry;
         enum ft_confidence conf = FT_CONF_UNKNOWN;
         uint32_t evidence = 0;
+
+        request_script = t->script;
 
         ft_state_classify(st, t, &conf, &evidence);
         s = ft_table_find(st->sockets, &t->sock_id);
@@ -650,8 +659,10 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
         row->ppid = p->ppid;
         ft_strlcpy(row->exe, p->exe, sizeof(row->exe));
     }
-    if (p && (p->command_line || p->cwd || p->script)) {
-        struct ft_process_strings text = {p->command_line, p->cwd, p->script};
+    const char *script = request_script ? request_script : (p ? p->script : nullptr);
+    if ((p && (p->command_line || p->cwd)) || script) {
+        struct ft_process_strings text = {p ? p->command_line : nullptr, p ? p->cwd : nullptr,
+                                          script};
         size_t lead = strnlen(row->path, FT_PATH_MAX - 1) + 1;
         ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
         row->flags |= FT_XFER_PROCESS_TEXT;
@@ -707,7 +718,7 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
             continue;
         if (q->pid && q->pid != t->pid)
             continue;
-        if (!match_name(q->process, t->comm) || !match_script(q, script_of(st, t->pid)))
+        if (!match_name(q->process, t->comm) || !match_script(q, transfer_script(st, t)))
             continue;
         if (q->method != FT_METHOD_ANY && q->method != t->method)
             continue;

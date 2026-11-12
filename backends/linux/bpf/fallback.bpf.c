@@ -21,6 +21,7 @@ struct sock_track {
     __u8 claim_kind; /* enum ft_bpf_agg_kind, or 0 */
     __u8 claim_fresh;
     __u8 claim_background; /* the claim was made for the thread's background file */
+    __u32 claim_script;    /* the PHP request of the thread that made the claim, or 0 */
     __u32 claim_tgid;
     __u32 claim_tid;
     __u32 claim_received; /* the thread's receive count when it made the claim */
@@ -205,6 +206,8 @@ static __always_inline void claim_settle(void *map, struct sock_track *t, __u64 
         __sync_fetch_and_add(&v->transfer.read_bytes, t->claim_read);
         __sync_fetch_and_add(&v->transfer.sends, 1);
         __sync_fetch_and_add(&v->transfer.alternations, t->claim_fresh);
+        if (t->claim_script)
+            v->transfer.script = t->claim_script;
         v->last_ns = now;
     }
     t->claim_bytes -= take;
@@ -326,6 +329,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg)
     t->claim_tgid = (__u32)(ids >> 32);
     t->claim_tid = (__u32)ids;
     t->claim_received = ts->received;
+    t->claim_script = ts->script;
     if (ts->pending) {
         t->claim_file = ts->file;
         t->claim_bytes = ts->pending;
@@ -515,6 +519,7 @@ int BPF_KPROBE(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out
 
     t->claim_kind = FT_BPF_AGG_SENDFILE;
     t->claim_background = 0;
+    t->claim_script = ts ? ts->script : 0;
     t->claim_file = (struct file_ref){.ino = fk.ino, .dev = fk.dev, .instance = instance};
     t->claim_bytes = len < left ? len : left;
     t->claim_read = 0;

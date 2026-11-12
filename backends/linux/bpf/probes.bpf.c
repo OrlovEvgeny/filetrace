@@ -252,6 +252,9 @@ int BPF_PROG(ft_splice_direct, struct file *in, loff_t *ppos, struct file *out, 
     if (v) {
         __sync_fetch_and_add(&v->transfer.sent_bytes, (__u64)ret);
         __sync_fetch_and_add(&v->transfer.sends, 1);
+        struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
+        if (ts && ts->script)
+            v->transfer.script = ts->script;
         v->last_ns = now;
     }
     return 0;

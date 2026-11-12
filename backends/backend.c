@@ -15,6 +15,7 @@ void ft_backend_config_defaults(struct ft_backend_config *cfg)
         .known_files = 16384,
         .drain_batch = 512,
         .corr_window_ns = 2 * FT_NS_PER_SEC,
+        .php_scripts = true,
     };
 }
 

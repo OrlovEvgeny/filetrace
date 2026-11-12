@@ -7,6 +7,7 @@
 #define FT_BPF_PATH_BUF 4096
 #define FT_BPF_PATH_DEPTH 64
 #define FT_BPF_ARGS_MAX 4096
+#define FT_BPF_SCRIPT_MAX 1024
 #define FT_BPF_BACKGROUND_MAX 16384
 
 enum ft_bpf_event_kind {
@@ -15,6 +16,7 @@ enum ft_bpf_event_kind {
     FT_BPF_EV_EXIT = 3,
     FT_BPF_EV_SOCK_STATE = 4,
     FT_BPF_EV_FILE = 5,
+    FT_BPF_EV_SCRIPT = 6,
 };
 
 struct ft_bpf_ev_hdr {
@@ -88,6 +90,21 @@ struct ft_bpf_ev_file {
     __u32 uid; /* owner */
 };
 
+/* The layout of the file handle that php_execute_script takes: the attach cookie of its probe. */
+enum ft_bpf_php_layout {
+    FT_BPF_PHP_CHAR_NAME = 1,   /* PHP 8.0 and earlier: the name is a const char * */
+    FT_BPF_PHP_ZEND_STRING = 2, /* PHP 8.1 and later: the name is a zend_string * */
+};
+
+/* A script a PHP request runs, reported the first time; followed by len bytes of its path. */
+struct ft_bpf_ev_script {
+    struct ft_bpf_ev_hdr hdr;
+    __u32 id;
+    __u32 tgid; /* the process that ran it, against whose directory a relative path is resolved */
+    __u32 len;
+    __u32 pad;
+};
+
 enum ft_bpf_agg_kind {
     FT_BPF_AGG_FLOW = 1,
     FT_BPF_AGG_SENDFILE = 2,
@@ -128,6 +145,8 @@ struct ft_bpf_agg_val {
             __u64 read_bytes; /* READ_SEND only */
             __u32 sends;
             __u32 alternations; /* READ_SEND only: read-then-send sequences */
+            __u32 script;       /* the PHP request in progress at the last send, or 0 */
+            __u32 pad;
         } transfer;
     };
     __u8 laddr[16];

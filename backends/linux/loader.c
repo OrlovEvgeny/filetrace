@@ -400,6 +400,7 @@ struct ft_backend {
     uint64_t last_flush_ns;
     int background_fd;
     uint64_t background_scan_ns; /* when the background map was last brought up to date */
+    struct ft_linux_php *php;
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
 
@@ -465,6 +466,25 @@ static void join_path(const char *comps, size_t len, uint16_t flags, char *path,
     }
     if (count == 0)
         ft_strlcpy(path, "/", size);
+}
+
+/*
+ * Probes a PHP binary a process starts, or one a forked child carries on with: PHP-FPM forks
+ * its master off the process that ran it, and web servers load PHP before forking workers.
+ */
+static void php_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe)
+{
+    /* The kernel's process ID names the right /proc entry only in the host's namespace. */
+    if (!b->php || !ft_sysinfo_host_pid_namespace())
+        return;
+    char comm[FT_BPF_COMM_LEN];
+    memcpy(comm, e->comm, sizeof(comm));
+    comm[sizeof(comm) - 1] = '\0';
+    const char *slash = exe ? strrchr(exe, '/') : nullptr;
+    const char *name = exe ? (slash ? slash + 1 : exe) : comm;
+    if (strncmp(name, "php", 3) == 0 || strncmp(name, "frankenphp", 10) == 0 ||
+        strcmp(name, "apache2") == 0 || strncmp(name, "httpd", 5) == 0)
+        ft_linux_php_attach_pid(b->php, e->pid);
 }
 
 static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe,
@@ -598,12 +618,16 @@ static int on_ring_event(void *ctx, void *data, size_t size)
                 }
             }
             on_process(b, &e->proc, exe, args, args_len, cwd);
+            php_started(b, &e->proc, exe);
         }
         break;
     case FT_BPF_EV_FORK:
     case FT_BPF_EV_EXIT:
-        if (size >= sizeof(struct ft_bpf_ev_proc))
+        if (size >= sizeof(struct ft_bpf_ev_proc)) {
             on_process(b, data, nullptr, nullptr, 0, nullptr);
+            if (hdr->kind == FT_BPF_EV_FORK)
+                php_started(b, data, nullptr);
+        }
         break;
     case FT_BPF_EV_SOCK_STATE:
         if (size >= sizeof(struct ft_bpf_ev_sock))
@@ -612,6 +636,13 @@ static int on_ring_event(void *ctx, void *data, size_t size)
     case FT_BPF_EV_FILE:
         if (size >= sizeof(struct ft_bpf_ev_file))
             on_file(b, data, size);
+        break;
+    case FT_BPF_EV_SCRIPT:
+        if (size >= sizeof(struct ft_bpf_ev_script) && b->php) {
+            const struct ft_bpf_ev_script *e = data;
+            size_t len = e->len < size - sizeof(*e) ? e->len : size - sizeof(*e);
+            ft_linux_php_script_seen(b->php, e->id, e->tgid, (const char *)(e + 1), len);
+        }
         break;
     default:
         break;
@@ -658,6 +689,7 @@ static void emit_transfer(struct ft_backend *b, const struct agg_record *r)
                 .bytes = r->val.transfer.sent_bytes,
                 .read_bytes = r->val.transfer.read_bytes,
                 .background = r->key.background != 0,
+                .script = ft_linux_php_script(b->php, r->val.transfer.script),
                 .ops = r->val.transfer.sends,
                 .alternations = r->val.transfer.alternations,
             },
@@ -764,8 +796,13 @@ static void backend_flush(struct ft_backend *b)
 
     memcpy(b->counters, totals, sizeof(b->counters));
     b->last_flush_ns = now_ns;
-    if (b->background_fd >= 0 && now_ns - b->background_scan_ns > BACKGROUND_RESCAN_NS)
-        background_scan(b, now_ns);
+    if (now_ns - b->background_scan_ns > BACKGROUND_RESCAN_NS) {
+        if (b->background_fd >= 0)
+            background_scan(b, now_ns);
+        if (b->php)
+            ft_linux_php_scan(b->php);
+        b->background_scan_ns = now_ns;
+    }
 }
 
 static int backend_poll_fd(struct ft_backend *b)
@@ -790,6 +827,7 @@ static void backend_close(struct ft_backend *b)
     if (!b)
         return;
     ring_buffer__free(b->ring);
+    ft_linux_php_close(b->php);
     ft_linux_probes_unload(&b->probes);
     free(b->cpu_values);
     free(b->keys);
@@ -871,6 +909,11 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     b->background_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_files"));
     if (b->background_fd >= 0)
         background_scan(b, b->last_flush_ns);
+    if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
+        b->php = ft_linux_php_open(obj);
+        if (b->php)
+            ft_linux_php_scan(b->php);
+    }
 
     b->ring = ring_buffer__new(bpf_map__fd(events), on_ring_event, b, nullptr);
     b->cpu_values = calloc((size_t)(b->ncpus > 0 ? b->ncpus : 1), sizeof(uint64_t));

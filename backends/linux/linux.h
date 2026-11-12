@@ -100,4 +100,20 @@ size_t ft_linux_background_load(int map_fd, const char *const *patterns, size_t 
 void ft_linux_background_learn(int map_fd, const char *const *patterns, size_t count, uint64_t ino,
                                uint32_t dev, const char *path);
 
+/* PHP binaries probed for the script each request runs. */
+struct ft_linux_php;
+
+struct ft_linux_php *ft_linux_php_open(struct bpf_object *obj);
+void ft_linux_php_close(struct ft_linux_php *php);
+
+/* Probes the PHP binaries that running processes execute or have mapped, once per inode. */
+void ft_linux_php_scan(struct ft_linux_php *php);
+void ft_linux_php_attach_pid(struct ft_linux_php *php, uint32_t pid);
+size_t ft_linux_php_binaries(const struct ft_linux_php *php);
+
+/* Remembers the path the probes reported for a script id; nullptr for an unknown id. */
+void ft_linux_php_script_seen(struct ft_linux_php *php, uint32_t id, uint32_t tgid,
+                              const char *path, size_t len);
+const char *ft_linux_php_script(const struct ft_linux_php *php, uint32_t id);
+
 #endif

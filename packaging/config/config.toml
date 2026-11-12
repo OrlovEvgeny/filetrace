@@ -80,6 +80,10 @@
 # Arguments can hold passwords and tokens. false keeps only the program in the
 # command line; the script is still named.
 # arguments = true
+# Probes the PHP binaries that processes run, in containers too, for the script
+# of each request: a PHP-FPM or mod_php worker's transfers name the request's
+# script instead of the pool. About a microsecond per request.
+# php_scripts = true
 
 # A page of metrics for Prometheus to scrape, served without authentication.
 [prometheus]

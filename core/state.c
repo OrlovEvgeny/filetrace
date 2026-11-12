@@ -62,6 +62,14 @@ static void release_file(void *value, void *ctx)
     f->path = nullptr;
 }
 
+static void release_transfer(void *value, void *ctx)
+{
+    struct ft_transfer *t = value;
+    (void)ctx;
+    free(t->script);
+    t->script = nullptr;
+}
+
 static void release_process(void *value, void *ctx)
 {
     (void)ctx;
@@ -104,6 +112,7 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
     }
     ft_table_on_evict(st->files, release_file, nullptr);
     ft_table_on_evict(st->processes, release_process, nullptr);
+    ft_table_on_evict(st->transfers, release_transfer, nullptr);
     return st;
 }
 
@@ -474,6 +483,13 @@ static bool ingest_transfer(struct ft_state *st, const struct ft_event *ev)
     /* The path can be learned after the first bytes, so this is refreshed every time. */
     t->no_minimum = file && file->no_minimum;
     t->background = t->background || e->background;
+    if (e->script && e->script[0] && (!t->script || strcmp(t->script, e->script) != 0)) {
+        char *copy = strdup(e->script);
+        if (copy) {
+            free(t->script);
+            t->script = copy;
+        }
+    }
     t->last_ns = ev->ts_ns;
     t->bytes += e->bytes;
     t->read_bytes += e->read_bytes;
@@ -565,12 +581,18 @@ static void record_owner(struct ft_state *st, struct ft_row_event *r, uint32_t p
     }
 }
 
-/* Follows the record's text with the process's command line, working directory and script. */
-static void record_process_text(struct ft_row_event *r, const struct ft_process *p)
+/*
+ * Follows the record's text with the process's command line, working directory and script, or
+ * the script of the request the bytes were sent for.
+ */
+static void record_process_text(struct ft_row_event *r, const struct ft_process *p,
+                                const char *script)
 {
-    if (!p || !(p->command_line || p->cwd || p->script))
+    if (!script && p)
+        script = p->script;
+    if (!(p && (p->command_line || p->cwd)) && !script)
         return;
-    struct ft_process_strings s = {p->command_line, p->cwd, p->script};
+    struct ft_process_strings s = {p ? p->command_line : nullptr, p ? p->cwd : nullptr, script};
     size_t lead = strnlen(r->text, FT_PATH_MAX - 1) + 1;
     ft_process_strings_pack(r->text + lead, sizeof(r->text) - lead, &s);
     r->flags |= FT_EVENT_PROCESS_TEXT;
@@ -589,7 +611,7 @@ static void record_process(struct ft_state *st, enum ft_record_type type, const 
         ft_strlcpy(r->comm, p->comm, sizeof(r->comm));
         ft_strlcpy(r->text, p->exe, sizeof(r->text));
     }
-    record_process_text(r, p);
+    record_process_text(r, p, nullptr);
     record_commit(st);
 }
 
@@ -700,7 +722,7 @@ static void record_transfer(struct ft_state *st, const struct ft_event *ev)
     }
     if (f)
         record_file(r, f);
-    record_process_text(r, ft_table_find(st->processes, &e->pid));
+    record_process_text(r, ft_table_find(st->processes, &e->pid), e->script);
     record_commit(st);
 }
 

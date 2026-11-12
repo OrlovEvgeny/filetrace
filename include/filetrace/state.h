@@ -189,6 +189,7 @@ struct ft_transfer {
     bool counted;
     bool no_minimum; /* the file matches [correlation] no_minimum_paths */
     bool background; /* bytes were charged to a file in [correlation] background_paths */
+    char *script;    /* the PHP request's script, which a worker changes per request; or nullptr */
     struct ft_rate rate;
     char comm[FT_COMM_MAX];
 };

@@ -81,6 +81,7 @@ struct ft_ev_transfer {
     uint32_t ops;
     uint32_t alternations; /* READ_SEND: read-then-send sequences */
     bool background;       /* READ_SEND: of a file in [correlation] background_paths */
+    const char *script;    /* borrowed: the PHP request's script at the last send, or nullptr */
 };
 
 enum ft_loss_kind : uint8_t {

@@ -660,6 +660,8 @@ static bool apply_process(struct ft_config *cfg, const char *key, struct value *
 {
     if (strcmp(key, "arguments") == 0)
         return want_bool(v, &cfg->agent.state_cfg.command_line_arguments, why, size);
+    if (strcmp(key, "php_scripts") == 0)
+        return want_bool(v, &cfg->agent.backend_cfg.php_scripts, why, size);
     *known = false;
     return false;
 }
@@ -1032,6 +1034,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
 
     fputs("\n[process]\n", o);
     fprintf(o, "arguments = %s\n", yes_no(state->command_line_arguments));
+    fprintf(o, "php_scripts = %s\n", yes_no(backend->php_scripts));
 
     fputs("\n[prometheus]\n", o);
     fprintf(o, "enabled = %s\n", yes_no(cfg->agent.prometheus.enabled));

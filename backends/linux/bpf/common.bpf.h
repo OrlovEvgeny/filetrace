@@ -112,6 +112,7 @@ struct thread_state {
     __u8 bg_fresh;
     __u8 bg_reading; /* the read counter has grown only by reads of bg_file */
     __u32 received;  /* receives seen; a claim made before the last one is not handed back */
+    __u32 script;    /* the PHP request running on this thread, as ft_bpf_ev_script names it */
     struct file_ref bg_file;
     __u32 bg_gen;
     __u32 bg_forgotten;
@@ -142,8 +143,16 @@ struct {
     __type(value, __u8);
 } background_files SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u64); /* hash of the path */
+    __type(value, __u32);
+} known_scripts SEC(".maps");
+
 static __u32 last_file_instance;
 static __u32 forgotten_files;
+static __u32 last_script_id;
 
 struct path_scratch {
     __u32 busy;
@@ -313,8 +322,9 @@ static __always_inline bool is_background(const struct file_key *fk)
 
 /* Adds a send of up to *pending bytes of the file to the counters, and takes it off *pending. */
 static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
-                                        const struct file_ref *file, __u8 background, __u64 sent,
-                                        __u64 *pending, __u64 *unreported, __u8 *fresh, __u64 now)
+                                        const struct file_ref *file, __u8 background, __u32 script,
+                                        __u64 sent, __u64 *pending, __u64 *unreported, __u8 *fresh,
+                                        __u64 now)
 {
     __u64 take = sent < *pending ? sent : *pending;
     struct ft_bpf_agg_key key = {
@@ -331,6 +341,8 @@ static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
         __sync_fetch_and_add(&v->transfer.read_bytes, *unreported);
         __sync_fetch_and_add(&v->transfer.sends, 1);
         __sync_fetch_and_add(&v->transfer.alternations, *fresh);
+        if (script)
+            v->transfer.script = script;
         v->last_ns = now;
     }
     *pending -= take;
@@ -351,8 +363,8 @@ static __always_inline void correlate_send(void *map, __u64 cookie, __u32 tgid, 
     if (ts->pending && now - ts->last_ns > cfg.corr_window_ns)
         foreground_reset(ts);
     if (ts->pending) {
-        charge_send(map, cookie, tgid, &ts->file, 0, sent, &ts->pending, &ts->unreported,
-                    &ts->fresh, now);
+        charge_send(map, cookie, tgid, &ts->file, 0, ts->script, sent, &ts->pending,
+                    &ts->unreported, &ts->fresh, now);
         ts->last_ns = now;
         background_reset(ts);
         return;
@@ -363,8 +375,8 @@ static __always_inline void correlate_send(void *map, __u64 cookie, __u32 tgid, 
         background_reset(ts);
         return;
     }
-    charge_send(map, cookie, tgid, &ts->bg_file, 1, sent, &ts->bg_pending, &ts->bg_unreported,
-                &ts->bg_fresh, now);
+    charge_send(map, cookie, tgid, &ts->bg_file, 1, ts->script, sent, &ts->bg_pending,
+                &ts->bg_unreported, &ts->bg_fresh, now);
     ts->bg_last_ns = now;
 }
 
@@ -517,6 +529,11 @@ static __always_inline void fill_exec(struct ft_bpf_ev_exec *e, struct task_stru
 SEC("tp_btf/sched_process_exec")
 int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct linux_binprm *bprm)
 {
+    /* A request that starts another program does not carry its script into it. */
+    struct thread_state *ts = bpf_task_storage_get(&threads, task, 0, 0);
+    if (ts)
+        ts->script = 0;
+
     __u32 zero = 0;
     struct exec_scratch *s = bpf_map_lookup_elem(&exec_scratch, &zero);
     if (!s)
@@ -649,6 +666,111 @@ static __always_inline void forget_file(struct inode *inode)
     /* The inode number can be given to an unrelated file next. */
     struct ft_bpf_background_key bk = {.ino = fk.ino, .dev = fk.dev};
     bpf_map_delete_elem(&background_files, &bk);
+}
+
+/* A PHP request's script path, before it is queued. */
+struct script_scratch {
+    __u32 busy;
+    __u32 pad;
+    struct ft_bpf_ev_script ev;
+    char path[FT_BPF_SCRIPT_MAX];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct script_scratch);
+} script_scratch SEC(".maps");
+
+struct script_hash {
+    const char *path;
+    __u32 len;
+    __u64 hash;
+};
+
+static long script_hash_step(__u64 index, void *arg)
+{
+    struct script_hash *h = arg;
+    if (index >= h->len)
+        return 1;
+    h->hash ^= (unsigned char)h->path[index & (FT_BPF_SCRIPT_MAX - 1)];
+    h->hash *= 0x100000001b3ULL;
+    return 0;
+}
+
+/* Every SAPI starts a request's script here: FPM, mod_php, the CLI. */
+SEC("uprobe")
+int BPF_UPROBE(ft_php_execute_script, void *handle)
+{
+    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0,
+                                                   BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!ts)
+        return 0;
+    ts->script = 0;
+
+    /* zend_file_handle: the name follows a 40-byte union in every version. */
+    __u64 name = 0;
+    if (bpf_probe_read_user(&name, sizeof(name), handle + 40) || !name)
+        return 0;
+    if (bpf_get_attach_cookie(ctx) == FT_BPF_PHP_ZEND_STRING)
+        name += 24; /* past the refcount, hash and length of the zend_string */
+
+    __u32 zero = 0;
+    struct script_scratch *s = bpf_map_lookup_elem(&script_scratch, &zero);
+    if (!s)
+        return 0;
+    if (__sync_lock_test_and_set(&s->busy, 1)) {
+        count(FT_BPF_CNT_PATH_BUSY);
+        return 0;
+    }
+
+    long n = bpf_probe_read_user_str(s->path, sizeof(s->path), (void *)name);
+    if (n > 1) {
+        __u32 tgid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+        struct script_hash h = {
+            .path = s->path, .len = (__u32)n - 1, .hash = 0xcbf29ce484222325ULL};
+        /* A relative path names another script in every directory it is run from. */
+        if (s->path[0] != '/')
+            h.hash ^= tgid;
+        bpf_loop(FT_BPF_SCRIPT_MAX, script_hash_step, &h, 0);
+
+        __u32 *known = bpf_map_lookup_elem(&known_scripts, &h.hash);
+        if (known) {
+            ts->script = *known;
+        } else {
+            __u32 id = __sync_fetch_and_add(&last_script_id, 1) + 1;
+            s->ev.hdr.ts_ns = bpf_ktime_get_boot_ns();
+            s->ev.hdr.kind = FT_BPF_EV_SCRIPT;
+            s->ev.hdr.pad = 0;
+            s->ev.id = id;
+            s->ev.tgid = tgid;
+            s->ev.len = (__u32)n - 1;
+            s->ev.pad = 0;
+            __u64 len = (__u64)n;
+            if (len > FT_BPF_SCRIPT_MAX)
+                len = FT_BPF_SCRIPT_MAX;
+            __u64 size = sizeof(s->ev) + len;
+            if (bpf_ringbuf_output(&events, &s->ev, size, wake_flags()) == 0) {
+                bpf_map_update_elem(&known_scripts, &h.hash, &id, BPF_ANY);
+                ts->script = id;
+            } else {
+                count(FT_BPF_CNT_RING_FULL);
+            }
+        }
+    }
+    s->busy = 0;
+    return 0;
+}
+
+/* The request is over once its output is flushed, so later work of the thread is not its. */
+SEC("uretprobe")
+int BPF_URETPROBE(ft_php_request_shutdown)
+{
+    struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
+    if (ts)
+        ts->script = 0;
+    return 0;
 }
 
 #endif
