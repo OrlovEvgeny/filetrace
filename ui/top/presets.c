@@ -171,7 +171,7 @@ static bool rewrite(const char *path, FILE *out, const char *name, const char *e
             replaced = true;
             continue;
         }
-        fputs(line, out);
+        fwrite(line, 1, (size_t)len, out);
         if (len > 0 && line[len - 1] != '\n')
             fputc('\n', out);
     }

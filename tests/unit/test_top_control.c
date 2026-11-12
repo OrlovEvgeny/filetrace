@@ -689,6 +689,22 @@ static void presets(void)
     CHECK(strstr(r.c->ui.message, "space") != nullptr);
     rig_close(&r);
 
+    /* Saving keeps every other line byte for byte, one holding a NUL too. */
+    static const char held[] = "junk\0more\nmine\tdest:private\n";
+    char back[64];
+    FILE *f = fopen(path, "wb");
+    CHECK(f && fwrite(held, 1, sizeof(held) - 1, f) == sizeof(held) - 1);
+    if (f)
+        fclose(f);
+    CHECK(ft_top_presets_save("other", "pid:1", &err));
+    f = fopen(path, "rb");
+    size_t n = f ? fread(back, 1, sizeof(back), f) : 0;
+    if (f)
+        fclose(f);
+    CHECK(n > sizeof(held) - 1 && memcmp(back, held, sizeof(held) - 1) == 0);
+    CHECK(ft_top_presets_find("mine", expression, sizeof(expression), &err));
+    CHECK_STR(expression, "dest:private");
+
     unlink(path);
     rmdir(home);
     rmdir(config);
