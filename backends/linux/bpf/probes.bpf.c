@@ -23,7 +23,8 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         (newstate == TCP_FIN_WAIT1 || newstate == TCP_LAST_ACK || newstate == TCP_CLOSE)) {
         void *map = agg_map_now();
         if (map) {
-            carry_close(map, (__u64)sk, CARRY_QUIET, bpf_ktime_get_boot_ns());
+            carry_close(map, (__u64)sk, carry_closing((__u64)sk, oldstate, newstate),
+                        bpf_ktime_get_boot_ns());
             dial_close(map, (__u64)sk, bpf_ktime_get_boot_ns());
         }
     }

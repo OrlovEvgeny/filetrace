@@ -6,8 +6,6 @@
 
 #define IPPROTO_UDP 17
 
-#define TCP_CLOSE_WAIT 8
-
 struct sock_track {
     __u64 id;
     __u32 tx_seq; /* write_seq up to which sent bytes are accounted */
@@ -472,7 +470,7 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
             t->tx_tgid = tgid;
         tcp_settle_tx(map, sk, t, now);
         if (t->carrying && cfg.file_corr) {
-            carry_close(map, (__u64)sk, CARRY_QUIET, now);
+            carry_close(map, (__u64)sk, carry_closing((__u64)sk, oldstate, newstate), now);
             dial_close(map, (__u64)sk, now);
             t->carrying = 0;
         }
@@ -482,7 +480,7 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
         /* A disconnect rewrites both positions right after this. */
         tcp_settle_tx(map, sk, t, now);
         if (t->carrying && cfg.file_corr) {
-            carry_close(map, (__u64)sk, CARRY_QUIET, now);
+            carry_close(map, (__u64)sk, carry_closing((__u64)sk, oldstate, newstate), now);
             dial_close(map, (__u64)sk, now);
             t->carrying = 0;
         }

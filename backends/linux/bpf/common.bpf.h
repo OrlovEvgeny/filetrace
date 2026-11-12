@@ -24,6 +24,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define TCP_SYN_SENT 2
 #define TCP_FIN_WAIT1 4
 #define TCP_CLOSE 7
+#define TCP_CLOSE_WAIT 8
 #define TCP_LISTEN 10
 #define TCP_LAST_ACK 9
 
@@ -623,6 +624,7 @@ enum carry_end {
     CARRY_NEXT,  /* another file, connection or thread took the window's place */
     CARRY_REPLY, /* the thread heard from the window's own peer */
     CARRY_AGED,  /* the correlation window passed with nothing to end it */
+    CARRY_HUNG,  /* the peer closed or reset the connection before it said anything */
 };
 
 static __always_inline bool same_file(const struct file_ref *a, const struct file_ref *b)
@@ -730,11 +732,12 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     bool flight = c->kind == CARRY_FLIGHT;
     __u64 whole = carry_whole(c);
     /*
-     * A small first flight the connection went on from was a hello or a first request, and one
-     * that took far more than a small or strict file in it did not carry that file.
+     * A small first flight the connection went on from was a hello or a first request, as was one
+     * its peer hung up on unanswered; one that took far more than a small or strict file in it did
+     * not carry that file.
      */
     bool small = c->held || (c->size && c->size < CARRY_FLOOR);
-    if (flight && ((end == CARRY_AGAIN && c->wire < CARRY_FLIGHT_MAX) ||
+    if (flight && (((end == CARRY_AGAIN || end == CARRY_HUNG) && c->wire < CARRY_FLIGHT_MAX) ||
                    (small && c->wire > whole + CARRY_SLACK + whole / 128))) {
         dial_charged(sk, &c->file, -(__s64)c->sent);
         return;
@@ -769,6 +772,16 @@ static __always_inline struct carry *carry_get(__u64 sk)
 {
     struct carry *c = bpf_map_lookup_elem(&carries, &sk);
     return c && !c->judged ? c : NULL;
+}
+
+/* How a connection that is closing ends its window: by this side, or by a peer that never spoke. */
+static __always_inline enum carry_end carry_closing(__u64 sk, int oldstate, int newstate)
+{
+    bool fin = newstate == TCP_LAST_ACK || oldstate == TCP_CLOSE_WAIT;
+    bool hung = fin || (newstate == TCP_CLOSE && oldstate == TCP_ESTABLISHED);
+    /* The peer's FIN takes a sequence number of its own, which bytes_received counts. */
+    __u64 heard = BPF_CORE_READ((struct tcp_sock *)sk, bytes_received);
+    return hung && heard <= (fin ? 1 : 0) ? CARRY_HUNG : CARRY_QUIET;
 }
 
 /* Closes the window on a socket and judges it, unless the iterator got there first. */

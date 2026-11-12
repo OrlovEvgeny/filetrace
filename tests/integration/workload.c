@@ -72,6 +72,8 @@ enum sink_mode {
     SINK_ANSWER,  /* answers each read with one line, as a server answers requests */
     SINK_STALL,   /* greets each peer and reads nothing for two seconds */
     SINK_LATE,    /* answers each read, from half a second after the peer connected */
+    SINK_HANGUP,  /* closes after its first read, saying nothing */
+    SINK_RESET,   /* resets the connection after its first read */
 };
 
 static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
@@ -117,6 +119,13 @@ static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
                 sleep(2);
             if (mode == SINK_LATE)
                 usleep(500 * 1000);
+            if (mode == SINK_HANGUP || mode == SINK_RESET) {
+                struct linger abort = {.l_onoff = 1, .l_linger = 0};
+                if (read(c, buf, sizeof(buf)) > 0 && mode == SINK_RESET)
+                    setsockopt(c, SOL_SOCKET, SO_LINGER, &abort, sizeof(abort));
+                close(c);
+                continue;
+            }
             while (read(c, buf, sizeof(buf)) > 0) {
                 if ((mode == SINK_ANSWER || mode == SINK_LATE) && write(c, "hello\n", 6) != 6)
                     _exit(1);
@@ -1990,6 +1999,39 @@ static void scenario_read_hello(const char *path, size_t size, bool upload)
 }
 
 /*
+ * flightend <path> <bytes> <close|hangup|reset|abort>: reads the file and sends it as all a fresh
+ * connection sends, to a peer that never answers; then this side closes, the peer closes first,
+ * the peer resets, or this side aborts with a reset.
+ */
+static void scenario_flight_end(const char *path, size_t size, const char *how)
+{
+    bool hangup = strcmp(how, "hangup") == 0;
+    bool reset = strcmp(how, "reset") == 0;
+    struct sink sink = start_sink(SOCK_STREAM, false,
+                                  hangup  ? SINK_HANGUP
+                                  : reset ? SINK_RESET
+                                          : SINK_DISCARD);
+    int sock = connect_sink(&sink);
+    char *contents = read_whole_file(path, size);
+    send_all(sock, contents, size);
+    if (hangup || reset) {
+        char byte;
+        if (recv(sock, &byte, 1, 0) > 0)
+            die("the peer answered");
+    } else {
+        usleep(200 * 1000);
+    }
+    if (strcmp(how, "abort") == 0) {
+        struct linger abort = {.l_onoff = 1, .l_linger = 0};
+        setsockopt(sock, SOL_SOCKET, SO_LINGER, &abort, sizeof(abort));
+    }
+    close(sock);
+    free(contents);
+    report("flightend", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * rereadhello <path> <bytes>: reads the file and sends a hello the size of a TLS ClientHello on a
  * connection whose peer answers late; reads the file again and does the same on a second one.
  * Each connection then hears its answer and sends a request, as a client reads its CA file per
@@ -2599,6 +2641,8 @@ int main(int argc, char **argv)
         scenario_read_hello(argv[2], arg_size(argv[3]), true);
     else if (strcmp(name, "pieces") == 0 && argc == 6)
         scenario_pieces(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
+    else if (strcmp(name, "flightend") == 0 && argc == 5)
+        scenario_flight_end(argv[2], arg_size(argv[3]), argv[4]);
     else if (strcmp(name, "rereadhello") == 0 && argc == 4)
         scenario_reread_hello(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "rereadput") == 0 && argc == 4)

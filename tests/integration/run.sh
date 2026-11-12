@@ -640,6 +640,20 @@ for name in e f; do
         "$(ft files --path "$data/flight-$name.json" --format csv | column transfer.bytes_sent)" 5000
 done
 
+# A small file that is all a fresh connection sends, never answered, is an upload when this side
+# closes the connection, and not when the peer closes or resets it: a hello a server refused. An
+# abort from this side resets the connection the same way, and is not reported either.
+for how in close hangup reset abort; do
+    "$workload" flightend "$data/flight-$how.json" 2000 "$how" >/dev/null
+done
+settle
+expect "small first flight, this side closes: bytes" \
+    "$(ft files --path "$data/flight-close.json" --format csv | column transfer.bytes_sent)" 2000
+for how in hangup reset abort; do
+    expect "small first flight, $how: not reported" \
+        "$(ft files --path "$data/flight-$how.json" --format csv | rows)" 0
+done
+
 # A thread that reads its file again leaves its first flights to their own connections: a hello
 # sent after each read is not the file, and a small file put to one connection after another,
 # each answered and kept open, is reported for each once they close.
