@@ -33,6 +33,8 @@ static const char *const default_background_paths[] = {
     "/usr/share/pki/trust/*",
     "/etc/ca-certificates/trust-source/*",
     "/etc/ssl/openssl.cnf",
+    "/etc/php/*",
+    "*/php.ini",
     "/etc/pki/tls/openssl.cnf",
     "/usr/lib/ssl/openssl.cnf",
     "/etc/hosts",

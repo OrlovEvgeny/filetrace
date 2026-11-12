@@ -385,6 +385,9 @@ expect "first flight: second of two files bytes" \
 "$workload" twodials "$data/two-dials.bin" 300000 >/dev/null
 # A small file read before a plain connection that sends it whole and closes is reported.
 "$workload" readsmall "$data/small-before.json" 20000 >/dev/null
+# An interpreter's configuration read at startup is background, whatever is uploaded after it.
+mkdir -p "$data/etc/php/8.4/cli"
+"$workload" readmemory "$data/etc/php/8.4/cli/php.ini" 75000 75000 >/dev/null
 # A small file read after a large one is what a later send over an open connection takes,
 # after a background read too, but not once the read is stale.
 "$workload" readsendother "$data/side-bg-large.bin" 300000 "$data/side-bg-small.bin" 20000 \
@@ -407,6 +410,8 @@ for name in two-b two-c two-e two-f two-dials side-bg-large later-large later-sm
 done
 expect "dialed path, side-bg-lib.py: not reported" \
     "$(ft files --path "$data/side-bg-lib.py" --format csv | rows)" 0
+expect "dialed path, php.ini: not reported" \
+    "$(ft files --path "$data/etc/php/8.4/cli/php.ini" --format csv | rows)" 0
 csv=$(ft files --path "$data/fanout.bin" --format csv)
 expect "dialed path, fan-out: rows" "$(printf '%s\n' "$csv" | rows)" 2
 expect "dialed path, fan-out: bytes" \
