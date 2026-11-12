@@ -148,11 +148,13 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
         ts->reading = 0;
         return 0;
     }
+    __u64 now = bpf_ktime_get_boot_ns();
+    file_again(ts, &fk, now);
     thread_set_file(ts, file, inode, &fk, magic);
     ts->file_strict = listed == FT_BPF_LISTED_STRICT;
 
     ts->rchar_mark = BPF_CORE_READ(task, ioac.rchar);
-    ts->read_ns = bpf_ktime_get_boot_ns();
+    ts->read_ns = now;
     ts->reading = 1;
     return 0;
 }

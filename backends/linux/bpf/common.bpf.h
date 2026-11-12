@@ -1162,6 +1162,15 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
     ts->last_ns = now;
 }
 
+/* A reply that took all the thread read of a file ends when the thread reads the file again. */
+static __always_inline void file_again(struct thread_state *ts, const struct file_key *fk,
+                                       __u64 now)
+{
+    if (ts->episode_sock && !ts->pending && ts->file.ino == fk->ino && ts->file.dev == fk->dev &&
+        ts->gen == fk->gen)
+        carry_episode_end(ts, now);
+}
+
 /* Pseudo filesystems whose regular files are kernel state, not stored data. */
 static __always_inline bool fs_excluded(unsigned long magic)
 {
