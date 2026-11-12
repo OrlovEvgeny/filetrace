@@ -178,10 +178,11 @@ struct carry {
     __u64 size; /* the file's size */
     __u64 first_ns;
     __u64 last_ns;
-    __u64 wire; /* what the connection took while the window was open */
-    __u64 sent; /* of that, charged to the file */
-    __u64 read; /* of the file, before those charges */
-    __u8 held;  /* a strict file read whole, judged by what went at any size */
+    __u64 wire;      /* what the connection took while the window was open */
+    __u64 sent;      /* of that, charged to the file */
+    __u64 read;      /* of the file, before those charges */
+    __u64 read_seen; /* of the file, as the thread counted it, whoever charged it before */
+    __u8 held;       /* a strict file read whole, judged by what went at any size */
 };
 
 static struct carry carry_zero;
@@ -682,7 +683,8 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
         dial_charged(sk, &c->file, -(__s64)c->sent);
         return;
     }
-    __u64 whole = c->size && c->size < c->read ? c->size : c->read;
+    __u64 read = c->read > c->read_seen ? c->read : c->read_seen;
+    __u64 whole = c->size && c->size < read ? c->size : read;
     bool by_volume = !flight || c->held;
     bool file = false;
     if (c->sends && by_volume)
@@ -1120,6 +1122,8 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
     if (c) {
         __u64 take = sent < ts->pending ? sent : ts->pending;
         carry_add(c, take, ts->unreported, ts->fresh, ts->script, now);
+        if (c->read_seen < ts->file_read)
+            c->read_seen = ts->file_read;
         dial_charged(sk, &ts->file, (__s64)take);
         ts->pending -= take;
         ts->unreported = 0;

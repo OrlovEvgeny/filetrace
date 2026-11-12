@@ -351,6 +351,8 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     struct carry *c = carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, now, true, &skip);
     if (c) {
         t->carrying = 1;
+        if (c->read_seen < ts->file_read)
+            c->read_seen = ts->file_read;
     } else if (!skip) {
         ts->file_streamed = 1;
     }
