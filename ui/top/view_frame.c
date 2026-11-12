@@ -736,7 +736,8 @@ static void selected_line(const struct ft_top_row *r, struct line *l)
             add(l, mark, "▶ %" PRIu32 " ", t->pid);
         }
         add(l, dim, "  → ");
-        if (t->destination && t->destination->host_state == FT_TOP_HOST_NAMED)
+        if (t->destination && t->destination->host_state == FT_TOP_HOST_NAMED &&
+            t->destination->host)
             add(l, text, "%s:%u", t->destination->host, (unsigned)t->remote.port);
         else
             add(l, text, "%s", t->remote_text);
