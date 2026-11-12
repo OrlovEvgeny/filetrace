@@ -76,6 +76,7 @@ set_property(
         FT_COMMIT="${FT_COMMIT_STRING}"
 )
 target_include_directories(ft_build INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ft_build INTERFACE m)
 
 if(FILETRACE_WERROR)
     target_compile_options(ft_build INTERFACE -Werror)
