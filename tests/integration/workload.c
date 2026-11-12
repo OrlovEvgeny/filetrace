@@ -1460,6 +1460,97 @@ static void scenario_tail(const char *path, size_t size, size_t append, size_t r
 }
 
 /*
+ * holdopen <path> <bytes> <body bytes> <seconds>: over a connection that has heard from its peer,
+ * reads the file and sends a body that starts with it, then keeps the connection open, never
+ * hearing again.
+ */
+static void scenario_hold_open(const char *path, size_t size, size_t body, size_t seconds)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_GREET);
+    int sock = connect_sink(&sink);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    char *out = calloc(1, body);
+    if (!out)
+        die("malloc");
+    memcpy(out, contents, size < body ? size : body);
+    send_all(sock, out, body);
+    report("holdopen", path, size, sink.port);
+    fflush(stdout);
+    sleep((unsigned)seconds);
+    close(sock);
+    free(out);
+    free(contents);
+    stop_sink(&sink);
+}
+
+struct side_send {
+    int sock;
+    size_t bytes;
+};
+
+static void *side_send_main(void *arg)
+{
+    struct side_send *s = arg;
+    char *buf = calloc(1, s->bytes);
+    if (!buf)
+        die("malloc");
+    send_all(s->sock, buf, s->bytes);
+    free(buf);
+    return nullptr;
+}
+
+/*
+ * twosenders <path> <bytes> <own bytes> <other bytes>: over a connection that has heard from its
+ * peer, reads the file and sends a few bytes, another thread sends its own on the same connection,
+ * then the first hears the answer.
+ */
+static void scenario_two_senders(const char *path, size_t size, size_t own, size_t other)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    char *contents = read_whole_file(path, size);
+    send_all(sock, contents, own < size ? own : size);
+    struct side_send side = {.sock = sock, .bytes = other};
+    pthread_t thread;
+    if (pthread_create(&thread, nullptr, side_send_main, &side) != 0)
+        die("pthread_create");
+    pthread_join(thread, nullptr);
+    hear(sock);
+    close(sock);
+    free(contents);
+    report("twosenders", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * latebody <path> <bytes> <head bytes> <seconds> <body bytes>: over a connection that has heard
+ * from its peer, reads the file, sends a head, waits, then sends a body from memory and hears.
+ */
+static void scenario_late_body(const char *path, size_t size, size_t head, size_t seconds,
+                               size_t body)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    int sock = connect_sink(&sink);
+    send_all(sock, "hello\n", 6);
+    hear(sock);
+    free(read_whole_file(path, size));
+    char *out = calloc(1, head > body ? head : body);
+    if (!out)
+        die("malloc");
+    send_all(sock, out, head);
+    sleep((unsigned)seconds);
+    send_all(sock, out, body);
+    hear(sock);
+    close(sock);
+    free(out);
+    report("latebody", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * sendfileeof <path> <bytes>: reads the file, connects, calls sendfile at the end of the file,
  * which moves nothing, then sends what it read.
  */
@@ -2140,6 +2231,13 @@ int main(int argc, char **argv)
         scenario_sendfile_then(argv[2], arg_size(argv[3]), strcmp(argv[4], "answered") == 0);
     else if (strcmp(name, "readudptwo") == 0 && argc == 4)
         scenario_read_udp_two(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "holdopen") == 0 && argc == 6)
+        scenario_hold_open(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
+    else if (strcmp(name, "twosenders") == 0 && argc == 6)
+        scenario_two_senders(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
+    else if (strcmp(name, "latebody") == 0 && argc == 7)
+        scenario_late_body(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]),
+                           arg_size(argv[6]));
     else if (strcmp(name, "servestrict") == 0 && argc == 6)
         scenario_serve_strict(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "streamafter") == 0 && argc == 6)

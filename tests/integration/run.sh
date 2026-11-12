@@ -611,12 +611,32 @@ expect "strict file streamed after a large read: bytes" \
     "$(ft files --path "$data/app.jar" --format csv | column transfer.bytes_sent)" 420000
 expect "strict file streamed after a large read: the large one not reported" \
     "$(ft files --path "$data/manifest.bin" --format csv | rows)" 0
+# The datagram took 60 bytes of the read, as the base rule charges any send after it.
 expect "small file after a datagram elsewhere: bytes" \
-    "$(ft files --path "$data/page.html" --format csv | column transfer.bytes_sent)" 5000
+    "$(ft files --path "$data/page.html" --format csv | column transfer.bytes_sent)" 4940
 expect "small file sent round after round: bytes" \
     "$(ft files --path "$data/status.txt" --format csv | column transfer.bytes_sent)" 10240
 expect "file tailed to a peer that never answers: bytes" \
     "$(ft files --path "$data/tailed.log" --format csv | column transfer.bytes_sent)" 10000
+
+# A reply its peer never answers is judged once the correlation window has passed, while the
+# connection is still open: by what went, and as the base rule took it when that is short.
+"$workload" holdopen "$data/held.js" 20000 20300 6 >/dev/null &
+held_strict=$!
+"$workload" holdopen "$data/held-page.tpl" 5000 20300 6 >/dev/null &
+held_page=$!
+"$workload" twosenders "$data/token.txt" 2000 150 2100 >/dev/null
+"$workload" latebody "$data/client.conf" 5000 200 4 5000 >/dev/null
+sleep 4
+expect "held reply never answered: strict file bytes" \
+    "$(ft files --path "$data/held.js" --format csv | column transfer.bytes_sent)" 20000
+expect "held reply never answered: a page far larger than its template not reported" \
+    "$(ft files --path "$data/held-page.tpl" --format csv | rows)" 0
+expect "reply with another thread's bytes on the connection not reported" \
+    "$(ft files --path "$data/token.txt" --format csv | rows)" 0
+expect "body long after a small file's read not reported" \
+    "$(ft files --path "$data/client.conf" --format csv | rows)" 0
+wait "$held_strict" "$held_page"
 
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.
