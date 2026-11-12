@@ -319,7 +319,8 @@ expect "requests after a read: large file not reported" \
 # that is all a fresh connection sends is reported once the connection closes.
 "$workload" readhello "$data/internal-ca.pem" 1111 >/dev/null
 "$workload" readhello "$data/helper.py" 1200 >/dev/null
-"$workload" exchange "$data/lookup.py" 2584 1 3000 >/dev/null
+"$workload" exchange "$data/lookup.mo" 2584 1 3000 >/dev/null
+"$workload" exchange "$data/accounts.py" 912 1 3000 >/dev/null
 "$workload" smallupload "$data/small-upload.json" 2000 >/dev/null
 settle
 expect "first flight: CA file read before the hello not reported" \
@@ -327,7 +328,9 @@ expect "first flight: CA file read before the hello not reported" \
 expect "first flight: background file read before the hello not reported" \
     "$(ft files --path "$data/helper.py" --format csv | rows)" 0
 expect "background file read before the connection not reported with its request" \
-    "$(ft files --path "$data/lookup.py" --format csv | rows)" 0
+    "$(ft files --path "$data/lookup.mo" --format csv | rows)" 0
+expect "strict file read before the connection not reported with a larger request" \
+    "$(ft files --path "$data/accounts.py" --format csv | rows)" 0
 csv=$(ft files --path "$data/small-upload.json" --format csv)
 expect "first flight: small upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "first flight: small upload bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 2000
@@ -455,6 +458,28 @@ for pair in 1k:1024 4k:4096 60k:61440 ka-a:2048 ka-b:8192 ka-c:30000 ka-same:122
     expect "reply of a file, ${pair%%:*}: rows" "$(printf '%s\n' "$csv" | rows)" 1
     expect "reply of a file, ${pair%%:*}: bytes" \
         "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "${pair#*:}"
+done
+
+# A file of strict_paths sent whole is reported, read before the connection, after it or over
+# one that has heard from its peer, after a small ordinary file or not.
+for shape in before after heard; do
+    for size in 2000 70000 1048576; do
+        "$workload" sendlisted "$shape" "$data/strict-$shape-$size.php" "$size" >/dev/null
+        "$workload" sendlisted "$shape" "$data/strict-$shape-$size-cfg.php" "$size" \
+            "$data/plain-$shape-$size.ini" 3000 >/dev/null
+    done
+done
+settle
+for shape in before after heard; do
+    for size in 2000 70000 1048576; do
+        for name in "strict-$shape-$size" "strict-$shape-$size-cfg"; do
+            expect "strict file sent whole, $name: bytes" \
+                "$(ft files --path "$data/$name.php" --format csv | column transfer.bytes_sent)" \
+                "$size"
+        done
+        expect "strict file sent whole, plain-$shape-$size: not reported" \
+            "$(ft files --path "$data/plain-$shape-$size.ini" --format csv | rows)" 0
+    done
 done
 
 # Below 64 KB, a file read before its connection is not told from a request of its size.
@@ -933,11 +958,13 @@ expect "no minimum: other file not reported" \
 stop_agent
 expect "no minimum agent exit code" "$?" 0
 
-# Files in background_paths do not displace what a thread read before them, and count as sent
-# only when all that was read of them went.
+# Files in background_paths do not displace what a thread read before them and are never taken
+# as sent; files in strict_paths do not displace it either, and count as sent only when a send
+# matches their size.
 cat >"$work/background.toml" <<CONFIG
 [correlation]
-background_paths = ["$data/bg-*", "$data/ns-view/*", "/etc/passwd"]
+background_paths = ["$data/bg-*", "$data/ns-view/*"]
+strict_paths = ["$data/strict-*", "/etc/passwd"]
 no_minimum_paths = ["/etc/passwd"]
 CONFIG
 # The agent resolves the patterns to inodes when it starts, so the files exist by then.
@@ -945,6 +972,7 @@ CONFIG
 : >"$data/bg-handshake.crt"
 : >"$data/bg-gai.conf"
 : >"$data/bg-whole.bin"
+: >"$data/strict-whole.bin"
 mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
     { echo "FAIL: the agent did not start with background_paths"; exit 1; }
@@ -953,6 +981,7 @@ start_agent --config "$work/background.toml" ||
     >/dev/null
 "$workload" readlittle "$data/bg-gai.conf" 4000 >/dev/null
 "$workload" readsend "$data/bg-whole.bin" 4096 65536 >/dev/null
+"$workload" readsend "$data/strict-whole.bin" 4096 65536 >/dev/null
 "$workload" upload /etc/passwd 65536 >/dev/null
 settle
 csv=$(ft files --path "$data/up-bundle.bin" --format csv)
@@ -966,12 +995,14 @@ expect "background: bundle read before a handshake not reported" \
     "$(ft files --path "$data/bg-handshake.crt" --format csv | rows)" 0
 expect "background: part of a read not reported" \
     "$(ft files --path "$data/bg-gai.conf" --format csv | rows)" 0
-csv=$(ft files --path "$data/bg-whole.bin" --format csv)
-expect "background: whole read reported" "$(printf '%s\n' "$csv" | rows)" 1
-expect "background: whole read bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 4096
+expect "background: whole read not reported" \
+    "$(ft files --path "$data/bg-whole.bin" --format csv | rows)" 0
+csv=$(ft files --path "$data/strict-whole.bin" --format csv)
+expect "strict: whole read reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "strict: whole read bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 4096
 csv=$(ft files --path /etc/passwd --format csv)
-expect "background: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
-expect "background: /etc/passwd upload bytes" \
+expect "strict: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
+expect "strict: /etc/passwd upload bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "$(stat -L -c %s /etc/passwd)"
 
 # A listed file made after the agent started is background once a read reports its path.

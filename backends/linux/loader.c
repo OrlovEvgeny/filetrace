@@ -410,11 +410,12 @@ struct ft_backend {
 static void background_scan(struct ft_backend *b, uint64_t now_ns)
 {
     bool truncated = false;
-    size_t held = ft_linux_background_load(b->background_fd, b->cfg.background_paths,
-                                           b->cfg.background_path_count, &truncated);
+    size_t held = ft_linux_background_load(b->background_fd, &b->cfg, &truncated);
     if (truncated && !b->background_scan_ns)
-        ft_log(FT_LOG_WARN, "[correlation] background_paths names more than %d files; %zu are kept",
-               FT_BPF_BACKGROUND_MAX, held);
+        ft_log(
+            FT_LOG_WARN,
+            "[correlation] background_paths and strict_paths name more than %d files; %zu are kept",
+            FT_BPF_BACKGROUND_MAX, held);
     b->background_scan_ns = now_ns;
 }
 
@@ -583,8 +584,7 @@ static void on_file(struct ft_backend *b, const struct ft_bpf_ev_file *e, size_t
     ft_linux_fs_type(e->fs_magic, ev.file.fs_type, sizeof(ev.file.fs_type));
     if (b->background_fd >= 0 &&
         !(e->flags & (FT_BPF_FILE_TRUNCATED | FT_BPF_FILE_DETACHED | FT_BPF_FILE_DELETED)))
-        ft_linux_background_learn(b->background_fd, b->cfg.background_paths,
-                                  b->cfg.background_path_count, e->ino, e->dev, b->path);
+        ft_linux_background_learn(b->background_fd, &b->cfg, e->ino, e->dev, b->path);
     emit(b, &ev);
 }
 
@@ -912,8 +912,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     int names_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_names"));
     int suffixes_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "background_suffixes"));
     if (names_fd >= 0 && suffixes_fd >= 0)
-        ft_linux_background_names(names_fd, suffixes_fd, b->cfg.background_paths,
-                                  b->cfg.background_path_count);
+        ft_linux_background_names(names_fd, suffixes_fd, &b->cfg);
     if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
         b->php = ft_linux_php_open(obj);
         if (b->php)

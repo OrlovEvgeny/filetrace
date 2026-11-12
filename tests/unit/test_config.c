@@ -347,17 +347,31 @@ static void background_paths_default_to_shared_files(void)
     ft_config_finish(cfg);
     const struct ft_backend_config *backend = &cfg->agent.backend_cfg;
     bool bundle = false;
-    bool passwd = false;
     for (size_t i = 0; i < backend->background_path_count; i++) {
         const char *pattern = backend->background_paths[i];
         if (ft_glob_match(pattern, "/etc/ssl/certs/ca-certificates.crt"))
             bundle = true;
-        if (ft_glob_match(pattern, "/etc/passwd"))
-            passwd = true;
+        CHECK(!ft_glob_match(pattern, "/etc/passwd"));
         CHECK(!ft_glob_match(pattern, "/etc/ssl/private/server.key"));
     }
     CHECK(bundle);
+    bool passwd = false;
+    bool module = false;
+    for (size_t i = 0; i < backend->strict_path_count; i++) {
+        const char *pattern = backend->strict_paths[i];
+        if (ft_glob_match(pattern, "/etc/passwd"))
+            passwd = true;
+        if (ft_glob_match(pattern, "/usr/lib/python3/dist-packages/requests/api.py"))
+            module = true;
+        CHECK(!ft_glob_match(pattern, "/etc/ssl/certs/ca-certificates.crt"));
+    }
     CHECK(passwd);
+    CHECK(module);
+
+    CHECK_U64(load(cfg, "[correlation]\nstrict_paths = [\"/srv/app/*.lua\"]\n", &err), FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK_U64(backend->strict_path_count, 1);
+    CHECK_STR(backend->strict_paths[0], "/srv/app/*.lua");
 
     CHECK_U64(load(cfg, "[correlation]\nbackground_paths = []\n", &err), FT_EXIT_OK);
     ft_config_finish(cfg);

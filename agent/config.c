@@ -16,9 +16,8 @@ const char *ft_config_default_path(void)
     return env && env[0] ? env : "/etc/filetrace/config.toml";
 }
 
-/* Files that programs read on their way to a connection: trust stores, resolver and account
- * databases, time zones, message catalogs, and the bundles, modules and shared libraries that
- * interpreters and libraries load wherever they are installed. */
+/* Files that programs read on their way to a connection and that nobody sends by reading them:
+ * trust stores, resolver files, time zones, locale data and interpreter configuration. */
 static const char *const default_background_paths[] = {
     "/etc/ssl/certs/*",
     "/etc/ssl/cert.pem",
@@ -33,41 +32,45 @@ static const char *const default_background_paths[] = {
     "/usr/share/pki/trust/*",
     "/etc/ca-certificates/trust-source/*",
     "/etc/ssl/openssl.cnf",
-    "/etc/php/*",
-    "*/php.ini",
     "/etc/pki/tls/openssl.cnf",
     "/usr/lib/ssl/openssl.cnf",
+    "/etc/php/*",
+    "*/php.ini",
     "/etc/hosts",
     "/etc/host.conf",
     "/etc/resolv.conf",
     "/etc/nsswitch.conf",
     "/etc/gai.conf",
-    "/etc/passwd",
-    "/etc/group",
     "/usr/share/zoneinfo/*",
     "/etc/localtime",
+    "/usr/lib/locale/*",
+    "*.mo",
     "*/cacert.pem",
     "*/cacerts",
     "*/ca-bundle.crt",
     "*/ca-certificates.crt",
-    "*.pyc",
-    "*.py",
-    "*.rb",
-    "*.js",
-    "*.mjs",
-    "*.cjs",
-    "*.node",
-    "*.jar",
-    "*.class",
-    "*.pm",
-    "*.pl",
-    "*.php",
-    "*.so",
-    "*.so.*",
-    "*.mo",
+};
+
+/* Files that programs load as they run and that people also send: account databases, source
+ * and compiled modules, shared libraries. */
+static const char *const default_strict_paths[] = {
+    "/etc/passwd", "/etc/group", "*.pyc",   "*.py", "*.rb", "*.js",  "*.mjs", "*.cjs",
+    "*.node",      "*.jar",      "*.class", "*.pm", "*.pl", "*.php", "*.so",  "*.so.*",
 };
 
 static_assert(FT_ARRAY_LEN(default_background_paths) <= FT_CONFIG_MAX_PATTERNS);
+static_assert(FT_ARRAY_LEN(default_strict_paths) <= FT_CONFIG_MAX_PATTERNS);
+
+static bool patterns_set(char **items, size_t *count, const char *const *from, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        items[i] = strdup(from[i]);
+        if (!items[i])
+            return false;
+        (*count)++;
+    }
+    return true;
+}
 
 struct ft_config *ft_config_new(void)
 {
@@ -82,13 +85,13 @@ struct ft_config *ft_config_new(void)
     cfg->agent.state_cfg.exclude_paths = (const char *const *)cfg->exclude_paths;
     cfg->agent.state_cfg.no_minimum_paths = (const char *const *)cfg->no_minimum_paths;
     cfg->agent.backend_cfg.background_paths = (const char *const *)cfg->background_paths;
-    for (size_t i = 0; i < FT_ARRAY_LEN(default_background_paths); i++) {
-        cfg->background_paths[i] = strdup(default_background_paths[i]);
-        if (!cfg->background_paths[i]) {
-            ft_config_free(cfg);
-            return nullptr;
-        }
-        cfg->background_path_count++;
+    cfg->agent.backend_cfg.strict_paths = (const char *const *)cfg->strict_paths;
+    if (!patterns_set(cfg->background_paths, &cfg->background_path_count, default_background_paths,
+                      FT_ARRAY_LEN(default_background_paths)) ||
+        !patterns_set(cfg->strict_paths, &cfg->strict_path_count, default_strict_paths,
+                      FT_ARRAY_LEN(default_strict_paths))) {
+        ft_config_free(cfg);
+        return nullptr;
     }
     cfg->enabled = true;
     cfg->log_level = FT_LOG_INFO;
@@ -118,6 +121,7 @@ void ft_config_free(struct ft_config *cfg)
     patterns_clear(cfg->exclude_paths, &cfg->exclude_path_count);
     patterns_clear(cfg->no_minimum_paths, &cfg->no_minimum_path_count);
     patterns_clear(cfg->background_paths, &cfg->background_path_count);
+    patterns_clear(cfg->strict_paths, &cfg->strict_path_count);
     free(cfg);
 }
 
@@ -132,6 +136,7 @@ void ft_config_finish(struct ft_config *cfg)
     state->exclude_path_count = cfg->exclude_path_count;
     state->no_minimum_path_count = cfg->no_minimum_path_count;
     backend->background_path_count = cfg->background_path_count;
+    backend->strict_path_count = cfg->strict_path_count;
 
     /* Minimal mode queues only process and socket events, far fewer than standard mode. */
     if (backend->mode == FT_MODE_MINIMAL) {
@@ -582,6 +587,8 @@ static bool apply_correlation(struct ft_config *cfg, const char *key, struct val
         return want_patterns(v, cfg->no_minimum_paths, &cfg->no_minimum_path_count, why, size);
     if (strcmp(key, "background_paths") == 0)
         return want_patterns(v, cfg->background_paths, &cfg->background_path_count, why, size);
+    if (strcmp(key, "strict_paths") == 0)
+        return want_patterns(v, cfg->strict_paths, &cfg->strict_path_count, why, size);
     if (strcmp(key, "track_fd_lifecycle") == 0)
         return want_unavailable(cfg, v, &cfg->track_fd_lifecycle,
                                 "[correlation] track_fd_lifecycle",
@@ -1028,6 +1035,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fprintf(o, "inferred_min_percent = %u\n", state->inferred_min_permille / 10);
     print_patterns(o, "no_minimum_paths", cfg->no_minimum_paths, cfg->no_minimum_path_count);
     print_patterns(o, "background_paths", cfg->background_paths, cfg->background_path_count);
+    print_patterns(o, "strict_paths", cfg->strict_paths, cfg->strict_path_count);
     fputs("# Always on.\n", o);
     fprintf(o, "track_process_lifecycle = %s\n", yes_no(cfg->track_process_lifecycle));
     fputs(unavailable, o);

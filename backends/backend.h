@@ -26,9 +26,12 @@ struct ft_backend_config {
     uint32_t drain_batch;    /* counters read from the kernel per call */
     uint64_t corr_window_ns; /* longest read-to-send gap that still correlates */
     bool php_scripts;        /* probe PHP binaries for the script of each request */
-    /* Borrowed patterns: files whose reads do not change what a thread is sending. */
+    /* Borrowed patterns: files that are never taken as sent from a read and a send. */
     const char *const *background_paths;
     size_t background_path_count;
+    /* Borrowed patterns: files taken as sent only when a send matches their own size. */
+    const char *const *strict_paths;
+    size_t strict_path_count;
 };
 
 void ft_backend_config_defaults(struct ft_backend_config *cfg);

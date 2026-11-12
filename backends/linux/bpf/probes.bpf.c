@@ -151,7 +151,7 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
     if (ts) {
         carry_episode_end(ts, now);
-        if (ts->pending || ts->bg_pending)
+        if (ts->pending || ts->strict_pending)
             thread_reset(ts);
     }
     return 0;
@@ -209,12 +209,16 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
 
     struct file_key fk = {.ino = inode->i_ino, .dev = sb->s_dev, .gen = inode->i_generation};
     __u64 now = bpf_ktime_get_boot_ns();
-    if (background_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk)) {
-        thread_set_background(ts, file, inode, &fk, magic);
-        ts->bg_pending += (__u64)ret;
-        ts->bg_unreported += (__u64)ret;
-        ts->bg_last_ns = now;
-        ts->bg_fresh = 1;
+    __u8 listed = listed_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
+    if (listed == FT_BPF_LISTED_BACKGROUND)
+        return 0;
+    if (listed == FT_BPF_LISTED_STRICT) {
+        thread_set_strict(ts, file, inode, &fk, magic);
+        ts->strict_pending += (__u64)ret;
+        ts->strict_unreported += (__u64)ret;
+        ts->strict_last_ns = now;
+        ts->strict_fresh = 1;
+        candidate_read(ts, &ts->strict_file, ts->strict_size, (__u64)ret, now);
         return 0;
     }
     thread_set_file(ts, file, inode, &fk, magic);
@@ -222,7 +226,7 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
     ts->unreported += (__u64)ret;
     ts->last_ns = now;
     ts->fresh = 1;
-    candidate_read(ts, (__u64)ret, now);
+    candidate_read(ts, &ts->file, ts->file_size, (__u64)ret, now);
     return 0;
 }
 

@@ -170,18 +170,28 @@ enum ft_bpf_counter {
     FT_BPF_CNT_MAX = 5,
 };
 
-/* How the agent found a background file: the value stored with its key. */
+/* How the agent found a listed file: the value stored with its key, with the list's bit. */
 enum ft_bpf_background_source {
     FT_BPF_BACKGROUND_SCANNED = 1, /* a pattern resolved in the agent's own file system view */
     FT_BPF_BACKGROUND_LEARNED = 2, /* a path the kernel reported, such as one in a container */
 };
 
+/* Set in a key's value for a file of [correlation] strict_paths. */
+#define FT_BPF_BACKGROUND_STRICT 0x10
+
+/* Which list names a file: the value of a name, and the kind of a suffix. */
+enum ft_bpf_listed {
+    FT_BPF_LISTED_BACKGROUND = 1, /* never taken as sent from a read and a send */
+    FT_BPF_LISTED_STRICT = 2,     /* taken as sent only when a send matches its size */
+};
+
 /*
- * A background pattern that names files wherever they are, by name ("*" "/" name) or by ending
+ * A listed pattern that names files wherever they are, by name ("*" "/" name) or by ending
  * ("*" ".ext"): the kernel can tell such a file the first time a thread reads it.
  */
 struct ft_bpf_background_suffix {
     __u32 len;
+    __u32 kind; /* enum ft_bpf_listed */
     char text[FT_BPF_BACKGROUND_SUFFIX];
 };
 
