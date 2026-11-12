@@ -1229,7 +1229,7 @@ expect "no minimum agent exit code" "$?" 0
 cat >"$work/background.toml" <<CONFIG
 [correlation]
 background_paths = ["$data/bg-*", "$data/ns-view/*", "*.both", "*.mixed"]
-strict_paths = ["$data/strict-*", "/etc/passwd", "*.both", "*/special.mixed"]
+strict_paths = ["$data/strict-*", "/etc/passwd", "*.both", "*/special.mixed", "*.fill"]
 no_minimum_paths = ["/etc/passwd"]
 CONFIG
 # The agent resolves the patterns to inodes when it starts, so the files exist by then.
@@ -1306,14 +1306,14 @@ expect "strict: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "strict: /etc/passwd upload bytes" \
     "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" "$(stat -L -c %s /etc/passwd)"
 
-# Files learned by name as they are read do not push out the files the patterns resolved to.
+# Files learned by name as they are read, more than the tables hold, do not push out the files
+# the patterns resolved to, nor keep the agent from learning a file a pattern names by directory.
 mkdir -p "$data/flood"
-"$workload" readmany "$data/flood" 17000 .both >/dev/null
+"$workload" readmany "$data/flood" 17000 .fill >/dev/null
 "$workload" readsend "$data/bg-flooded.bin" 4096 65536 >/dev/null
 settle
 expect "background: a resolved file after many learned by name not reported" \
     "$(ft files --path "$data/bg-flooded.bin" --format csv | rows)" 0
-rm -rf "$data/flood"
 
 # A listed file made after the agent started is background once a read reports its path.
 head -c 200000 /dev/zero >"$data/bg-late.crt"
@@ -1325,6 +1325,7 @@ expect "background: file read before a late bundle bytes" \
     "$(ft files --path "$data/up-late.bin" --format csv | column transfer.bytes_sent)" 300000
 expect "background: late bundle not reported" \
     "$(ft files --path "$data/bg-late.crt" --format csv | rows)" 0
+rm -rf "$data/flood"
 
 # So is one whose path matches only inside another mount namespace, as in a container.
 head -c 200000 /dev/zero >"$data/ns-source/bundle.crt"
