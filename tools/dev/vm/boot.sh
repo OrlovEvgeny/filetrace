@@ -1,6 +1,8 @@
 #!/bin/sh
 # usage: boot.sh <kernel version prefix> <build directory> <command...>
 # Exits with the command's exit code, or 125 when the kernel never reported one.
+# A rootfs.tar in the build directory, such as the acceptance image's filesystem, is unpacked
+# under the root first, with the acceptance scenarios in /acceptance.
 set -eu
 
 kernel=$(ls /opt/kernels/vmlinuz-"$1"* | head -1)
@@ -8,14 +10,22 @@ build=$2
 shift 2
 
 root=$(mktemp -d)
+memory=2048
+base=
+if [ -f "$build/rootfs.tar" ]; then
+    base=1
+    memory=3072
+    tar -x -f "$build/rootfs.tar" -C "$root"
+    cp -r /src/tests/acceptance "$root/acceptance"
+fi
 mkdir -p "$root/bin" "$root/lib" "$root/etc" "$root/proc" "$root/sys" "$root/dev" "$root/tmp" \
     "$root/run" "$root/var/tmp" "$root/ft/bin" "$root/ft/tests"
 
 cp /bin/busybox "$root/bin/"
 for applet in $(busybox --list); do
-    [ "$applet" = busybox ] || ln -sf busybox "$root/bin/$applet"
+    [ "$applet" = busybox ] || [ -e "$root/bin/$applet" ] || ln -s busybox "$root/bin/$applet"
 done
-echo "root:x:0:0:root:/:/bin/sh" >"$root/etc/passwd"
+[ -e "$root/etc/passwd" ] || echo "root:x:0:0:root:/:/bin/sh" >"$root/etc/passwd"
 printf '127.0.0.1 localhost\n::1 localhost\n' >"$root/etc/hosts"
 
 for binary in filetrace filetrace-agent tests/ft_workload tests/ft_unit_tests ft_bench_syscalls; do
@@ -61,11 +71,14 @@ echo "FT_VM_EXIT=$?"
 poweroff -f
 INIT
 chmod +x "$root/init"
-printf '%s\n' "$*" >"$root/command.sh"
+if [ -n "$base" ]; then
+    printf 'export PATH=/ft/bin:/usr/sbin:/usr/bin:/sbin:/bin\n' >"$root/command.sh"
+fi
+printf '%s\n' "$*" >>"$root/command.sh"
 
 (cd "$root" && find . | cpio -o -H newc --quiet | gzip -1) >/tmp/initramfs.gz
 
-timeout 1800 qemu-system-aarch64 -M virt -cpu cortex-a72 -accel tcg,thread=multi -smp 4 -m 2048 \
+timeout 1800 qemu-system-aarch64 -M virt -cpu cortex-a72 -accel tcg,thread=multi -smp 4 -m "$memory" \
     -nographic -no-reboot -nic none -kernel "$kernel" -initrd /tmp/initramfs.gz \
     -append "console=ttyAMA0 quiet panic=-1 rdinit=/init" </dev/null | tr -d '\r' | tee /tmp/vm.log
 
