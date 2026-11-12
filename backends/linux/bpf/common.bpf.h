@@ -183,6 +183,7 @@ struct carry {
     __u64 read;      /* of the file, before those charges */
     __u64 read_seen; /* of the file, as the thread counted it, whoever charged it before */
     __u8 held;       /* a strict file read whole, judged by what went at any size */
+    __u8 cut;        /* a send of the window's thread took less than it was given */
 };
 
 static struct carry carry_zero;
@@ -691,8 +692,8 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     bool file = false;
     if (c->sends && by_volume) {
         file = c->held ? held_matches(c->wire, whole) : volume_matches(c->wire, whole);
-        /* Short of the file and not answered by its own peer, it goes as the base rule took it. */
-        if (!file && end != CARRY_REPLY && c->wire * 10 < whole * 9) {
+        /* Cut short and not answered by its own peer, it goes as the base rule took it. */
+        if (!file && c->cut && end != CARRY_REPLY && c->wire * 10 < whole * 9) {
             carry_report(map, c, &c->file, c->sent, c->read);
             return;
         }
@@ -826,7 +827,7 @@ static __always_inline void dial_close(void *map, __u64 sk, __u64 now)
  * once the peer has answered, or once it has grown past what a handshake sends. bytes: what the
  * send took, when it is counted here rather than as the socket is settled.
  */
-static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 now)
+static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, bool cut, __u64 now)
 {
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (d) {
@@ -856,6 +857,8 @@ static __always_inline void carry_sent(void *map, __u64 sk, __u64 bytes, __u64 n
     if (c->tid != (__u32)bpf_get_current_pid_tgid())
         return;
     __sync_fetch_and_add(&c->wire, bytes);
+    if (cut)
+        c->cut = 1;
     c->last_ns = now;
 }
 
@@ -1142,7 +1145,7 @@ static __always_inline void reads_age(struct thread_state *ts, __u64 now)
  * whole, is held in the connection's window.
  */
 static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __u32 tgid,
-                                           __u64 sent, __u64 now)
+                                           __u64 sent, bool cut, __u64 now)
 {
     struct thread_state *ts = bpf_task_storage_get(&threads, bpf_get_current_task_btf(), 0, 0);
     if (!ts)
@@ -1157,6 +1160,8 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
         carry_add(c, take, ts->unreported, ts->fresh, ts->script, now);
         if (c->read_seen < ts->file_read)
             c->read_seen = ts->file_read;
+        if (cut)
+            c->cut = 1;
         dial_charged(sk, &ts->file, (__s64)take);
         ts->pending -= take;
         ts->unreported = 0;

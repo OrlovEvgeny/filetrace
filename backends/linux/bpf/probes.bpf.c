@@ -101,7 +101,7 @@ static __always_inline bool datagram_peer(const struct msghdr *msg, __u16 family
 }
 
 static __always_inline int account(struct socket *sock, struct msghdr *msg, long ret, __u16 family,
-                                   int dir, bool spliced)
+                                   int dir, bool spliced, size_t asked)
 {
     if (ret <= 0)
         return 0;
@@ -143,9 +143,10 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     if (dir == FT_BPF_TX) {
         /* Pages spliced in by sendfile belong to the transfer that sendfile reports. */
         if (tcp)
-            carry_sent(map, (__u64)sk, spliced ? 0 : (__u64)ret, now);
+            carry_sent(map, (__u64)sk, spliced ? 0 : (__u64)ret, (size_t)ret < asked, now);
         if (!spliced)
-            correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret, now);
+            correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret,
+                           (size_t)ret < asked, now);
         return 0;
     }
     if (tcp)
@@ -162,13 +163,13 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
 SEC("fexit/inet_sendmsg")
 int BPF_PROG(ft_inet_sendmsg, struct socket *sock, struct msghdr *msg, size_t size, int ret)
 {
-    return account(sock, msg, ret, AF_INET, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES);
+    return account(sock, msg, ret, AF_INET, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES, size);
 }
 
 SEC("fexit/inet6_sendmsg")
 int BPF_PROG(ft_inet6_sendmsg, struct socket *sock, struct msghdr *msg, size_t size, int ret)
 {
-    return account(sock, msg, ret, AF_INET6, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES);
+    return account(sock, msg, ret, AF_INET6, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES, size);
 }
 
 SEC("fexit/inet_recvmsg")
@@ -177,7 +178,7 @@ int BPF_PROG(ft_inet_recvmsg, struct socket *sock, struct msghdr *msg, size_t si
 {
     if (flags & MSG_PEEK)
         return 0;
-    return account(sock, msg, ret, AF_INET, FT_BPF_RX, false);
+    return account(sock, msg, ret, AF_INET, FT_BPF_RX, false, 0);
 }
 
 SEC("fexit/inet6_recvmsg")
@@ -186,7 +187,7 @@ int BPF_PROG(ft_inet6_recvmsg, struct socket *sock, struct msghdr *msg, size_t s
 {
     if (flags & MSG_PEEK)
         return 0;
-    return account(sock, msg, ret, AF_INET6, FT_BPF_RX, false);
+    return account(sock, msg, ret, AF_INET6, FT_BPF_RX, false, 0);
 }
 
 SEC("fexit/vfs_read")
