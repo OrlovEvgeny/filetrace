@@ -117,6 +117,21 @@ const char *ft_resolver_name(const struct ft_endpoint *addr)
     return name;
 }
 
+bool ft_resolver_nameless(const struct ft_endpoint *addr)
+{
+    bool nameless = false;
+
+    pthread_mutex_lock(&lock);
+    for (size_t i = 0; i < count; i++) {
+        if (same_address(&lookups[i].addr, addr)) {
+            nameless = lookups[i].state == LOOKUP_NAMELESS;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&lock);
+    return nameless;
+}
+
 void ft_resolver_wait(uint64_t timeout_ns)
 {
     struct timespec deadline;

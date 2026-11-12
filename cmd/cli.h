@@ -244,6 +244,9 @@ void ft_view_prefetch_hosts(enum ft_view_id view, const struct ft_rows *rows);
 /* nullptr while no name is known; the first call for an address starts its lookup. */
 const char *ft_resolver_name(const struct ft_endpoint *addr);
 
+/* Whether the lookup for an address finished without finding a name. */
+bool ft_resolver_nameless(const struct ft_endpoint *addr);
+
 /* Returns once every lookup started so far has finished, or after the timeout. */
 void ft_resolver_wait(uint64_t timeout_ns);
 
