@@ -9,7 +9,13 @@ PROBES=${PROBES:?PROBES must be auto or kprobe}
 
 start_agent() {
     mkdir -p /run/filetrace
-    "$FT/filetrace-agent" --probes "$PROBES" >/tmp/agent.log 2>&1 &
+    set -- --probes "$PROBES"
+    if [ -n "${FILETRACE_ACCEPTANCE_WINDOW:-}" ]; then
+        printf '[correlation]\nwindow = "%s"\n' "$FILETRACE_ACCEPTANCE_WINDOW" >/tmp/acceptance-agent.toml
+        set -- "$@" --config /tmp/acceptance-agent.toml
+        echo "agent correlation window: $FILETRACE_ACCEPTANCE_WINDOW"
+    fi
+    "$FT/filetrace-agent" "$@" >/tmp/agent.log 2>&1 &
     AGENT=$!
     i=0
     while [ ! -S /run/filetrace/agent.sock ] && [ $i -lt 100 ]; do

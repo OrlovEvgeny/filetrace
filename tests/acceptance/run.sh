@@ -1,8 +1,9 @@
 #!/bin/sh
-# usage: run.sh [-j jobs] [-n runs] <directory with filetrace and filetrace-agent> [scenario or finding...]
+# usage: run.sh [-j jobs] [-n runs] [-w window] <directory with filetrace and filetrace-agent> [scenario or finding...]
 # Runs the scenarios of expected.txt, or those named, each in a privileged container of its
 # own on both probe sets, as many times as its row or -n asks, and compares the verdicts
-# with the expected ones. Exits 77 when Docker is not available and 1 on any deviation.
+# with the expected ones; -w sets the agent's correlation window. Exits 77 when Docker is
+# not available and 1 on any deviation.
 set -eu
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -16,7 +17,7 @@ if [ "${1:-}" = --one ]; then
     log=$out/$name.$probes.$run.log
     # In a PID namespace of its own the agent runs in a limited mode.
     docker run --rm --name "$prefix-$name-$probes-$run-$$" --privileged --pid=host --init \
-        -v "$here:/acceptance:ro" -v "$bin:/ft/bin:ro" "$image" \
+        -e FILETRACE_ACCEPTANCE_WINDOW -v "$here:/acceptance:ro" -v "$bin:/ft/bin:ro" "$image" \
         timeout -k 10 300 sh /acceptance/scenario.sh "$name" "$probes" >"$log" 2>&1 || true
     verdict=$(sed -n 's/^RESULT: \([A-Z]*\).*/\1/p' "$log" | tail -n 1)
     echo "${verdict:-ERROR}" >"$out/$name.$probes.$run.verdict"
@@ -26,6 +27,7 @@ fi
 
 jobs=1
 min_runs=1
+FILETRACE_ACCEPTANCE_WINDOW=${FILETRACE_ACCEPTANCE_WINDOW:-}
 while [ $# -gt 0 ]; do
     case $1 in
         -j)
@@ -36,11 +38,36 @@ while [ $# -gt 0 ]; do
             min_runs=$2
             shift 2
             ;;
+        -w)
+            FILETRACE_ACCEPTANCE_WINDOW=$2
+            shift 2
+            ;;
         *) break ;;
     esac
 done
+export FILETRACE_ACCEPTANCE_WINDOW
+expected=$here/expected.txt
+
+# Prints "scenario runs" for the rows of expected.txt whose name or finding is among the arguments, or all.
+selected() {
+    grep -v '^#' "$expected" | while read -r name finding _ _ _ _ runs _; do
+        [ -n "$name" ] || continue
+        [ "$runs" -ge "$min_runs" ] || runs=$min_runs
+        if [ $# -eq 0 ]; then
+            echo "$name $runs"
+            continue
+        fi
+        for s in "$@"; do
+            if [ "$s" = "$name" ] || [ "$s" = "$finding" ]; then
+                echo "$name $runs"
+                break
+            fi
+        done
+    done
+}
+
 if [ $# -lt 1 ]; then
-    sed -n '2,5s/^# //p' "$0" >&2
+    sed -n '2s/^# //p' "$0" >&2
     exit 2
 fi
 bin=$(CDPATH='' cd -- "$1" && pwd)
@@ -63,24 +90,8 @@ mkdir -p "$out"
 rm -rf "$out/suite"
 cp -R "$here" "$out/suite"
 expected=$out/suite/expected.txt
-
-# Prints "scenario runs" for the rows of expected.txt whose name or finding is among the arguments, or all.
-selected() {
-    grep -v '^#' "$expected" | while read -r name finding _ _ _ _ runs _; do
-        [ -n "$name" ] || continue
-        [ "$runs" -ge "$min_runs" ] || runs=$min_runs
-        if [ $# -eq 0 ]; then
-            echo "$name $runs"
-            continue
-        fi
-        for s in "$@"; do
-            if [ "$s" = "$name" ] || [ "$s" = "$finding" ]; then
-                echo "$name $runs"
-                break
-            fi
-        done
-    done
-}
+printf 'binaries %s\nversion %s\nwhere containers\nwindow %s\n' "$bin" \
+    "$(head -n 1 "$bin/VERSION" 2>/dev/null || echo unknown)" "${FILETRACE_ACCEPTANCE_WINDOW:-default}" >"$out/settings"
 
 plan=$out/plan
 : >"$plan"
@@ -99,6 +110,9 @@ if [ ! -s "$plan" ]; then
 fi
 
 echo "logs in $out"
+if [ -n "$FILETRACE_ACCEPTANCE_WINDOW" ]; then
+    echo "agent correlation window: $FILETRACE_ACCEPTANCE_WINDOW"
+fi
 xargs -P "$jobs" -L 1 sh "$out/suite/run.sh" --one "$bin" "$out" <"$plan"
 
 : >"$out/statuses"

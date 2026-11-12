@@ -10,6 +10,7 @@ mise run test:acceptance <dir>                    # every scenario on auto and k
 tests/acceptance/run.sh <dir> F017 one-way-stream # the rows of a finding, or scenarios by name
 tests/acceptance/run.sh -n 4 <dir> F031           # at least four runs of each
 tests/acceptance/run.sh -j 3 <dir>                # three containers at once
+tests/acceptance/run.sh -w 10s <dir>              # the agent's correlation window set to 10 s
 ```
 
 `<dir>` holds `filetrace` and `filetrace-agent` built for Linux on this machine's
