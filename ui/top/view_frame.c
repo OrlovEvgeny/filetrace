@@ -1139,6 +1139,8 @@ void ft_top_draw(struct ft_top_draw *d)
         else
             draw_tab_state(d, l.tabs, x);
     });
+    /* Before the tables, so that a full list of hits drops table rows rather than keys. */
+    CLIPPED(l.keys, draw_keys(d, l.keys));
 
     if (ui->overlay != FT_TOP_OVERLAY_NONE) {
         CLIPPED(l.overlay, ft_top_draw_overlay(d, l.overlay));
@@ -1171,5 +1173,4 @@ void ft_top_draw(struct ft_top_draw *d)
         CLIPPED(l.inspect, ft_top_draw_inspect(d, l.inspect));
     }
     CLIPPED(l.prompt, draw_prompt(d, l.prompt));
-    CLIPPED(l.keys, draw_keys(d, l.keys));
 }

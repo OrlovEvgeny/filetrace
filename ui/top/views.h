@@ -112,7 +112,7 @@ struct ft_top_hit {
     uint32_t rune; /* FT_TOP_TARGET_KEY with FT_KEY_CHAR */
 };
 
-constexpr size_t FT_TOP_HITS_MAX = 512;
+constexpr size_t FT_TOP_HITS_MAX = 4096;
 
 /* The clickable areas of the frame last drawn, later ones on top. */
 struct ft_top_hits {
