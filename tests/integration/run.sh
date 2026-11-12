@@ -581,6 +581,12 @@ for shape in answered unanswered; do
         "$(printf '%s\n' "$csv" | column transfer.method)" sendfile
 done
 
+# A sendfile that moves nothing leaves the read for the send that follows it.
+"$workload" sendfileeof "$data/sendfile-eof.bin" 20000 >/dev/null
+settle
+expect "sendfile at the end of the file, then the read sent: bytes" \
+    "$(ft files --path "$data/sendfile-eof.bin" --format csv | column transfer.bytes_sent)" 20000
+
 # A module a runtime reads whole as it starts is no candidate for its first connection: neither
 # a body of its size nor a small file read after the connection is taken for it.
 "$workload" readmemory "$data/acorn.js" 217747 217747 >/dev/null
@@ -1072,8 +1078,8 @@ expect "no minimum agent exit code" "$?" 0
 # matches their size.
 cat >"$work/background.toml" <<CONFIG
 [correlation]
-background_paths = ["$data/bg-*", "$data/ns-view/*", "*.both"]
-strict_paths = ["$data/strict-*", "/etc/passwd", "*.both"]
+background_paths = ["$data/bg-*", "$data/ns-view/*", "*.both", "*.mixed"]
+strict_paths = ["$data/strict-*", "/etc/passwd", "*.both", "*/special.mixed"]
 no_minimum_paths = ["/etc/passwd"]
 CONFIG
 # The agent resolves the patterns to inodes when it starts, so the files exist by then.
@@ -1085,6 +1091,7 @@ CONFIG
 : >"$data/strict-datagram.py"
 : >"$data/strict-metrics.py"
 : >"$data/strict-chunks.py"
+: >"$data/strict-halves.py"
 mkdir -p "$data/ns-source" "$data/ns-view"
 start_agent --config "$work/background.toml" ||
     { echo "FAIL: the agent did not start with background_paths"; exit 1; }
@@ -1098,7 +1105,9 @@ passwd_report=$("$workload" upload /etc/passwd 65536)
 "$workload" readudp "$data/strict-datagram.py" 4096 4096 1 >/dev/null
 "$workload" readudp "$data/strict-metrics.py" 30000 100 50 >/dev/null
 "$workload" readudp "$data/strict-chunks.py" 61440 1400 44 >/dev/null
+"$workload" readudptwo "$data/strict-halves.py" 8192 >/dev/null
 "$workload" sendlisted heard "$data/listed.both" 4096 >/dev/null
+"$workload" sendlisted heard "$data/special.mixed" 4096 >/dev/null
 settle
 csv=$(ft files --path "$data/up-bundle.bin" --format csv)
 expect "background: file read before the bundle reported" "$(printf '%s\n' "$csv" | rows)" 1
@@ -1122,7 +1131,11 @@ expect "strict: file sent in datagrams bytes" \
     "$(ft files --path "$data/strict-chunks.py" --format csv | column transfer.bytes_sent)" 61440
 expect "strict: small datagrams after a read not reported" \
     "$(ft files --path "$data/strict-metrics.py" --format csv | rows)" 0
+expect "strict: halves over two datagram sockets not taken for one" \
+    "$(ft files --path "$data/strict-halves.py" --format csv | rows)" 0
 expect "both lists: background wins" "$(ft files --path "$data/listed.both" --format csv | rows)" 0
+expect "both lists: a background suffix wins over a strict name" \
+    "$(ft files --path "$data/special.mixed" --format csv | rows)" 0
 csv=$(ft files --path /etc/passwd --pid "$(field "$passwd_report" pid)" --format csv)
 expect "strict: /etc/passwd upload reported" "$(printf '%s\n' "$csv" | rows)" 1
 expect "strict: /etc/passwd upload bytes" \
