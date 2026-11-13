@@ -18,13 +18,7 @@ constexpr uint32_t NETNS = 4026531840u;
 static const char *const host_addrs[4] = {"10.0.0.10", "203.0.113.10", "fd00:10::10",
                                           "2001:db8:10::10"};
 
-static const uint8_t client_prefixes[][2] = {
-    {81, 2},    {62, 45}, {84, 241}, {145, 53}, {188, 207}, {77, 162}, {85, 144},  {92, 68},
-    {213, 127}, {86, 83}, {89, 99},  {31, 21},  {176, 10},  {94, 208}, {82, 73},   {95, 96},
-    {2, 56},    {37, 17}, {80, 57},  {178, 84}, {217, 103}, {87, 213}, {145, 132}, {194, 171},
-};
-
-/* Documentation ranges; 203.0.113.10 is the host's own address. */
+/* Every public address is from a documentation range, so none belongs to anyone. */
 static const uint8_t documentation_prefixes[][3] = {{192, 0, 2}, {198, 51, 100}, {203, 0, 113}};
 
 struct rng {
@@ -425,55 +419,36 @@ static void random_v6(struct ft_sim_engine *e, struct ft_endpoint *ep)
 
     for (size_t i = 0; i < sizeof(raw); i++)
         raw[i] = (uint8_t)rng_below(&e->rng, 256);
-    /* Half from the documentation prefix, half from a provider's range. */
-    if (rng_below(&e->rng, 2) == 0) {
-        raw[0] = 0x20;
-        raw[1] = 0x01;
-        raw[2] = 0x0d;
-        raw[3] = 0xb8;
-    } else {
-        raw[0] = 0x2a;
-        raw[1] = 0x02;
-    }
+    raw[0] = 0x20;
+    raw[1] = 0x01;
+    raw[2] = 0x0d;
+    raw[3] = 0xb8;
     endpoint_v6(ep, raw, 0);
 }
 
+/* Host numbers up to 10 are the host's own and those the scenarios name. */
+static void random_v4(struct ft_sim_engine *e, struct ft_endpoint *ep)
+{
+    const uint8_t *d = documentation_prefixes[rng_below(&e->rng, 3)];
+
+    endpoint_v4(ep, d[0], d[1], d[2], (uint8_t)rng_range(&e->rng, 11, 254), 0);
+}
+
+/* IPv4 has some seven hundred documentation addresses, too few to meet each one once. */
 static void random_public(struct ft_sim_engine *e, struct ft_endpoint *ep)
 {
-    static const uint8_t reserved[] = {0, 10, 100, 127, 169, 172, 192, 198, 203};
-
-    if (rng_below(&e->rng, 100) < 3) {
+    if (rng_below(&e->rng, 2) == 0)
         random_v6(e, ep);
-        return;
-    }
-    for (;;) {
-        uint8_t first = (uint8_t)rng_range(&e->rng, 1, 223);
-        bool skip = false;
-
-        for (size_t i = 0; i < sizeof(reserved); i++)
-            skip = skip || first == reserved[i];
-        if (skip)
-            continue;
-        endpoint_v4(ep, first, (uint8_t)rng_below(&e->rng, 256),
-                    (uint8_t)rng_range(&e->rng, 1, 254), (uint8_t)rng_range(&e->rng, 1, 254), 0);
-        return;
-    }
+    else
+        random_v4(e, ep);
 }
 
 static void random_client(struct ft_sim_engine *e, struct ft_endpoint *ep)
 {
-    uint64_t kind = rng_below(&e->rng, 100);
-
-    if (kind < 4) {
+    if (rng_below(&e->rng, 100) < 4)
         random_v6(e, ep);
-    } else if (kind < 10) {
-        const uint8_t *d = documentation_prefixes[rng_below(&e->rng, 3)];
-        endpoint_v4(ep, d[0], d[1], d[2], (uint8_t)rng_range(&e->rng, 11, 254), 0);
-    } else {
-        const uint8_t *p = client_prefixes[rng_below(&e->rng, FT_ARRAY_LEN(client_prefixes))];
-        endpoint_v4(ep, p[0], p[1], (uint8_t)rng_range(&e->rng, 1, 254),
-                    (uint8_t)rng_range(&e->rng, 1, 254), 0);
-    }
+    else
+        random_v4(e, ep);
 }
 
 static uint16_t ephemeral_port(struct ft_sim_engine *e)
