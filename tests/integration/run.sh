@@ -1610,6 +1610,39 @@ stop_agent
 expect "agent exit code" "$?" 0
 expect "socket removed" "$([ -e "$sock" ] && echo present || echo removed)" removed
 
+# The TLS checks run their agent with its info log kept, and dump what decides a bound name when
+# a check cannot bind, so a CI failure says the kernel, the return-probe verdict, which library
+# was probed, what an attach refused, what was counted, and what the connections carried.
+tls_agent_log="$work/tls-agent.log"
+start_agent_logged() {
+    : >"$tls_agent_log"
+    "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms --log-level info \
+        --probes "$probes" "$@" 2>"$tls_agent_log" &
+    agent_pid=$!
+    i=0
+    while [ ! -S "$sock" ] && [ $i -lt 100 ]; do
+        kill -0 "$agent_pid" 2>/dev/null || return 1
+        sleep 0.1
+        i=$((i + 1))
+    done
+    [ -S "$sock" ]
+}
+# tls_dump <library base name> <server pid> <port>
+tls_dump() {
+    echo "--- TLS name not bound; what the agent saw ($1, server pid $2, port $3): ---"
+    echo "kernel: $(uname -r)"
+    ft doctor | grep -i 'Return probes:' || true
+    grep -iE 'probing (TLS|name)|not probing|cannot probe' "$tls_agent_log" 2>/dev/null ||
+        echo "(no probing lines logged)"
+    ft stats --json | tr ',' '\n' | grep -iE 'tls_librar|name_librar|"names":'
+    echo "server maps: $(grep -i "$1" /proc/"$2"/maps 2>/dev/null | awk '{print $6}' | sort -u | tr '\n' ' ')"
+    echo "connections to $3 by source:"
+    ft connections --port "$3" --format csv 2>/dev/null | awk -F, '
+        NR == 1 { for (i = 1; i <= NF; i++) if ($i == "remote_name_source") c = i; next }
+        { k = (c && $c != "") ? $c : "(none)"; n[k]++ } END { for (sr in n) print "  " sr ": " n[sr] }'
+    echo "----"
+}
+
 # A GnuTLS client sets the name of the server it means to reach, and it binds to the connection
 # the handshake opens. The server is real so the client ends cleanly; its only part is to accept,
 # since the name is read from the client's own call. Skipped where no gnutls-cli is installed.
@@ -1641,7 +1674,7 @@ TMPL
 
     # The server maps the GnuTLS library before the agent starts, so it is probed at the first
     # look and the client that follows is caught whoever wins the probe race.
-    start_agent || { echo "FAIL: the agent did not start for TLS server names"; exit 1; }
+    start_agent_logged || { echo "FAIL: the agent did not start for TLS server names"; exit 1; }
 
     # The source bound to a connection to the server whose name is the argument.
     tls_source_of() {
@@ -1667,6 +1700,7 @@ TMPL
         [ "$(tls_source_of files.ft.test)" = lookup+tls ] && break
         i=$((i + 1))
     done
+    [ "$(tls_source_of files.ft.test)" = lookup+tls ] || tls_dump libgnutls "$serv_pid" "$tls_port"
     expect "names: a GnuTLS host name is looked up and read from the handshake" \
         "$(tls_source_of files.ft.test)" lookup+tls
 
@@ -1678,6 +1712,7 @@ TMPL
         [ "$(tls_source_of sharp.ft.test)" = tls ] && break
         i=$((i + 1))
     done
+    [ "$(tls_source_of sharp.ft.test)" = tls ] || tls_dump libgnutls "$serv_pid" "$tls_port"
     expect "names: a GnuTLS server name to a literal address is read from the handshake" \
         "$(tls_source_of sharp.ft.test)" tls
     # No lookup named it, so the resolved-name count is absent, not zero.
@@ -1729,7 +1764,7 @@ TMPL
     # Lookups off but TLS on: the capability names the lookup half off and keeps TLS, and a
     # client's server name still binds, with no looked-up name beside it.
     printf '[names]\nlookups = false\n' >"$work/tls-only.toml"
-    start_agent --config "$work/tls-only.toml" ||
+    start_agent_logged --config "$work/tls-only.toml" ||
         { echo "FAIL: the agent did not start for TLS-only names"; exit 1; }
     i=0
     while [ $i -lt 40 ]; do
@@ -1738,6 +1773,7 @@ TMPL
         [ "$(tls_source_of files.ft.test)" = tls ] && break
         i=$((i + 1))
     done
+    [ "$(tls_source_of files.ft.test)" = tls ] || tls_dump libgnutls "$serv_pid" "$tls_port"
     expect "names: lookups off, the handshake alone names the connection" \
         "$(tls_source_of files.ft.test)" tls
     expect_match "names: lookups off, capability names the halves" \
@@ -1753,7 +1789,7 @@ TMPL
     # TLS off but lookups on: the capability names the TLS half off, no TLS library is probed,
     # and a client's connection carries only its looked-up name.
     printf '[names]\ntls = false\n' >"$work/lookups-only.toml"
-    start_agent --config "$work/lookups-only.toml" ||
+    start_agent_logged --config "$work/lookups-only.toml" ||
         { echo "FAIL: the agent did not start for lookup-only names"; exit 1; }
     i=0
     while [ $i -lt 40 ]; do
@@ -1762,6 +1798,7 @@ TMPL
         [ "$(tls_source_of files.ft.test)" = lookup ] && break
         i=$((i + 1))
     done
+    [ "$(tls_source_of files.ft.test)" = lookup ] || tls_dump libgnutls "$serv_pid" "$tls_port"
     expect "names: TLS off, the connection carries only its looked-up name" \
         "$(tls_source_of files.ft.test)" lookup
     expect_match "names: TLS off, capability names the halves" \
