@@ -2002,6 +2002,89 @@ if [ -n "$dynamic" ]; then
     stop_agent
     expect "names: small open file limit agent exit code" "$?" 0
 
+    # A full table of probed libraries gives the place of the one no look has found for the
+    # longest to a new one, and counts it as forgotten. The suite shortens the minute such a
+    # file must have gone unfound to a second.
+    start_agent || { echo "FAIL: the agent did not start to count libraries"; exit 1; }
+    sleep 2
+    base=$(libraries)
+    stop_agent
+    printf '[limits]\nname_libraries = %s\n' "$((base + 1))" >"$work/few-libraries.toml"
+    FILETRACE_TEST_LIBRARY_IDLE_MS=1000 "$bin/filetrace-agent" --socket "$sock" \
+        --flush-interval 100ms --log-level info --probes "$probes" \
+        --config "$work/few-libraries.toml" 2>"$work/few-libraries.err" &
+    agent_pid=$!
+    wait_for_socket
+    forgotten() {
+        ft stats --json |
+            sed -n 's/.*"name_libraries":{"entries":[0-9]*,"capacity":[0-9]*,"evictions":\([0-9]*\).*/\1/p'
+    }
+    # private_send <n> <count>: a workload in a container of its own, sent once the agent has
+    # probed its C library, which the count the function gives shows.
+    private_send() {
+        mkdir -p "$work/evict$1"
+        before=$($2)
+        named "$dynamic" privatelibc "$work/evict$1" waitsend "$work/go-evict$1" alone.ft.test \
+            "$data/evict$1.bin" >/dev/null &
+        private_job=$!
+        i_wait=0
+        while [ "$($2)" -le "$before" ] && [ $i_wait -lt 100 ]; do
+            sleep 0.1
+            i_wait=$((i_wait + 1))
+        done
+        touch "$work/go-evict$1"
+        wait "$private_job"
+    }
+    private_send 1 libraries
+    # A lookup through the host's C library, which keeps it in use.
+    named "$dynamic" lookupsend alone.ft.test "$data/evict-host.bin" tcp >/dev/null
+    sleep 2
+    private_send 2 forgotten
+    settle
+    expect "names: a full table, the library that filled it" "$(name_of evict1.bin)" alone.ft.test
+    expect "names: a full table, the library in the place of the one unused longest" \
+        "$(name_of evict2.bin)" alone.ft.test
+    expect "names: a full table, the libraries kept" "$(libraries)" "$((base + 1))"
+    expect "names: a full table, the library forgotten" "$(forgotten)" 1
+    expect_match "names: a full table, logged" "$(cat "$work/few-libraries.err")" \
+        'the one unused longest makes room for'
+    stop_agent
+    expect "names: a full table agent exit code" "$?" 0
+
+    # When the kernel's queue loses events, a lost exec would leave its process taken as looked
+    # at: every process is looked at again. Execs into the smallest queue of a stopped agent are
+    # lost.
+    printf '[agent]\nring_buffer_size = "64KB"\n' >"$work/small-queue.toml"
+    "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms --log-level info \
+        --probes "$probes" --config "$work/small-queue.toml" 2>"$work/small-queue.err" &
+    agent_pid=$!
+    wait_for_socket
+    sleep 1
+    before=$(libraries)
+    kill -STOP "$agent_pid"
+    "$workload" execstorm 200 >/dev/null
+    mkdir -p "$work/lost"
+    named "$dynamic" privatelibc "$work/lost" waitsend "$work/go-lost" alone.ft.test \
+        "$data/after-loss.bin" >/dev/null &
+    lost_job=$!
+    sleep 1
+    kill -CONT "$agent_pid"
+    i_wait=0
+    while [ "$(libraries)" -le "$before" ] && [ $i_wait -lt 50 ]; do
+        sleep 0.1
+        i_wait=$((i_wait + 1))
+    done
+    touch "$work/go-lost"
+    wait "$lost_job"
+    settle
+    expect_match "names: events lost" "$(ft stats --json)" '"dropped":[1-9]'
+    expect_match "names: looked at again after lost events" "$(cat "$work/small-queue.err")" \
+        "the kernel's queue lost events; every process is looked at again"
+    expect "names: a library whose process's exec was lost, named" "$(name_of after-loss.bin)" \
+        alone.ft.test
+    stop_agent
+    expect "names: small queue agent exit code" "$?" 0
+
     # Where return probes kill processes under seccomp, neither the PHP probes nor those of name
     # lookups are attached, and the capabilities and doctor say why; the setting forces them on.
     FILETRACE_TEST_RETURN_PROBES=unsafe
