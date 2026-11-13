@@ -2164,9 +2164,27 @@ if [ -n "$dynamic" ]; then
     unset FILETRACE_TEST_RETURN_PROBES
 fi
 
+# A command that collects for itself answers once its probes are loaded, which takes seconds in an
+# emulated guest: it is interrupted two seconds after it says that it collects.
+interrupt_collector() {
+    i=0
+    while ! grep -q 'monitoring in the foreground' "$1" 2>/dev/null && [ $i -lt 200 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    sleep 2
+    kill -INT "$(cat "$2")"
+}
+with_pid_in() {
+    sh -c 'echo $$ >"$0"; exec "$@"' "$@"
+}
+
 # Without an agent, watch collects for as long as it runs.
-out=$(timeout -s INT 3 "$bin/filetrace" --socket "$work/absent.sock" watch --no-ui \
-    --interval 500ms 2>"$work/watch.err")
+interrupt_collector "$work/watch.err" "$work/watch.pid" &
+interrupter=$!
+out=$(with_pid_in "$work/watch.pid" timeout -s INT 25 "$bin/filetrace" \
+    --socket "$work/absent.sock" watch --no-ui --interval 500ms 2>"$work/watch.err")
+wait "$interrupter"
 expect_match "watch output" "$out" 'ACTIVE FILE TRANSFERS'
 expect_match "watch output" "$out" '^PROCESSES$'
 expect_match "watch notice" "$(cat "$work/watch.err")" 'monitoring in the foreground'
@@ -2205,8 +2223,12 @@ fi
 printf '[agent]\nmode = "minimal"\n' >"$work/minimal.toml"
 "$workload" steady "$data/session.bin" 8000000 6 >/dev/null &
 session_job=$!
-out=$(timeout -s INT 4 "$bin/filetrace" --config "$work/minimal.toml" --socket "$work/none.sock" \
-    top --json 2>"$work/session.err" | tail -1)
+interrupt_collector "$work/session.err" "$work/session.pid" &
+interrupter=$!
+out=$(with_pid_in "$work/session.pid" timeout -s INT 25 "$bin/filetrace" \
+    --config "$work/minimal.toml" --socket "$work/none.sock" top --json 2>"$work/session.err" |
+    tail -1)
+wait "$interrupter"
 wait "$session_job"
 expect_match "session: files despite a minimal configuration" "$out" 'session\.bin'
 expect_match "session: says that it overrides the mode" "$(cat "$work/session.err")" \
