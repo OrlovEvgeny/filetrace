@@ -21,6 +21,11 @@ struct ft_config {
     bool track_read;
     bool track_sendfile;
 
+    bool names_enabled;
+    bool names_lookups;
+    bool names_tls;
+    bool names_set; /* the file has a [names] setting */
+
     char format[8]; /* default output format of the commands that list records */
     bool timestamps;
 

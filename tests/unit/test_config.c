@@ -247,6 +247,13 @@ static void reports_what_is_wrong(void)
     rejects("[agent]\nmode = \"detailed\"\n", "expected \"minimal\" or \"standard\"");
     rejects("[correlation]\nconfidence_threshold = \"unknown\"\n", "expected \"inferred\"");
     rejects("[limits]\nflows = 3\n", "[limits] flows: expected a whole number from 64");
+    rejects("[limits]\nnames = 0\n", "[limits] names: expected a whole number from 1");
+    rejects("[limits]\nname_libraries = 5000\n",
+            "[limits] name_libraries: expected a whole number from 1 to 4096");
+    rejects("[names]\nmax_age = \"soon\"\n",
+            "[names] max_age: expected a quoted duration from 1s to 3650d, such as \"10m\", or "
+            "\"0\" for no limit");
+    rejects("[names]\nresolve = true\n", "unknown setting 'resolve' in [names]");
     rejects("[filters]\nexclude_paths = \"/proc/*\"\n", "expected a list of strings");
     rejects("[correlation]\nno_minimum_paths = \"/etc/*\"\n", "expected a list of strings");
     rejects("[correlation]\nbackground_paths = [\"\"]\n", "a pattern is empty");
@@ -451,8 +458,76 @@ static void php_scripts_can_be_turned_off(void)
     ft_config_free(cfg);
 }
 
+/* Names are kept unless the section turns them off, whole or by source. */
+static void names_follow_their_section(void)
+{
+    struct ft_config *cfg = ft_config_new();
+    struct ft_error err = {0};
+    char *text = nullptr;
+    size_t size = 0;
+
+    ft_config_finish(cfg);
+    CHECK(cfg->agent.state_cfg.names);
+    CHECK(cfg->agent.backend_cfg.lookup_names && cfg->agent.backend_cfg.tls_names);
+    CHECK_U64(cfg->agent.state_cfg.max_names, 4096);
+    CHECK_U64(cfg->agent.state_cfg.max_name_lookups, 16384);
+    CHECK_U64(cfg->agent.backend_cfg.name_libraries, 256);
+    CHECK_U64(cfg->agent.state_cfg.name_max_age_ns, 0);
+    CHECK_U64(cfg->warning_count, 0);
+
+    CHECK_U64(load(cfg,
+                   "[names]\ntls = false\nmax_age = \"10m\"\n"
+                   "[limits]\nnames = 2\nname_lookups = 1\nname_libraries = 8\n",
+                   &err),
+              FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK(cfg->agent.state_cfg.names);
+    CHECK(cfg->agent.backend_cfg.lookup_names && !cfg->agent.backend_cfg.tls_names);
+    CHECK_U64(cfg->agent.state_cfg.max_names, 2);
+    CHECK_U64(cfg->agent.state_cfg.max_name_lookups, 1);
+    CHECK_U64(cfg->agent.backend_cfg.name_libraries, 8);
+    CHECK_U64(cfg->agent.state_cfg.name_max_age_ns, 600 * FT_NS_PER_SEC);
+
+    /* What is printed says the same when it is read back. */
+    FILE *mem = open_memstream(&text, &size);
+    ft_config_print(cfg, mem);
+    fclose(mem);
+    CHECK(strstr(text, "\n[names]\n") != nullptr);
+    CHECK(strstr(text, "\nmax_age = \"600s\"\n") != nullptr);
+    struct ft_config *reread = ft_config_new();
+    CHECK_U64(load(reread, text, &err), FT_EXIT_OK);
+    ft_config_finish(reread);
+    CHECK(!reread->agent.backend_cfg.tls_names);
+    CHECK_U64(reread->agent.state_cfg.max_names, 2);
+    CHECK_U64(reread->agent.state_cfg.name_max_age_ns, 600 * FT_NS_PER_SEC);
+    ft_config_free(reread);
+    free(text);
+
+    CHECK_U64(load(cfg, "[names]\nenabled = false\nmax_age = \"0\"\n", &err), FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK(!cfg->agent.state_cfg.names);
+    CHECK(!cfg->agent.backend_cfg.lookup_names && !cfg->agent.backend_cfg.tls_names);
+    CHECK_U64(cfg->agent.state_cfg.name_max_age_ns, 0);
+    CHECK_U64(cfg->warning_count, 0);
+    ft_config_free(cfg);
+
+    /* Minimal mode attaches none of the probes names come from; asking for them says so. */
+    cfg = ft_config_new();
+    CHECK_U64(load(cfg, "[agent]\nmode = \"minimal\"\n", &err), FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK_U64(cfg->warning_count, 0);
+    ft_config_free(cfg);
+    cfg = ft_config_new();
+    CHECK_U64(load(cfg, "[agent]\nmode = \"minimal\"\n[names]\nlookups = true\n", &err),
+              FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK(warned(cfg, "[names] has no effect in minimal mode"));
+    ft_config_free(cfg);
+}
+
 void test_config(void)
 {
+    names_follow_their_section();
     reads_every_section();
     applies_every_kind_of_value();
     reports_what_is_wrong();
