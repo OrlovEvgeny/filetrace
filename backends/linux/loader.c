@@ -1124,9 +1124,12 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     bool php = cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD && returns;
     bool lookups = b->probes.lookups && returns;
     if (!returns && b->probes.returns != FT_RETURNS_NOT_TESTED) {
-        char why[192];
+        char why[320];
         ft_log(FT_LOG_WARN, "%s; neither the PHP probes nor those of name lookups are attached",
                ft_linux_returns_refusal(&b->probes, why, sizeof(why)));
+    } else if ((php || lookups) && ft_linux_returns_refused(&b->probes)) {
+        char why[320];
+        ft_log(FT_LOG_WARN, "%s", ft_linux_returns_forced(&b->probes, why, sizeof(why)));
     }
     if (php || lookups)
         b->prober = ft_linux_prober_create();
