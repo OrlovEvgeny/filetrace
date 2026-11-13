@@ -2,6 +2,18 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.10.6 (2026-11-13)
+
+### New Feature
+
+- Test at start whether return probes kill processes under seccomp ([06bc6fe](https://github.com/OrlovEvgeny/filetrace/commit/06bc6febe3d355a344e9cdb39c66ff3dfeff1f5c))
+- Add a setting that attaches the PHP probes despite the test ([82d4ea2](https://github.com/OrlovEvgeny/filetrace/commit/82d4ea23351e7e3c4fbb65838ccc1953f37f181a))
+
+### Bug Fix
+
+- Keep PHP processes under seccomp from crashing as requests end ([8efea8b](https://github.com/OrlovEvgeny/filetrace/commit/8efea8b48bf830861dbe93dd7e3f74bdab7b46d6))
+- List what a JVM loads from its JDK as background files ([111a98f](https://github.com/OrlovEvgeny/filetrace/commit/111a98f46791e4a1e24bbc2c7c0754e35e28e5ba))
+
 ## 26.11.9.33 (2026-11-13)
 
 ### New Feature
