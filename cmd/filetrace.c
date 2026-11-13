@@ -322,7 +322,8 @@ static void help_flows(FILE *o)
     fputs(remote_names, o);
     fputs("With --group-by remote, NAME shows the names of the flows to each address,\n"
           "the one that carried the most bytes first. --group-by name merges flows by\n"
-          "what NAME shows for each, so an uncertain name is a group of its own.\n"
+          "the name each was opened for; \"name (+2)\" and \"name via other\" both count\n"
+          "as name.\n"
           "\n"
           "Options:\n"
           "  --group-by <key>        Merge flows by process, remote, name, port or\n"

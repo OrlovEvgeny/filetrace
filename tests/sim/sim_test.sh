@@ -210,11 +210,19 @@ ok "their CSV header still ends in the names" test "$(head -n 1 bare-remote.csv)
 ok "flows are grouped by name" query by-name.txt flows --group-by name
 ok "the groups are headed by the name" grep -Eq '^NAME +SENT +RECEIVED +FLOWS$' by-name.txt
 ok "flows nobody named form one group" test "$(grep -Ec '^- +' by-name.txt)" -eq 1
-ok "a group is the name as shown" grep -Eq '^ch-replica-2\.internal \(\+1\) +[0-9]' by-name.txt
-ok "a name through a proxy is a group" grep -Eq '^registry\.ml\.example\.com via proxy\.corp\.internal +[0-9]' by-name.txt
+ok "a looked-up name is a group" grep -Eq '^mirror-1\.internal +[0-9]' by-name.txt
+ok "a name looked up with others groups as the bare name" grep -Eq '^ch-replica-2\.internal +[0-9]' by-name.txt
+ok "a server name through a proxy groups as the bare name" grep -Eq '^registry\.ml\.example\.com +[0-9]' by-name.txt
+ok "no group is a name as a cell shows it" exits 1 grep -Eq '\(\+[0-9]+\)| via ' by-name.txt
 ok "flows are grouped by name as JSON" query by-name.json flows --group-by name --json
 ok "a group by name is keyed by the name" grep -q '{"remote_name":"mirror-1.internal","bytes_sent":' by-name.json
-ok "flows nobody named are keyed by a dash" grep -q '{"remote_name":"-","bytes_sent":' by-name.json
+ok "a name looked up with others keys its group bare" grep -q '{"remote_name":"ch-replica-2.internal","bytes_sent":' by-name.json
+ok "a server name through a proxy keys its group bare" grep -q '{"remote_name":"registry.ml.example.com","bytes_sent":' by-name.json
+ok "flows nobody named have no key" test "$(grep -c '{"bytes_sent":' by-name.json)" -eq 1
+ok "flows are grouped by name as CSV" query by-name.csv flows --group-by name --format csv
+ok "the CSV has the bare name looked up with others" grep -Eq '^ch-replica-2\.internal,[0-9]+,[0-9]+,[0-9]+$' by-name.csv
+ok "the CSV has the bare server name through a proxy" grep -Eq '^registry\.ml\.example\.com,[0-9]+,[0-9]+,[0-9]+$' by-name.csv
+ok "flows nobody named have an empty cell" test "$(grep -Ec '^,[0-9]+,[0-9]+,[0-9]+$' by-name.csv)" -eq 1
 ok "top ranks the destinations" query destinations.txt top destinations --limit 100
 ok "the destinations have a column of names" grep -Eq '^RANK +REMOTE +NAME +SENT +RECEIVED +FLOWS$' destinations.txt
 ok "a destination counts the other names" grep -Eq '^[0-9]+ +10\.0\.6\.14 +ch-replica-2\.internal \(\+1\) ' destinations.txt
