@@ -585,8 +585,9 @@ static void panel(void)
 
     size_t n;
     const enum ft_top_group *groups = ft_top_mode_groups(FT_TOP_TRANSFERS, &n);
-    CHECK_U64(n, 6);
+    CHECK_U64(n, 7);
     CHECK(groups[0] == FT_TOP_GROUP_NONE && groups[5] == FT_TOP_GROUP_SUBNET);
+    CHECK(groups[6] == FT_TOP_GROUP_NAME);
     ft_top_mode_groups(FT_TOP_LEADERS, &n);
     CHECK_U64(n, 1);
     fixture_free(&f);

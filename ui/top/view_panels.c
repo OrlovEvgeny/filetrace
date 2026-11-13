@@ -102,8 +102,8 @@ static void count_words(uint64_t n, const char *one, const char *many, char *buf
 const enum ft_top_group *ft_top_mode_groups(enum ft_top_mode mode, size_t *count)
 {
     static const enum ft_top_group transfers[] = {
-        FT_TOP_GROUP_NONE,        FT_TOP_GROUP_PROCESS,   FT_TOP_GROUP_SCRIPT,
-        FT_TOP_GROUP_DESTINATION, FT_TOP_GROUP_DIRECTORY, FT_TOP_GROUP_SUBNET,
+        FT_TOP_GROUP_NONE,      FT_TOP_GROUP_PROCESS, FT_TOP_GROUP_SCRIPT, FT_TOP_GROUP_DESTINATION,
+        FT_TOP_GROUP_DIRECTORY, FT_TOP_GROUP_SUBNET,  FT_TOP_GROUP_NAME,
     };
     static const enum ft_top_group processes[] = {FT_TOP_GROUP_NONE, FT_TOP_GROUP_SCRIPT};
     static const enum ft_top_group destinations[] = {FT_TOP_GROUP_NONE, FT_TOP_GROUP_SUBNET,
