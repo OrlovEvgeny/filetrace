@@ -14,7 +14,7 @@
 #define TLS_SET_HOSTNAME                                                                           \
     55                 /* SSL_CTRL_SET_TLSEXT_HOSTNAME, what SSL_set_tlsext_host_name sends        \
                         */
-#define TLS_NAME_DNS 0 /* GNUTLS_NAME_DNS */
+#define TLS_NAME_DNS 1 /* GNUTLS_NAME_DNS */
 
 /*
  * How far the stack pointer at a return lies from where it was at the call's first instruction:
