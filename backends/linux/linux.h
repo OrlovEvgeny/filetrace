@@ -228,6 +228,23 @@ void ft_linux_prober_rescan(struct ft_linux_prober *p);
 /* Looks at the processes that started and at those of a pass, for a bounded time. */
 void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns);
 
+/* A file as the probes report its first mapping: device in the kernel's encoding. */
+struct ft_linux_mapped {
+    uint64_t ino;
+    uint32_t dev;
+    uint32_t gen;
+};
+
+/*
+ * Processes report the files they map through the probes' map at map_fd: each process is looked
+ * at when it maps a file no process mapped before, instead of as it starts.
+ */
+void ft_linux_prober_report(struct ft_linux_prober *p, int map_fd);
+
+/* The process pid maps the file, the first to since the agent was told about it. */
+void ft_linux_prober_mapped(struct ft_linux_prober *p, uint32_t pid,
+                            const struct ft_linux_mapped *file);
+
 /* When the work is next due for a process that started, or 0 when none waits. */
 uint64_t ft_linux_prober_due(const struct ft_linux_prober *p);
 
