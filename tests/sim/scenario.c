@@ -115,6 +115,14 @@ static const struct ft_sim_flavor nginx_hls[] = {
     {0},
 };
 
+/* Responses of the applications behind nginx, which it passes on without a file. */
+static const struct ft_sim_flavor nginx_relayed[] = {
+    {.weight = 1, .path = "relayed/%llu", .numbering = FT_SIM_NUMBER_RANDOM, .first = 0,
+     .last = 65535, .size_min = MIB(8), .size_max = MIB(900), .rate_min = 4096,
+     .rate_max = 98304},
+    {0},
+};
+
 static const struct ft_sim_flavor nginx_assets[] = {
     {.weight = 5, .path = "/var/www/cdn/assets/app.8f3c1a.js", .size_min = KIB(1434),
      .size_max = KIB(1434), .rate_min = 400, .rate_max = 9000},
@@ -270,6 +278,9 @@ static const struct ft_sim_generator edge_generators[] = {
     {.name = "nginx-assets", .parent = 2210, .method = FT_METHOD_SENDFILE, .slots = 5,
      .pause_min_ms = 400, .pause_max_ms = 5000, .dest_kind = FT_SIM_DEST_PUBLIC,
      .local_port = 443, .chunk = MIB(2), .flavors = nginx_assets},
+    {.name = "nginx-relay", .parent = 2210, .slots = 24, .pause_min_ms = 300,
+     .pause_max_ms = 4000, .dest_kind = FT_SIM_DEST_PUBLIC, .local_port = 443, .chunk = KIB(64),
+     .flavors = nginx_relayed},
     {.name = "php-fpm", .parent = 18800, .method = FT_METHOD_READ_SEND, .slots = 3,
      .pause_min_ms = 600, .pause_max_ms = 6000, .dest_kind = FT_SIM_DEST_PUBLIC,
      .local_port = 443, .chunk = KIB(8), .flavors = php_requests},
