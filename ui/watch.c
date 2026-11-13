@@ -754,7 +754,7 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *given)
     enum view view = VIEW_FILES;
     bool paused = false;
     bool help = false;
-    bool names = true;
+    bool names = !opt.addresses;
     int code = FT_EXIT_OK;
 
     opt.plain = !dashboard;

@@ -48,7 +48,9 @@ static void help_watch(FILE *o)
           "                          outbound (default), inbound or both\n"
           "  --no-ui                 Print a snapshot per interval instead of a\n"
           "                          dashboard; the default when output is not a\n"
-          "                          terminal\n",
+          "                          terminal\n"
+          "  --addresses             Show remote ends by address instead of by the\n"
+          "                          name the process used, as the key a does\n",
           o);
     ft_query_args_help(o, FT_OPTS_WATCH & ~(uint32_t)FT_QO_LIMIT, FT_SORTS_WATCH, 0);
     fputs("  --limit <n>             Rows per table (default: as many as fit, or 10\n"
@@ -121,10 +123,13 @@ static void help_top(FILE *o)
           "  --json                  With --once, the snapshot as JSON; without it,\n"
           "                          one JSON line per refresh\n"
           "  --color <when>          auto (default), always or never\n"
+          "  --addresses             Show destinations by address instead of by the\n"
+          "                          name the process used, as the key a does\n"
           "  --resolve-hostnames     Show remote addresses by host name where a reverse\n"
           "                          DNS lookup finds one; the lookups tell the DNS\n"
-          "                          resolver which addresses are being looked at\n"
-          "\n"
+          "                          resolver which addresses are being looked at\n",
+          o);
+    fputs("\n"
           "Options of the leaders mode:\n"
           "  --window <window>       1m, 5m, 15m, 1h (default), 24h or 7d\n"
           "  --by <measure>          Rank by bytes (default), transfers or dests\n"

@@ -1091,6 +1091,8 @@ int ft_cmd_watch(const struct ft_cli *cli, struct ft_args *a)
                                       v);
         } else if (ft_args_flag(a, "--no-ui")) {
             opt->plain = true;
+        } else if (ft_args_flag(a, "--addresses")) {
+            opt->addresses = true;
         } else {
             code = ft_query_args_refuse(qa, a);
         }
