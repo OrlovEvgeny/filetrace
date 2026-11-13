@@ -4352,6 +4352,36 @@ static void scenario_lookup_later(const char *name, const char *name2, const cha
     stop_sink(&sink);
 }
 
+/*
+ * execstorm <count>: starts that many children at once, each running this program again with an
+ * argument of 4000 bytes and ending at once: a burst of large exec records.
+ */
+static void scenario_exec_storm(size_t count)
+{
+    char self[PATH_MAX];
+    char filler[4001];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (n <= 0)
+        die("readlink");
+    self[n] = '\0';
+    memset(filler, 'x', sizeof(filler) - 1);
+    filler[sizeof(filler) - 1] = '\0';
+    for (size_t i = 0; i < count; i++) {
+        pid_t child = fork();
+        if (child < 0)
+            die("fork");
+        if (child == 0) {
+            int null = open("/dev/null", O_WRONLY);
+            dup2(null, 2);
+            execl(self, self, "none", filler, (char *)nullptr);
+            _exit(1);
+        }
+    }
+    while (wait(nullptr) > 0) {
+    }
+    printf("scenario=execstorm pid=%d children=%zu\n", (int)getpid(), count);
+}
+
 /* nofile <limit> <program> [arguments]: runs the program with both open file limits at limit. */
 static void scenario_nofile(size_t limit, char **argv)
 {
@@ -4728,6 +4758,8 @@ int main(int argc, char **argv)
         scenario_lookup_later(argv[2], argv[3], argv[4]);
     else if (strcmp(name, "lookupwait") == 0 && argc == 5)
         scenario_lookup_wait(argv[2], argv[3], argv[4]);
+    else if (strcmp(name, "execstorm") == 0 && argc == 3)
+        scenario_exec_storm(arg_size(argv[2]));
     else if (strcmp(name, "nofile") == 0 && argc >= 4)
         scenario_nofile(arg_size(argv[2]), argv + 3);
     else if (strcmp(name, "libcpath") == 0 && argc == 2)

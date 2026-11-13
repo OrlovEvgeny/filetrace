@@ -58,6 +58,7 @@ struct kind {
     struct probed *files;
     size_t count;
     size_t forgotten; /* files that gave their place to newer ones */
+    uint64_t idle_ns;
     bool full_logged;
     struct identity skipped[MAX_SKIPPED]; /* not of the kind, or refused the probe */
     size_t skipped_count;
@@ -149,7 +150,12 @@ int ft_linux_prober_add(struct ft_linux_prober *p, const struct ft_linux_probe_k
     if (!p || p->kind_count == MAX_KINDS || !def->capacity)
         return -1;
     struct kind *k = &p->kinds[p->kind_count];
-    *k = (struct kind){.def = *def};
+    /* Hidden: the suite shortens the minute a full kind waits to give a file's place away. */
+    const char *idle_ms = getenv("FILETRACE_TEST_LIBRARY_IDLE_MS");
+    *k = (struct kind){
+        .def = *def,
+        .idle_ns = idle_ms ? strtoull(idle_ms, nullptr, 10) * FT_NS_PER_MS : IDLE_NS,
+    };
     k->files = calloc(def->capacity, sizeof(*k->files));
     if (!k->files)
         return -1;
@@ -310,7 +316,7 @@ static void consider(struct kind *k, const char *path, const char *mapped_as, ui
     printable(mapped_as, name, sizeof(name));
     struct probed *slot = place(k);
     bool full = k->count == k->def.capacity;
-    if (full && now - slot->found_ns < IDLE_NS) {
+    if (full && now - slot->found_ns < k->idle_ns) {
         if (!k->full_logged)
             ft_log(FT_LOG_WARN,
                    "already probing %zu %s, each in use; %s and others are probed once one "
