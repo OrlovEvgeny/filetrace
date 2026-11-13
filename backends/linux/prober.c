@@ -47,6 +47,14 @@
 #define LATE_MAX_NS (512 * FT_NS_PER_MS)
 /* A loader still mapping libraries this long after the exec is left to itself. */
 #define LOADING_MAX_NS (1 * FT_NS_PER_SEC)
+/* Reports of the same process looked at in one reading of its maps. */
+#define TARGETS_MAX 16
+/*
+ * A report comes as the kernel begins a mapping, which a look can read before it is done: one that
+ * does not see the file looks again, at doubling waits from this one, so many times.
+ */
+#define REPORT_STEP_NS (1 * FT_NS_PER_MS)
+#define REPORT_TRIES 5
 #define NOTED_MAX 256
 #define NOTED_NS (60 * FT_NS_PER_SEC)
 static_assert(NOTED_MAX <= FT_BPF_QUIET_MAX);
@@ -80,7 +88,8 @@ struct mapped_file {
 
 struct probed {
     struct identity id;
-    struct mapped_file mapped; /* zero when it was found as a program rather than mapped */
+    struct mapped_file mapped;       /* zero when it was found as a program rather than mapped */
+    struct ft_linux_mapped reported; /* the report that named it, zero when none did */
     struct bpf_link *links[FT_LINUX_KIND_PROBES];
     uint64_t found_ns; /* when a look last found it mapped, or a call through it last ran */
 };
@@ -91,6 +100,7 @@ struct kind {
     size_t count;
     size_t forgotten;    /* files that gave their place to newer ones */
     uint64_t probing_ns; /* time spent reading the files the kind probed and attaching to them */
+    int reported_fd;     /* the probes' map of the files reported mapped, or -1 */
     uint64_t idle_ns;
     bool full_logged;
     struct identity skipped[MAX_SKIPPED]; /* not of the kind, or refused the probe */
@@ -130,6 +140,29 @@ struct recheck {
     bool late;    /* it maps a file of a kind already: the look is for what it loads later */
 };
 
+/* A process that mapped an executable file no process was reported mapping before. */
+struct report {
+    uint32_t pid; /* 0 once a look at another report of its process took it */
+    uint32_t tries;
+    struct ft_linux_mapped file;
+    uint64_t due_ns;
+};
+
+/* A reported file, as the look at the process that reported it finds it. */
+struct target {
+    struct ft_linux_mapped file;
+    uint32_t tries;
+    bool seen;            /* a maps line names it */
+    bool open;            /* it is of a kind, and was neither probed nor skipped */
+    struct probed *probe; /* its probes, when it is of a kind */
+};
+
+enum considered {
+    CONSIDERED_KNOWN, /* probed or skipped before */
+    CONSIDERED_NEW,   /* probed or skipped now */
+    CONSIDERED_OPEN,  /* not probed: no room, or a passing error */
+};
+
 enum look {
     LOOK_GONE,    /* the process has ended */
     LOOK_NONE,    /* it maps no file of a kind */
@@ -146,6 +179,13 @@ struct ft_linux_prober {
     struct pending queue[PENDING_MAX];
     size_t head;
     size_t queued;
+    struct report reports[PENDING_MAX];
+    size_t report_head;
+    size_t report_count;
+    int reported_fd; /* the probes' map of the files reported mapped; -1 while starts are looked at
+                      */
+    struct target *targets; /* the reported files the running look looks for */
+    size_t target_count;
     struct pending quiet_queue[PENDING_MAX]; /* processes of quiet programs */
     size_t quiet_head;
     size_t quiet_queued;
@@ -235,6 +275,7 @@ int ft_linux_prober_add(struct ft_linux_prober *p, const struct ft_linux_probe_k
     *k = (struct kind){
         .def = *def,
         .idle_ns = idle_ms ? strtoull(idle_ms, nullptr, 10) * FT_NS_PER_MS : IDLE_NS,
+        .reported_fd = p->reported_fd,
     };
     k->files = calloc(def->capacity, sizeof(*k->files));
     if (!k->files)
@@ -278,16 +319,25 @@ static struct probed *probed_file(struct kind *k, const struct identity *id)
 }
 
 /* A file probed already, as a maps line names it: found again without opening it. */
-static bool refresh(struct kind *k, const struct mapped_file *mf)
+static struct probed *refresh(struct kind *k, const struct mapped_file *mf)
 {
     for (size_t i = 0; i < k->count; i++) {
         const struct mapped_file *m = &k->files[i].mapped;
         if (m->ino && m->ino == mf->ino && m->major == mf->major && m->minor == mf->minor) {
             k->files[i].found_ns = ft_clock_mono_ns();
-            return true;
+            return &k->files[i];
         }
     }
-    return false;
+    return nullptr;
+}
+
+/* A file the probes' map must report again when a process maps it next. */
+static void unreport(int fd, const struct ft_linux_mapped *file)
+{
+    if (fd < 0 || !file->ino)
+        return;
+    struct ft_bpf_file_key key = {.ino = file->ino, .dev = file->dev, .gen = file->gen};
+    bpf_map_delete_elem(fd, &key);
 }
 
 static bool skipped(const struct kind *k, const struct identity *id)
@@ -375,20 +425,20 @@ static void printable(const char *path, char *out, size_t size)
 
 /*
  * Probes the file that path leads to for one kind, once per file; mapped_as is how the process
- * knows it. True when the file was probed or skipped before. path is a /proc link to the file the
- * process runs or has mapped, never a name it could replace, and the open does not wait on anything
- * that is not a regular file.
+ * knows it; *probe is set to its probes. path is a /proc link to the file the process runs or has
+ * mapped, never a name it could replace, and the open does not wait on anything that is not a
+ * regular file.
  */
-static bool consider(struct kind *k, const char *path, const char *mapped_as,
-                     const struct mapped_file *mf, uint32_t pid)
+static enum considered consider(struct kind *k, const char *path, const char *mapped_as,
+                                const struct mapped_file *mf, uint32_t pid, struct probed **probe)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY);
     if (fd < 0)
-        return false;
+        return CONSIDERED_OPEN;
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
         close(fd);
-        return true;
+        return CONSIDERED_KNOWN;
     }
     struct statfs fs;
     bool overlay = fstatfs(fd, &fs) == 0 && fs.f_type == OVERLAYFS_SUPER_MAGIC;
@@ -401,11 +451,13 @@ static bool consider(struct kind *k, const char *path, const char *mapped_as,
     };
     uint64_t now = ft_clock_mono_ns();
     struct probed *found = probed_file(k, &id);
-    if (found)
+    if (found) {
         found->found_ns = now;
+        *probe = found;
+    }
     if (found || skipped(k, &id)) {
         close(fd);
-        return true;
+        return CONSIDERED_KNOWN;
     }
     char name[512];
     printable(mapped_as, name, sizeof(name));
@@ -419,14 +471,14 @@ static bool consider(struct kind *k, const char *path, const char *mapped_as,
                    k->def.capacity, k->def.many, name);
         k->full_logged = true;
         close(fd);
-        return false;
+        return CONSIDERED_OPEN;
     }
 
     uint64_t cookie = k->def.cookie(fd);
     if (!cookie) {
         skip(k, &id);
         close(fd);
-        return false;
+        return CONSIDERED_NEW;
     }
 
     /* Held open, the file stays reachable after the process that named it exits. */
@@ -443,22 +495,25 @@ static bool consider(struct kind *k, const char *path, const char *mapped_as,
             ft_log(FT_LOG_WARN, "cannot probe %s %s: %s", k->def.one, name,
                    ft_linux_last_libbpf_message());
         detach(&fresh);
-        if (!transient(error))
-            skip(k, &id);
-        return false;
+        if (transient(error))
+            return CONSIDERED_OPEN;
+        skip(k, &id);
+        return CONSIDERED_NEW;
     }
     k->probing_ns += ft_clock_mono_ns() - now;
     if (full) {
         ft_log(FT_LOG_INFO, "already probing %zu %s; the one unused longest makes room for %s",
                k->def.capacity, k->def.many, name);
         detach(slot);
+        unreport(k->reported_fd, &slot->reported);
         k->forgotten++;
     } else {
         k->count++;
     }
     *slot = fresh;
+    *probe = slot;
     k->def.probed(name, pid, cookie);
-    return false;
+    return CONSIDERED_NEW;
 }
 
 static const char *base_name(const char *path)
@@ -500,6 +555,13 @@ static enum look consider_mapped(struct ft_linux_prober *p, const bool *wanted, 
                    &file_at) != 5 ||
             !file_at || !strchr(perms, 'x'))
             continue;
+        struct target *t = nullptr;
+        for (size_t i = 0; i < p->target_count && !t; i++) {
+            if (p->targets[i].file.ino == mf.ino)
+                t = &p->targets[i];
+        }
+        if (t)
+            t->seen = true;
         char *file = line + file_at;
         file[strcspn(file, "\n")] = '\0';
         /* A library replaced by an upgrade stays mapped from its deleted file. */
@@ -531,9 +593,17 @@ static enum look consider_mapped(struct ft_linux_prober *p, const bool *wanted, 
         char mapped[128];
         snprintf(mapped, sizeof(mapped), "/proc/%" PRIu32 "/map_files/%s", pid, range);
         for (size_t i = 0; i < p->kind_count; i++) {
-            if (wanted[i] && p->kinds[i].def.mapped(file, name) && !refresh(&p->kinds[i], &mf) &&
-                !consider(&p->kinds[i], mapped, file, &mf, pid))
-                p->fresh = true;
+            if (!wanted[i] || !p->kinds[i].def.mapped(file, name))
+                continue;
+            struct probed *probe = refresh(&p->kinds[i], &mf);
+            enum considered c = CONSIDERED_KNOWN;
+            if (!probe)
+                c = consider(&p->kinds[i], mapped, file, &mf, pid, &probe);
+            p->fresh = p->fresh || c != CONSIDERED_KNOWN;
+            if (t && c == CONSIDERED_OPEN)
+                t->open = true;
+            if (t && probe && !t->probe)
+                t->probe = probe;
         }
     }
     fclose(f);
@@ -594,7 +664,8 @@ static enum look look_at(struct ft_linux_prober *p, uint32_t pid, uint64_t until
     for (size_t i = 0; i < p->kind_count; i++) {
         const struct ft_linux_probe_kind *def = &p->kinds[i].def;
         if (def->runs && def->runs(name)) {
-            if (!consider(&p->kinds[i], path, exe, nullptr, pid))
+            struct probed *probe = nullptr;
+            if (consider(&p->kinds[i], path, exe, nullptr, pid, &probe) != CONSIDERED_KNOWN)
                 p->fresh = true;
             result = LOOK_FOUND;
         } else if (def->every_process || (def->maps_of && def->maps_of(name))) {
@@ -711,6 +782,7 @@ struct ft_linux_prober *ft_linux_prober_create(void)
     p->credit_ns = WORK_BUDGET_NS;
     p->credit_at = ft_clock_mono_ns();
     p->quiet_fd = -1;
+    p->reported_fd = -1;
     p->seen = calloc(p->pid_limit / 8 + 1, 1);
     if (!p->seen) {
         free(p);
@@ -725,7 +797,8 @@ void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char
     if (!p)
         return;
     mark(p, pid, false);
-    if (!wants(p, program, !file))
+    /* A process is looked at when it maps a file the agent was not told about. */
+    if (p->reported_fd >= 0 || !wants(p, program, !file))
         return;
     size_t forgotten = 0;
     for (size_t i = 0; i < p->kind_count; i++)
@@ -775,15 +848,49 @@ bool ft_linux_prober_forget(struct ft_linux_prober *p)
     return started;
 }
 
-void ft_linux_prober_rescan(struct ft_linux_prober *p)
+static void start_pass(struct ft_linux_prober *p)
 {
-    if (!p || !p->kind_count || p->pass)
+    if (!p->kind_count || p->pass)
         return;
     /* Outside the host's PID namespace no event names a process by its /proc entry. */
     if (!ft_sysinfo_host_pid_namespace())
         memset(p->seen, 0, p->pid_limit / 8 + 1);
     p->pass = opendir("/proc");
     p->again = false;
+}
+
+void ft_linux_prober_rescan(struct ft_linux_prober *p)
+{
+    /* Once processes report the files they map, only lost reports need a pass. */
+    if (p && p->reported_fd < 0)
+        start_pass(p);
+}
+
+void ft_linux_prober_report(struct ft_linux_prober *p, int map_fd)
+{
+    if (!p || map_fd < 0)
+        return;
+    p->reported_fd = map_fd;
+    for (size_t i = 0; i < p->kind_count; i++)
+        p->kinds[i].reported_fd = map_fd;
+}
+
+static void queue_report(struct ft_linux_prober *p, uint32_t pid,
+                         const struct ft_linux_mapped *file, uint32_t tries, uint64_t due_ns)
+{
+    if (p->report_count == PENDING_MAX) {
+        unreport(p->reported_fd, file);
+        return;
+    }
+    p->reports[(p->report_head + p->report_count++) % PENDING_MAX] =
+        (struct report){.pid = pid, .tries = tries, .file = *file, .due_ns = due_ns};
+}
+
+void ft_linux_prober_mapped(struct ft_linux_prober *p, uint32_t pid,
+                            const struct ft_linux_mapped *file)
+{
+    if (p && pid)
+        queue_report(p, pid, file, 0, 0);
 }
 
 /*
@@ -810,6 +917,11 @@ static bool pass_step(struct ft_linux_prober *p, uint64_t until)
 static uint64_t next_due(const struct ft_linux_prober *p)
 {
     uint64_t due = 0;
+    for (size_t i = 0; i < p->report_count; i++) {
+        const struct report *r = &p->reports[(p->report_head + i) % PENDING_MAX];
+        if (r->pid && (!due || r->due_ns < due))
+            due = r->due_ns ? r->due_ns : p->credit_at;
+    }
     for (size_t i = 0; i < p->recheck_count; i++) {
         if (!due || p->rechecks[i].due_ns < due)
             due = p->rechecks[i].due_ns;
@@ -847,6 +959,54 @@ static enum look look_fresh(struct ft_linux_prober *p, uint32_t pid, uint64_t un
 {
     p->fresh = false;
     return look_at(p, pid, until);
+}
+
+/*
+ * Looks at the processes that reported mapping a file, each once for all its reports. A file left
+ * open, or one whose process ended first, is reported again at its next mapping.
+ */
+static void report_work(struct ft_linux_prober *p, uint64_t until)
+{
+    while (p->report_count && ft_clock_mono_ns() < until) {
+        uint64_t now = ft_clock_mono_ns();
+        uint32_t pid = 0;
+        for (size_t i = 0; i < p->report_count && !pid; i++) {
+            const struct report *r = &p->reports[(p->report_head + i) % PENDING_MAX];
+            if (r->pid && r->due_ns <= now)
+                pid = r->pid;
+        }
+        if (!pid)
+            break;
+        struct target targets[TARGETS_MAX];
+        size_t n = 0;
+        for (size_t i = 0; i < p->report_count && n < TARGETS_MAX; i++) {
+            struct report *r = &p->reports[(p->report_head + i) % PENDING_MAX];
+            if (r->pid == pid && r->due_ns <= now) {
+                targets[n++] = (struct target){.file = r->file, .tries = r->tries};
+                r->pid = 0;
+            }
+        }
+        while (p->report_count && !p->reports[p->report_head].pid) {
+            p->report_head = (p->report_head + 1) % PENDING_MAX;
+            p->report_count--;
+        }
+        p->targets = targets;
+        p->target_count = n;
+        enum look result = look_fresh(p, pid, until);
+        p->target_count = 0;
+        for (size_t i = 0; i < n; i++) {
+            struct target *t = &targets[i];
+            if (result == LOOK_CUT)
+                queue_report(p, pid, &t->file, t->tries, 0);
+            else if (result == LOOK_GONE || t->open)
+                unreport(p->reported_fd, &t->file);
+            else if (!t->seen && t->tries + 1 < REPORT_TRIES)
+                queue_report(p, pid, &t->file, t->tries + 1,
+                             ft_clock_mono_ns() + (REPORT_STEP_NS << t->tries));
+            else if (t->probe && !t->probe->reported.ino)
+                t->probe->reported = t->file;
+        }
+    }
 }
 
 /* Takes what a look found, and has the process looked at again while it is due another. */
@@ -930,7 +1090,7 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
     if (!p)
         return;
     if (p->again)
-        ft_linux_prober_rescan(p);
+        start_pass(p);
     uint64_t start = ft_clock_mono_ns();
     uint64_t probing = probing_ns(p);
     p->credit_ns += (start - p->credit_at) * WORK_PERCENT / 100;
@@ -939,6 +1099,7 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
     p->credit_at = start;
     uint64_t until = start + p->credit_ns;
 
+    report_work(p, until);
     quiet_expire(p, start);
     recheck_work(p, false, until);
     while (p->queued && ft_clock_mono_ns() < until) {

@@ -114,9 +114,14 @@ static void name_capability(const struct ft_linux_probes *p, const struct ft_bac
         snprintf(tlsc, sizeof(tlsc), "TLS server names in %llu %s", (unsigned long long)tls_libs,
                  tls_libs == 1 ? "library" : "libraries");
 
+    /* Without reports of the files processes map, a library loaded late waits for a look. */
+    bool reported = ft_linux_group_attached(p, FT_PG_MAPPED);
+    const char *late = reported ? ""
+                                : "; the kernel does not report the libraries processes map, so "
+                                  "one loaded after a process starts is found only by a later look";
     enum ft_cap_status status =
-        lookups && tls && name_libs && tls_libs ? FT_CAP_FULL : FT_CAP_PARTIAL;
-    ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, status, "%s; %s", lookup, tlsc);
+        lookups && tls && name_libs && tls_libs && reported ? FT_CAP_FULL : FT_CAP_PARTIAL;
+    ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, status, "%s; %s%s", lookup, tlsc, late);
 }
 static void php_capability(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
                            struct ft_capabilities *out)

@@ -292,8 +292,9 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
     bpf_cfg->wakeup_bytes = queue / 4;
     bpf_cfg->file_corr = cfg->mode >= FT_MODE_STANDARD && enabled_file_probes(set, enabled);
+    /* Without reports of the files processes map, the prober looks at each process as it starts. */
     bpf_cfg->mapped_files = group_enabled(set, enabled, FT_PG_MAPPED);
-    bpf_cfg->exec_wakeup = prober_wanted(cfg);
+    bpf_cfg->exec_wakeup = prober_wanted(cfg) && !bpf_cfg->mapped_files;
     bpf_map__set_max_entries(events, queue);
     bpf_map__set_max_entries(agg_a, cfg->agg_entries);
     bpf_map__set_max_entries(agg_b, cfg->agg_entries);
@@ -931,6 +932,14 @@ static int on_ring_event(void *ctx, void *data, size_t size)
         if (size >= sizeof(struct ft_bpf_ev_tls_name))
             on_tls_name(b, data);
         break;
+    case FT_BPF_EV_MAPPED:
+        if (size >= sizeof(struct ft_bpf_ev_mapped) && b->prober) {
+            const struct ft_bpf_ev_mapped *e = data;
+            struct ft_linux_mapped file = {
+                .ino = e->file.ino, .dev = e->file.dev, .gen = e->file.gen};
+            ft_linux_prober_mapped(b->prober, e->pid, &file);
+        }
+        break;
     default:
         break;
     }
@@ -1377,6 +1386,8 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     }
     ft_linux_prober_rescan(b->prober);
     ft_linux_prober_work(b->prober, ft_clock_mono_ns());
+    if (ft_linux_group_attached(&b->probes, FT_PG_MAPPED))
+        ft_linux_prober_report(b->prober, bpf_object__find_map_fd_by_name(obj, "mapped_files"));
 
     b->ring = ring_buffer__new(bpf_map__fd(events), on_ring_event, b, nullptr);
     b->cpu_values = calloc((size_t)(b->ncpus > 0 ? b->ncpus : 1), sizeof(uint64_t));
