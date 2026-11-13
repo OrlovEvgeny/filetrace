@@ -550,6 +550,7 @@ struct ft_backend {
     int lookup_kind; /* the prober's kind for C libraries, or -1 */
     size_t lookup_capacity;
     size_t lookup_wanted; /* [limits] name_libraries, which the open file limit may cut */
+    struct ft_linux_tls tls;
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
 
@@ -1059,13 +1060,13 @@ static uint64_t raise_open_file_limit(void)
 }
 
 /* How many C library files the limit leaves descriptors to probe, once PHP's are counted. */
-static size_t libraries_within(uint64_t limit, size_t wanted, bool php)
+static size_t libraries_within(uint64_t limit, size_t wanted, bool php, uint64_t per_file)
 {
     struct ft_self_usage self;
     ft_sysinfo_self(&self);
     uint64_t held = self.open_fds + RESERVED_DESCRIPTORS +
-                    (php ? FT_LINUX_PHP_FILES * FT_LINUX_FILE_DESCRIPTORS : 0);
-    uint64_t fits = limit > held ? (limit - held) / FT_LINUX_FILE_DESCRIPTORS : 0;
+                    (php ? FT_LINUX_PHP_FILES * FT_LINUX_PHP_DESCRIPTORS : 0);
+    uint64_t fits = limit > held ? (limit - held) / per_file : 0;
     return fits < wanted ? (size_t)fits : wanted;
 }
 
@@ -1094,6 +1095,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         b->cfg.drain_batch = 512;
     b->sink = *sink;
     b->lookup_kind = -1;
+    b->tls = (struct ft_linux_tls){.openssl = -1, .gnutls = -1};
     uint64_t open_files = raise_open_file_limit();
 
     int rc = ft_linux_probes_load(cfg, &b->probes);
@@ -1158,21 +1160,25 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     bool returns = ft_linux_returns_allowed(&b->probes, cfg);
     bool php = cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD && returns;
     bool lookups = b->probes.lookups && returns;
+    bool tls = cfg->tls_names && cfg->mode >= FT_MODE_STANDARD && returns;
     if (!returns && b->probes.returns != FT_RETURNS_NOT_TESTED) {
         char why[320];
-        ft_log(FT_LOG_WARN, "%s; neither the PHP probes nor those of name lookups are attached",
+        ft_log(FT_LOG_WARN,
+               "%s; the probes for PHP requests, name lookups and TLS server names are not "
+               "attached",
                ft_linux_returns_refusal(&b->probes, why, sizeof(why)));
-    } else if ((php || lookups) && ft_linux_returns_refused(&b->probes)) {
+    } else if ((php || lookups || tls) && ft_linux_returns_refused(&b->probes)) {
         char why[320];
         ft_log(FT_LOG_WARN, "%s", ft_linux_returns_forced(&b->probes, why, sizeof(why)));
     }
-    if (php || lookups)
+    if (php || lookups || tls)
         b->prober = ft_linux_prober_create();
     if (b->prober && php)
         b->php = ft_linux_php_open(obj, b->prober);
     if (b->prober && lookups) {
         b->lookup_wanted = cfg->name_libraries;
-        b->lookup_capacity = libraries_within(open_files, cfg->name_libraries, b->php != nullptr);
+        b->lookup_capacity = libraries_within(open_files, cfg->name_libraries, b->php != nullptr,
+                                              FT_LINUX_LIBC_DESCRIPTORS);
         if (b->lookup_capacity < b->lookup_wanted)
             ft_log(FT_LOG_WARN,
                    "the open file limit of %" PRIu64 " leaves room to probe %zu of the %zu C "
@@ -1180,6 +1186,14 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
                    "show no looked-up names",
                    open_files, b->lookup_capacity, b->lookup_wanted);
         b->lookup_kind = ft_linux_lookups_open(obj, b->prober, b->lookup_capacity);
+    }
+    if (b->prober && tls) {
+        bool php_on = b->php != nullptr;
+        size_t ssl =
+            libraries_within(open_files, cfg->name_libraries, php_on, FT_LINUX_SSL_DESCRIPTORS);
+        size_t gnutls =
+            libraries_within(open_files, cfg->name_libraries, php_on, FT_LINUX_GNUTLS_DESCRIPTORS);
+        ft_linux_tls_open(obj, b->prober, ssl, gnutls, &b->tls);
     }
     ft_linux_prober_rescan(b->prober);
     ft_linux_prober_work(b->prober, ft_clock_mono_ns());

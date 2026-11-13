@@ -50,7 +50,8 @@ static const char *test_hook(void)
 static bool probes_wanted(const struct ft_backend_config *cfg)
 {
     return cfg->mode >= FT_MODE_STANDARD &&
-           (cfg->php_scripts || (cfg->lookup_names && ft_sysinfo_host_pid_namespace()));
+           (cfg->php_scripts ||
+            ((cfg->lookup_names || cfg->tls_names) && ft_sysinfo_host_pid_namespace()));
 }
 
 bool ft_linux_returns_tested(const struct ft_backend_config *cfg)
@@ -255,12 +256,12 @@ const char *ft_linux_returns_forced(const struct ft_linux_probes *p, char *buf, 
 {
     char found[128];
     snprintf(buf, size,
-             "%s; [process] force_return_probes attaches the PHP probes and those of name "
-             "lookups all the same%s",
+             "%s; [process] force_return_probes attaches the probes for PHP requests, name "
+             "lookups and TLS server names all the same%s",
              finding(p, found, sizeof(found)),
              p->returns == FT_RETURNS_UNSAFE
-                 ? ", so a process under a seccomp filter is killed where a lookup or a PHP "
-                   "request ends"
+                 ? ", so a process under a seccomp filter is killed where a lookup, a handshake "
+                   "or a PHP request ends"
                  : "");
     return buf;
 }
@@ -269,8 +270,8 @@ const char *ft_linux_returns_row(const struct ft_linux_probes *p, char *buf, siz
 {
     char found[128];
     snprintf(buf, size,
-             "%s%s; the agent attaches the PHP probes and those of name lookups here only with "
-             "[process] force_return_probes",
+             "%s%s; the agent attaches the probes for PHP requests, name lookups and TLS server "
+             "names here only with [process] force_return_probes",
              finding(p, found, sizeof(found)),
              p->returns == FT_RETURNS_UNSAFE ? ": update the kernel" : "");
     return buf;
