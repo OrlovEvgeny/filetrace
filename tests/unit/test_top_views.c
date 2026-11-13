@@ -30,9 +30,11 @@ static void process(struct fixture *f, uint32_t pid, uint32_t ppid, const char *
     free(row);
 }
 
-static void transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate, const char *path,
-                     const char *remote)
+static void add_transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate,
+                         const char *path, const char *remote, uint16_t port,
+                         const struct ft_remote_names *names)
 {
+    static const struct ft_remote_names nameless = {.tls = ""};
     struct ft_row_transfer *row = calloc(1, sizeof(*row));
     struct ft_process_strings text = {"", "/srv", ""};
 
@@ -48,13 +50,47 @@ static void transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate
     row->confidence = FT_CONF_EXACT;
     row->flags = FT_XFER_ACTIVE | FT_XFER_FILE_KNOWN | FT_XFER_PATH_KNOWN | FT_XFER_PROCESS_TEXT;
     CHECK(ft_addr_parse(remote, &row->remote));
-    row->remote.port = 443;
+    row->remote.port = port;
     ft_strlcpy(row->comm, "worker", sizeof(row->comm));
     ft_strlcpy(row->path, path, FT_PATH_MAX);
     size_t lead = strlen(row->path) + 1;
-    ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    lead += ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    ft_remote_names_pack(names ? names : &nameless, &row->names, row->path + lead,
+                         sizeof(row->path) - lead);
     CHECK(ft_rows_append(&f->transfers, row, ft_row_transfer_size(row)));
     free(row);
+}
+
+static void transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate, const char *path,
+                     const char *remote)
+{
+    add_transfer(f, id, pid, rate, path, remote, 443, nullptr);
+}
+
+static const struct ft_remote_names looked_up = {
+    .tls = "", .resolved = {"files.example.com"}, .listed = 1, .count = 1};
+static const struct ft_remote_names proxied = {
+    .tls = "s3.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+
+/* A looked-up name, a TLS name through a proxy, and none. */
+static void named_fixture(struct fixture *f)
+{
+    *f = (struct fixture){.m = ft_top_model_create()};
+    CHECK(f->m != nullptr);
+    ft_rows_init(&f->transfers, FT_MSG_ROW_TRANSFER);
+    ft_rows_init(&f->processes, FT_MSG_ROW_PROCESS);
+    process(f, 300, 1, "rclone", "rclone copy /srv remote:", "");
+    add_transfer(f, 1, 300, 3'000'000, "/srv/a.bin", "198.51.100.7", 443, &looked_up);
+    add_transfer(f, 2, 300, 2'000'000, "/srv/b.bin", "10.0.8.40", 3128, &proxied);
+    add_transfer(f, 3, 300, 1'000'000, "/srv/c.bin", "198.51.100.4", 51344, nullptr);
+    f->stats.now_wall_ns = WALL;
+    struct ft_top_sample s = {
+        .mono_ns = SECOND,
+        .stats = &f->stats,
+        .transfers = &f->transfers,
+        .processes = &f->processes,
+    };
+    CHECK(ft_top_model_sample(f->m, &s));
 }
 
 /* An nginx master with four workers, and java sending two files of its own. */
@@ -278,6 +314,40 @@ static void transfer_columns(void)
     CHECK(!has_label(c, 0, "CONF"));
     CHECK(has_label(c, 0, "USER"));
     ft_canvas_destroy(c);
+    fixture_free(&f);
+}
+
+/* The DESTINATION cells of the transfers, by rate, at 174 columns. */
+static void destination_cells(struct fixture *f, struct ft_top_ui *ui, const char *const *want)
+{
+    struct ft_canvas *c = ft_canvas_create(174, 4);
+    struct ft_top_draw d = drawer(c, f, ui);
+
+    ft_canvas_fill(c, (struct ft_rect){0, 0, 174, 4}, ' ', (struct ft_style){0});
+    ft_top_draw_table(&d, FT_TOP_TRANSFERS, (struct ft_rect){0, 0, 174, 1},
+                      (struct ft_rect){0, 1, 174, 3}, 0);
+    for (int y = 1; y <= 3; y++) {
+        const char *shown = cells(c, 79, y, 25);
+        if (strcmp(shown, want[y - 1]) != 0)
+            fprintf(stderr, "  destination \"%s\", expected \"%s\"\n", shown, want[y - 1]);
+        CHECK(strcmp(shown, want[y - 1]) == 0);
+    }
+    ft_canvas_destroy(c);
+}
+
+static void transfer_names(void)
+{
+    static const char *const names[] = {
+        "files.example.com:443    ",
+        "s3.example.com via prox… ",
+        "198.51.100.4:51344       ",
+    };
+    struct fixture f;
+    struct ft_top_ui ui = {.mode = FT_TOP_TRANSFERS, .full_paths = true};
+
+    named_fixture(&f);
+    ft_top_set_mode(f.m, FT_TOP_TRANSFERS);
+    destination_cells(&f, &ui, names);
     fixture_free(&f);
 }
 
@@ -614,6 +684,7 @@ void test_top_views(void)
 {
     live_modes();
     transfer_columns();
+    transfer_names();
     layout();
     tree_guides();
     data_source();

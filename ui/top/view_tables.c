@@ -327,11 +327,28 @@ static const char *keep_port(struct row_draw *rd, const char *text, int cols)
     return out;
 }
 
-/* Where a transfer goes: the host name with the port when one is known, else the address. */
+static const char *cut_end(struct row_draw *rd, const char *text, int cols)
+{
+    if (cols <= 0 || ft_text_columns(text) <= cols)
+        return text;
+    char *out = row_text(rd);
+    snprintf(out, ROW_TEXT_BYTES, "%.*s…", (int)prefix_bytes(text, cols - 1), text);
+    return out;
+}
+
+/*
+ * Where a transfer goes: the name the process used, else the host name with the port when one
+ * is known, else the address.
+ */
 static const char *endpoint_text(struct row_draw *rd, const struct ft_top_transfer *t, int cols)
 {
     const char *full = t->remote_text;
 
+    if (t->names) {
+        char *name = row_text(rd);
+        ft_remote_name_cell(t->names, t->remote.port, name, ROW_TEXT_BYTES);
+        return cut_end(rd, name, cols);
+    }
     if (t->destination && t->destination->host_state == FT_TOP_HOST_NAMED && t->destination->host) {
         char *buf = row_text(rd);
         snprintf(buf, ROW_TEXT_BYTES, "%s:%u", t->destination->host, (unsigned)t->remote.port);
