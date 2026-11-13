@@ -85,6 +85,7 @@ struct ft_backend_stats {
     uint64_t name_libraries;            /* library files probed for names */
     uint64_t name_library_capacity;     /* 0 when the backend probes none */
     uint64_t name_libraries_configured; /* more than the capacity when open files cut it */
+    uint64_t name_libraries_forgotten;  /* probed files that made room for newer ones */
 };
 
 struct ft_backend;
