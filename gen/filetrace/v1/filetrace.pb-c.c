@@ -888,7 +888,7 @@ const ProtobufCMessageDescriptor filetrace__v1__endpoint__descriptor =
   (ProtobufCMessageInit) filetrace__v1__endpoint__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor filetrace__v1__connection__field_descriptors[4] =
+static const ProtobufCFieldDescriptor filetrace__v1__connection__field_descriptors[8] =
 {
   {
     "socket_id",
@@ -938,17 +938,69 @@ static const ProtobufCFieldDescriptor filetrace__v1__connection__field_descripto
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "remote_name",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__Connection, remote_name),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "remote_name_source",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_ENUM,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__Connection, remote_name_source),
+    &filetrace__v1__name_source__descriptor,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "resolved_names",
+    7,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_STRING,
+    offsetof(Filetrace__V1__Connection, n_resolved_names),
+    offsetof(Filetrace__V1__Connection, resolved_names),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "resolved_name_count",
+    8,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__Connection, resolved_name_count),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned filetrace__v1__connection__field_indices_by_name[] = {
   2,   /* field[2] = local */
   3,   /* field[3] = remote */
+  4,   /* field[4] = remote_name */
+  5,   /* field[5] = remote_name_source */
+  7,   /* field[7] = resolved_name_count */
+  6,   /* field[6] = resolved_names */
   0,   /* field[0] = socket_id */
   1,   /* field[1] = transport */
 };
 static const ProtobufCIntRange filetrace__v1__connection__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 4 }
+  { 0, 8 }
 };
 const ProtobufCMessageDescriptor filetrace__v1__connection__descriptor =
 {
@@ -958,7 +1010,7 @@ const ProtobufCMessageDescriptor filetrace__v1__connection__descriptor =
   "Filetrace__V1__Connection",
   "filetrace.v1",
   sizeof(Filetrace__V1__Connection),
-  4,
+  8,
   filetrace__v1__connection__field_descriptors,
   filetrace__v1__connection__field_indices_by_name,
   1,  filetrace__v1__connection__number_ranges,
@@ -1185,7 +1237,7 @@ const ProtobufCMessageDescriptor filetrace__v1__transfer__descriptor =
   (ProtobufCMessageInit) filetrace__v1__transfer__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor filetrace__v1__transfer_filter__field_descriptors[9] =
+static const ProtobufCFieldDescriptor filetrace__v1__transfer_filter__field_descriptors[10] =
 {
   {
     "pid",
@@ -1295,6 +1347,18 @@ static const ProtobufCFieldDescriptor filetrace__v1__transfer_filter__field_desc
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "remote_name",
+    10,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Filetrace__V1__TransferFilter, remote_name),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned filetrace__v1__transfer_filter__field_indices_by_name[] = {
   7,   /* field[7] = confidence */
@@ -1304,13 +1368,14 @@ static const unsigned filetrace__v1__transfer_filter__field_indices_by_name[] = 
   4,   /* field[4] = port */
   1,   /* field[1] = process */
   3,   /* field[3] = remote */
+  9,   /* field[9] = remote_name */
   8,   /* field[8] = script */
   5,   /* field[5] = transport */
 };
 static const ProtobufCIntRange filetrace__v1__transfer_filter__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 9 }
+  { 0, 10 }
 };
 const ProtobufCMessageDescriptor filetrace__v1__transfer_filter__descriptor =
 {
@@ -1320,7 +1385,7 @@ const ProtobufCMessageDescriptor filetrace__v1__transfer_filter__descriptor =
   "Filetrace__V1__TransferFilter",
   "filetrace.v1",
   sizeof(Filetrace__V1__TransferFilter),
-  9,
+  10,
   filetrace__v1__transfer_filter__field_descriptors,
   filetrace__v1__transfer_filter__field_indices_by_name,
   1,  filetrace__v1__transfer_filter__number_ranges,
@@ -2029,6 +2094,38 @@ const ProtobufCEnumDescriptor filetrace__v1__transport__descriptor =
   filetrace__v1__transport__enum_values_by_name,
   1,
   filetrace__v1__transport__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
+};
+static const ProtobufCEnumValue filetrace__v1__name_source__enum_values_by_number[4] =
+{
+  { "NAME_SOURCE_UNSPECIFIED", "FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_UNSPECIFIED", 0 },
+  { "NAME_SOURCE_LOOKUP", "FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_LOOKUP", 1 },
+  { "NAME_SOURCE_TLS", "FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_TLS", 2 },
+  { "NAME_SOURCE_LOOKUP_AND_TLS", "FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_LOOKUP_AND_TLS", 3 },
+};
+static const ProtobufCIntRange filetrace__v1__name_source__value_ranges[] = {
+{0, 0},{0, 4}
+};
+static const ProtobufCEnumValueIndex filetrace__v1__name_source__enum_values_by_name[4] =
+{
+  { "NAME_SOURCE_LOOKUP", 1 },
+  { "NAME_SOURCE_LOOKUP_AND_TLS", 3 },
+  { "NAME_SOURCE_TLS", 2 },
+  { "NAME_SOURCE_UNSPECIFIED", 0 },
+};
+const ProtobufCEnumDescriptor filetrace__v1__name_source__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "filetrace.v1.NameSource",
+  "NameSource",
+  "Filetrace__V1__NameSource",
+  "filetrace.v1",
+  4,
+  filetrace__v1__name_source__enum_values_by_number,
+  4,
+  filetrace__v1__name_source__enum_values_by_name,
+  1,
+  filetrace__v1__name_source__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };
 static const ProtobufCMethodDescriptor filetrace__v1__filetrace_service__method_descriptors[3] =
