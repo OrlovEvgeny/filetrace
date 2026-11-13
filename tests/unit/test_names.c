@@ -226,6 +226,44 @@ static void shown_by_what_is_known(void)
     CHECK_STR(cut, "s3.example.");
 }
 
+static void check_cell(const struct ft_remote_names *n, uint16_t port, const char *shown)
+{
+    char buf[3 * FT_NAME_MAX];
+
+    ft_remote_name_cell(n, port, buf, sizeof(buf));
+    CHECK_STR(buf, shown);
+}
+
+/* A port follows a name only where the process got the address by looking that name up. */
+static void in_place_of_an_address(void)
+{
+    struct ft_remote_names n = {.tls = ""};
+    check_cell(&n, 443, "");
+
+    n = (struct ft_remote_names){
+        .tls = "", .resolved = {"files.example.com"}, .listed = 1, .count = 1};
+    check_cell(&n, 443, "files.example.com:443");
+    check_cell(&n, 0, "files.example.com");
+
+    n = (struct ft_remote_names){
+        .tls = "", .resolved = {"cdn.example.com", "static.example.com"}, .listed = 2, .count = 2};
+    check_cell(&n, 80, "cdn.example.com:80 (+1)");
+    check_cell(&n, 0, "cdn.example.com (+1)");
+
+    n = (struct ft_remote_names){.tls = "files.example.com",
+                                 .resolved = {"cdn.example.com", "files.example.com"},
+                                 .listed = 2,
+                                 .count = 2};
+    check_cell(&n, 443, "files.example.com:443");
+
+    /* The address was not looked up by the server name, so its port is not the name's. */
+    n = (struct ft_remote_names){.tls = "files.example.com"};
+    check_cell(&n, 443, "files.example.com");
+    n = (struct ft_remote_names){
+        .tls = "s3.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+    check_cell(&n, 3128, "s3.example.com via proxy.corp.example");
+}
+
 static void check_pattern(const char *text, const char *kept)
 {
     char out[FT_NAME_MAX];
@@ -277,6 +315,7 @@ void test_names(void)
 {
     patterns();
     shown_by_what_is_known();
+    in_place_of_an_address();
     normalised();
     one_name_one_slot();
     unused_longest_goes_first();
