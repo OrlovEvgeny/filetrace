@@ -11,10 +11,12 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <linux/magic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
 #define MAX_KINDS 4
@@ -34,9 +36,11 @@
 /*
  * A file as probes see it. Uprobes attach to the file underneath overlayfs, which every
  * container of an image shares, while each container's overlay gives it a device of its own;
- * the inode number, size and time are the real file's.
+ * the inode number, size and time are the real file's. Elsewhere the device tells apart files
+ * that agree in all of those, as snapshots and clones do.
  */
 struct identity {
+    uint64_t dev; /* 0 on overlayfs */
     uint64_t ino;
     uint64_t size;
     int64_t mtime_sec;
@@ -163,8 +167,8 @@ size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind)
 
 static bool same(const struct identity *a, const struct identity *b)
 {
-    return a->ino == b->ino && a->size == b->size && a->mtime_sec == b->mtime_sec &&
-           a->mtime_nsec == b->mtime_nsec;
+    return a->dev == b->dev && a->ino == b->ino && a->size == b->size &&
+           a->mtime_sec == b->mtime_sec && a->mtime_nsec == b->mtime_nsec;
 }
 
 static struct probed *probed_file(struct kind *k, const struct identity *id)
@@ -261,7 +265,10 @@ static void consider(struct kind *k, const char *path, const char *name, uint32_
         close(fd);
         return;
     }
+    struct statfs fs;
+    bool overlay = fstatfs(fd, &fs) == 0 && fs.f_type == OVERLAYFS_SUPER_MAGIC;
     struct identity id = {
+        .dev = overlay ? 0 : (uint64_t)st.st_dev,
         .ino = (uint64_t)st.st_ino,
         .size = (uint64_t)st.st_size,
         .mtime_sec = (int64_t)st.st_mtim.tv_sec,

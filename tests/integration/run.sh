@@ -1455,6 +1455,32 @@ if [ -n "$dynamic" ]; then
     expect "names: static binary transfer" \
         "$(ft files --path "$data/n10.bin" --format csv | column network.remote_ip)" 127.0.0.3
 
+    # A C library that appears after the agent started, in a mount namespace of its own as a
+    # container's does: copies of the C library and its loader in a file system only that
+    # namespace sees, and the workload run through them. A second such file system holds copies
+    # with the same inode numbers, sizes and times, told apart only by their device.
+    libraries() {
+        ft stats --json | sed -n 's/.*"name_libraries":{"entries":\([0-9]*\).*/\1/p'
+    }
+    for i in 1 2; do
+        mkdir -p "$work/private$i"
+        before=$(libraries)
+        named "$dynamic" privatelibc "$work/private$i" waitsend "$work/go-private$i" \
+            alone.ft.test "$data/private$i.bin" >/dev/null &
+        private_job=$!
+        i_wait=0
+        while [ "$(libraries)" -le "$before" ] && [ $i_wait -lt 100 ]; do
+            sleep 0.1
+            i_wait=$((i_wait + 1))
+        done
+        touch "$work/go-private$i"
+        wait "$private_job"
+    done
+    settle
+    expect "names: a C library in a container's own file system" "$(name_of private1.bin)" \
+        alone.ft.test
+    expect "names: another alike but for its device" "$(name_of private2.bin)" alone.ft.test
+
     # Datagrams from one socket to two peers: the flow to the looked-up address alone is named.
     csv=$(ft flows --pid "$(field "$udp_report" pid)" --protocol udp --format csv)
     expect "names: datagram flows" "$(printf '%s\n' "$csv" | rows)" 2
