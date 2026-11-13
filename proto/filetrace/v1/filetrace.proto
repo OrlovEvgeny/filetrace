@@ -42,6 +42,17 @@ enum Transport {
   TRANSPORT_UDP = 2;
 }
 
+// How the process came to use a name for a connection.
+enum NameSource {
+  NAME_SOURCE_UNSPECIFIED = 0;
+  // It looked the name up and got the remote address.
+  NAME_SOURCE_LOOKUP = 1;
+  // It sent the name as the TLS server name on this connection.
+  NAME_SOURCE_TLS = 2;
+  // Both.
+  NAME_SOURCE_LOOKUP_AND_TLS = 3;
+}
+
 message Process {
   uint32 pid = 1;
   uint32 parent_pid = 2;
@@ -87,6 +98,13 @@ message Connection {
   Transport transport = 2;
   Endpoint local = 3;
   Endpoint remote = 4;
+  // The name the process used for this connection; empty when none is known.
+  string remote_name = 5;
+  NameSource remote_name_source = 6;
+  // Names the process looked up to the remote address, its latest first; at most four.
+  repeated string resolved_names = 7;
+  // How many names it looked up to the address, resolved_names included.
+  uint32 resolved_name_count = 8;
 }
 
 message Transfer {
@@ -131,6 +149,9 @@ message TransferFilter {
   // when there is one, otherwise of the process. "*" matches any run of
   // characters.
   string script = 9;
+  // Name of the remote end, matched against remote_name and resolved_names
+  // without regard to case; "*" matches any run of characters.
+  string remote_name = 10;
 }
 
 message GetStatusRequest {}

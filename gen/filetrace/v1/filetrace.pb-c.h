@@ -73,6 +73,25 @@ typedef enum _Filetrace__V1__Transport {
   FILETRACE__V1__TRANSPORT__TRANSPORT_UDP = 2
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(FILETRACE__V1__TRANSPORT)
 } Filetrace__V1__Transport;
+/*
+ * How the process came to use a name for a connection.
+ */
+typedef enum _Filetrace__V1__NameSource {
+  FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_UNSPECIFIED = 0,
+  /*
+   * It looked the name up and got the remote address.
+   */
+  FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_LOOKUP = 1,
+  /*
+   * It sent the name as the TLS server name on this connection.
+   */
+  FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_TLS = 2,
+  /*
+   * Both.
+   */
+  FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_LOOKUP_AND_TLS = 3
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(FILETRACE__V1__NAME_SOURCE)
+} Filetrace__V1__NameSource;
 
 /* --- messages --- */
 
@@ -161,10 +180,24 @@ struct  Filetrace__V1__Connection
   Filetrace__V1__Transport transport;
   Filetrace__V1__Endpoint *local;
   Filetrace__V1__Endpoint *remote;
+  /*
+   * The name the process used for this connection; empty when none is known.
+   */
+  char *remote_name;
+  Filetrace__V1__NameSource remote_name_source;
+  /*
+   * Names the process looked up to the remote address, its latest first; at most four.
+   */
+  size_t n_resolved_names;
+  char **resolved_names;
+  /*
+   * How many names it looked up to the address, resolved_names included.
+   */
+  uint32_t resolved_name_count;
 };
 #define FILETRACE__V1__CONNECTION__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&filetrace__v1__connection__descriptor) \
-    , 0, FILETRACE__V1__TRANSPORT__TRANSPORT_UNSPECIFIED, NULL, NULL }
+    , 0, FILETRACE__V1__TRANSPORT__TRANSPORT_UNSPECIFIED, NULL, NULL, (char *)protobuf_c_empty_string, FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_UNSPECIFIED, 0,NULL, 0 }
 
 
 struct  Filetrace__V1__Transfer
@@ -242,10 +275,15 @@ struct  Filetrace__V1__TransferFilter
    * characters.
    */
   char *script;
+  /*
+   * Name of the remote end, matched against remote_name and resolved_names
+   * without regard to case; "*" matches any run of characters.
+   */
+  char *remote_name;
 };
 #define FILETRACE__V1__TRANSFER_FILTER__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&filetrace__v1__transfer_filter__descriptor) \
-    , 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, FILETRACE__V1__TRANSPORT__TRANSPORT_UNSPECIFIED, FILETRACE__V1__METHOD__METHOD_UNSPECIFIED, FILETRACE__V1__CONFIDENCE__CONFIDENCE_UNSPECIFIED, (char *)protobuf_c_empty_string }
+    , 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, FILETRACE__V1__TRANSPORT__TRANSPORT_UNSPECIFIED, FILETRACE__V1__METHOD__METHOD_UNSPECIFIED, FILETRACE__V1__CONFIDENCE__CONFIDENCE_UNSPECIFIED, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
 
 
 struct  Filetrace__V1__GetStatusRequest
@@ -729,6 +767,7 @@ void filetrace__v1__filetrace_service__watch_transfers(ProtobufCService *service
 extern const ProtobufCEnumDescriptor    filetrace__v1__confidence__descriptor;
 extern const ProtobufCEnumDescriptor    filetrace__v1__method__descriptor;
 extern const ProtobufCEnumDescriptor    filetrace__v1__transport__descriptor;
+extern const ProtobufCEnumDescriptor    filetrace__v1__name_source__descriptor;
 extern const ProtobufCMessageDescriptor filetrace__v1__process__descriptor;
 extern const ProtobufCMessageDescriptor filetrace__v1__file__descriptor;
 extern const ProtobufCMessageDescriptor filetrace__v1__endpoint__descriptor;
