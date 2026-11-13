@@ -66,6 +66,7 @@ int ft_linux_lookups_open(struct bpf_object *obj, struct ft_linux_prober *prober
         .capacity = capacity,
         .probes = {{call, "getaddrinfo", false}, {ret, "getaddrinfo", true}},
         .every_process = true,
+        .place_cookie = true,
         .mapped = libc_mapped,
         .cookie = libc_cookie,
         .probed = libc_probed,

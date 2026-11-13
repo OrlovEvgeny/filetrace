@@ -658,6 +658,7 @@ static void on_lookup(struct ft_backend *b, const struct ft_bpf_ev_lookup *e)
     name[sizeof(name) - 1] = '\0';
     for (uint32_t i = 0; i < ev.lookup.addr_count; i++)
         ft_endpoint_set(&ev.lookup.addrs[i], (e->inet6 >> i) & 1, e->addrs[i], 0);
+    ft_linux_prober_used(b->prober, b->lookup_kind, e->library, e->hdr.ts_ns);
     emit(b, &ev);
 }
 

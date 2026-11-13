@@ -144,6 +144,8 @@ int BPF_URETPROBE(ft_getaddrinfo_return, int ret)
     e->hdr.pad = 0;
     e->pid = (__u32)(ids >> 32);
     e->tid = (__u32)ids;
+    e->library = (__u32)bpf_get_attach_cookie(ctx);
+    e->pad = 0;
     bpf_ringbuf_submit(e, wake_flags());
     return 0;
 }
