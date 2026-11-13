@@ -730,8 +730,72 @@ static void names_off(void)
     fixture_close(&f);
 }
 
+/* How many rows of the kind the names filter leaves, with or without an address beside it. */
+static size_t filtered(struct fixture *f, enum ft_query_kind kind, const char *name,
+                       const struct ft_endpoint *remote)
+{
+    struct ft_query q;
+
+    ft_query_init(&q, kind);
+    CHECK(ft_name_pattern(name, q.remote_name));
+    if (remote)
+        q.remote = *remote;
+    run(f, &q);
+    return got.count;
+}
+
+static void names_filter_what_is_listed(void)
+{
+    struct fixture f;
+    struct ft_endpoint files = address(203, 0, 113, 25, 443);
+    struct ft_endpoint logs = address(192, 0, 2, 53, 514);
+    struct ft_endpoint client = address(198, 51, 100, 4, 51344);
+    struct ft_endpoint elsewhere = address(192, 0, 2, 0, 0);
+
+    fixture_open(&f, nullptr);
+    exec(&f, CURL);
+    lookup(&f, CURL, CURL, "files.example.com", files);
+    lookup(&f, CURL, CURL, "cdn.example.com", files);
+    lookup(&f, CURL, CURL, "logs.example.net", logs);
+    connect_to(&f, SOCK, CURL, CURL, files);
+    tls_name(&f, SOCK, CURL, "www.example.org");
+    bytes_sent(&f, SOCK, CURL, FT_PROTO_TCP, files);
+    file_sent(&f, SOCK, CURL);
+    bytes_sent(&f, SOCK + 1, CURL, FT_PROTO_UDP, logs);
+    socket_state(&f, SOCK + 2, CURL, 0, FT_SOCK_ESTABLISHED, client);
+    bytes_sent(&f, SOCK + 2, CURL, FT_PROTO_TCP, client);
+
+    /* Any name of the remote end counts: the one asked for over TLS and each one looked up. */
+    CHECK_U64(filtered(&f, FT_Q_CONNECTIONS, "www.example.org", nullptr), 1);
+    CHECK_U64(filtered(&f, FT_Q_CONNECTIONS, "CDN.example.com.", nullptr), 1);
+    CHECK_U64(got.connection.sock_id, SOCK);
+    CHECK_U64(filtered(&f, FT_Q_CONNECTIONS, "*.example.*", nullptr), 2);
+    CHECK_U64(filtered(&f, FT_Q_CONNECTIONS, "none.example.com", nullptr), 0);
+    CHECK_U64(filtered(&f, FT_Q_FLOWS, "*.example.com", nullptr), 1);
+    CHECK_U64(filtered(&f, FT_Q_FLOWS, "logs.*", nullptr), 1);
+    CHECK_U64(got.flow.sock_id, SOCK + 1);
+    CHECK_U64(filtered(&f, FT_Q_TRANSFERS, "files.example.com", nullptr), 1);
+    CHECK_U64(filtered(&f, FT_Q_TRANSFERS, "logs.example.net", nullptr), 0);
+
+    /* A remote end nobody named matches no pattern, not even one that matches every name. */
+    CHECK_U64(filtered(&f, FT_Q_CONNECTIONS, "*", nullptr), 2);
+    CHECK_U64(filtered(&f, FT_Q_FLOWS, "*", nullptr), 2);
+
+    /* Beside an address filter, both have to hold. */
+    CHECK_U64(filtered(&f, FT_Q_CONNECTIONS, "*.example.*", &files), 1);
+    CHECK_U64(filtered(&f, FT_Q_CONNECTIONS, "*.example.*", &elsewhere), 0);
+
+    /* A record is matched by the one name it carries. */
+    CHECK_U64(filtered(&f, FT_Q_EVENTS, "cdn.example.com", nullptr), 2);
+    CHECK_U64(filtered(&f, FT_Q_EVENTS, "www.example.org", nullptr), 2);
+    CHECK_U64(filtered(&f, FT_Q_EVENTS, "files.example.com", nullptr), 0);
+    CHECK_U64(filtered(&f, FT_Q_EVENTS, "logs.example.net", nullptr), 1);
+    fixture_close(&f);
+}
+
 void test_binding(void)
 {
+    names_filter_what_is_listed();
     lookup_names_the_connection();
     several_names_for_one_address();
     a_connection_keeps_its_names();

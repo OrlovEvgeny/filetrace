@@ -314,9 +314,12 @@ int ft_query_args_parse(struct ft_query_args *qa, struct ft_args *a)
     if (OPTION(FT_QO_REMOTE, "--remote")) {
         if (r < 0)
             return -1;
-        return parse_network(v, &q->remote, &q->remote_host_bits)
-                   ? 1
-                   : bad_value(qa, "--remote", v, "an IP address or CIDR network");
+        /* What is no address is a name; it is matched as given, never looked up. */
+        if (parse_network(v, &q->remote, &q->remote_host_bits) ||
+            ft_name_pattern(v, q->remote_name))
+            return 1;
+        return bad_value(qa, "--remote", v,
+                         "an IP address, a CIDR network or a host name; '*' wildcards in a name");
     }
     if (OPTION(FT_QO_LOCAL, "--local")) {
         if (r < 0)
@@ -514,7 +517,10 @@ void ft_query_args_help(FILE *out, uint32_t allowed, uint32_t sorts, uint32_t fo
         {FT_QO_FILE_MATCH, "  --path-regex <regex>    Only files whose path matches this POSIX\n"
                            "                          extended regular expression\n"
                            "  --min-size <size>       Only files at least this large\n"},
-        {FT_QO_REMOTE, "  --remote <ip|cidr>      Only this remote address or network\n"},
+        {FT_QO_REMOTE,
+         "  --remote <ip|cidr|name> Only this remote address or network, or only what\n"
+         "                          a process reached by this name ('*' wildcards);\n"
+         "                          a remote end without a known name matches none\n"},
         {FT_QO_LOCAL, "  --local <ip|cidr>       Only this local address or network\n"},
         {FT_QO_PORT, "  --port <port>           Only this local or remote port\n"},
         {FT_QO_PROTOCOL, "  --protocol tcp|udp|all  Only this protocol (default: all)\n"},

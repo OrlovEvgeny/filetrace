@@ -66,6 +66,15 @@ says "top refuses an unknown window" 2 \
 says "top refuses a limit of 0" 2 \
     "filetrace: invalid value '0' for --limit (expected a number from 1 to 1000)" \
     top --leaders --limit 0
+says "a remote that is neither an address nor a name is refused" 2 \
+    "filetrace: invalid value 'x y' for --remote (expected an IP address, a CIDR network or a host name; '*' wildcards in a name)" \
+    files --remote 'x y'
+says "half an address is not taken for a name" 2 \
+    "filetrace: invalid value '10.0.0' for --remote (expected an IP address, a CIDR network or a host name; '*' wildcards in a name)" \
+    files --remote 10.0.0
+says "an address with a wildcard is not taken for a name" 2 \
+    "filetrace: invalid value '10.0.*' for --remote (expected an IP address, a CIDR network or a host name; '*' wildcards in a name)" \
+    connections --remote '10.0.*'
 says "top refuses a remote that is not an address" 2 \
     "filetrace: invalid value 'example.org' for --remote (expected an IP address or CIDR network)" \
     top --remote example.org

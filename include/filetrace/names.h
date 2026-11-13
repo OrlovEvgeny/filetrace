@@ -14,6 +14,16 @@ enum ft_name_kind : uint8_t {
 /* Writes a host name as names are kept and compared: in lower case, without a trailing dot. */
 enum ft_name_kind ft_name_normalise(const char *text, char out[static FT_NAME_MAX]);
 
+/*
+ * Writes a pattern for names, where '*' stands for any run of characters, as names are kept.
+ * False for text that could match no name, and for digits without a letter: a mistyped address
+ * would otherwise list nothing, which reads as nothing having gone there.
+ */
+bool ft_name_pattern(const char *text, char out[static FT_NAME_MAX]);
+
+/* Whether a kept name matches the pattern; the pattern's case does not count. */
+bool ft_name_matches(const char *pattern, const char *name);
+
 /* How a process came to use a name for a connection. */
 enum ft_name_source : uint8_t {
     FT_NAME_SOURCE_NONE = 0,

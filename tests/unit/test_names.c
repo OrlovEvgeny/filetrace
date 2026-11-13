@@ -226,8 +226,56 @@ static void shown_by_what_is_known(void)
     CHECK_STR(cut, "s3.example.");
 }
 
+static void check_pattern(const char *text, const char *kept)
+{
+    char out[FT_NAME_MAX];
+    CHECK(ft_name_pattern(text, out) == (kept != nullptr));
+    CHECK_STR(out, kept ? kept : "");
+}
+
+static void patterns(void)
+{
+    char longest[FT_NAME_MAX + 1];
+
+    check_pattern("Files.Example.com.", "files.example.com");
+    check_pattern("*.Example.COM", "*.example.com");
+    check_pattern("cdn-*.example.*", "cdn-*.example.*");
+    check_pattern("*", "*");
+    check_pattern("*.*", "*.*");
+    check_pattern("host-7.*", "host-7.*");
+    /* Digits without a letter are an address typed wrong, not a name to look for. */
+    check_pattern("10.0.*", nullptr);
+    check_pattern("10.0.0", nullptr);
+    check_pattern("203.0.113.25.", nullptr);
+    check_pattern("", nullptr);
+    check_pattern("two words", nullptr);
+    check_pattern("a?c.example", nullptr);
+    check_pattern("[ab].example", nullptr);
+    check_pattern("host/path", nullptr);
+    memset(longest, 'a', sizeof(longest));
+    longest[FT_NAME_MAX] = '\0';
+    check_pattern(longest, nullptr);
+
+    CHECK(ft_name_matches("files.example.com", "files.example.com"));
+    CHECK(!ft_name_matches("files.example.com", "files.example.com.evil.test"));
+    CHECK(!ft_name_matches("files.example.com", "xfiles.example.com"));
+    CHECK(ft_name_matches("*.example.com", "files.example.com"));
+    CHECK(ft_name_matches("*.example.com", "a.b.example.com"));
+    CHECK(!ft_name_matches("*.example.com", "example.com"));
+    CHECK(ft_name_matches("cdn-*.example.*", "cdn-7.example.net"));
+    CHECK(!ft_name_matches("cdn-*.example.*", "cdn.example.net"));
+    CHECK(ft_name_matches("*a*a*", "banana"));
+    CHECK(!ft_name_matches("*a*a*a*a*", "banana"));
+    CHECK(ft_name_matches("*", "anything.at.all"));
+    CHECK(ft_name_matches("**", ""));
+    /* Names are kept in lower case; a pattern from elsewhere need not be. */
+    CHECK(ft_name_matches("*.Example.COM", "files.example.com"));
+    CHECK(!ft_name_matches("", "files.example.com"));
+}
+
 void test_names(void)
 {
+    patterns();
     shown_by_what_is_known();
     normalised();
     one_name_one_slot();
