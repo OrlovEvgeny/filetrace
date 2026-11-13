@@ -670,6 +670,9 @@ static __always_inline bool sock_heard(__u64 sk)
     return BPF_CORE_READ((struct tcp_sock *)sk, bytes_received) != 0;
 }
 
+/* Whether the socket had heard from its peer when the thread's send on it began. */
+static __always_inline bool sock_heard_at_send(__u64 sk);
+
 /*
  * Whether the socket had sent more than a first flight that is only a handshake or a request
  * before a send of the given bytes, which the counter already holds.
@@ -1189,7 +1192,7 @@ static __always_inline void carry_send_starts(void *map, __u64 sk, __u64 bytes, 
     struct carry *c = carry_get(sk, tid);
     if (!c || c->kind != CARRY_FLIGHT)
         return;
-    if (sock_heard(sk)) {
+    if (sock_heard_at_send(sk)) {
         carry_close(map, sk, tid, CARRY_AGAIN, now);
         return;
     }
@@ -1482,7 +1485,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     if (c && !reuse)
         carry_close(map, sk, tid, stale ? carry_end_gone(c) : CARRY_NEXT, now);
     __u8 kind = 0;
-    if (!sock_heard(sk) && !sock_flown(sk, sending))
+    if (!sock_heard_at_send(sk) && !sock_flown(sk, sending))
         kind = CARRY_FLIGHT;
     else if (!foreground || (ts->file_size && ts->file_size < CARRY_FLOOR) || thread_held(ts))
         kind = CARRY_EPISODE;

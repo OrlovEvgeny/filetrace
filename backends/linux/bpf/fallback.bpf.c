@@ -270,6 +270,12 @@ static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
     return FT_READ((struct sock *)sk, sk_write_pending) > 0;
 }
 
+/* A send is seen as it begins. */
+static __always_inline bool sock_heard_at_send(__u64 sk)
+{
+    return sock_heard(sk);
+}
+
 static __always_inline __u64 sock_cookie(__u64 sk)
 {
     struct sock_track *t = bpf_map_lookup_elem(&socks, &sk);
