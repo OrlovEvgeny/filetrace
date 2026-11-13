@@ -1,13 +1,17 @@
 #include "unit/test.h"
 
+#include "agent/telemetry.h"
 #include "exporters/otlp.h"
+#include "filetrace/clock.h"
 #include "filetrace/schema.h"
 #include "filetrace/state.h"
+#include "rpc/grpc.h"
 
 #include "opentelemetry/proto/collector/logs/v1/logs_service.pb-c.h"
 #include "opentelemetry/proto/collector/metrics/v1/metrics_service.pb-c.h"
 
 #include <stdlib.h>
+#include <unistd.h>
 
 typedef Opentelemetry__Proto__Common__V1__KeyValue KeyValue;
 typedef Opentelemetry__Proto__Logs__V1__LogRecord LogRecord;
@@ -97,7 +101,7 @@ static void describes_a_transfer_with_standard_names(void)
     struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false, true);
     struct ft_row_event *row = transfer_row(8192, 1000);
 
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     LogsRequest *request = encode(batch);
     CHECK_U64(ft_otlp_logs_count(batch), 0);
     CHECK_U64(request->n_resource_logs, 1);
@@ -150,27 +154,27 @@ static void sums_the_parts_of_one_transfer(void)
     row->method = FT_METHOD_READ_SEND;
     row->read_bytes = 1500;
     row->flags = 0;
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
 
     row->bytes = 2000;
     row->read_bytes = 2500;
     row->time_ns = 200;
     row->confidence = FT_CONF_INFERRED;
     row->flags = FT_EVENT_HAS_CONFIDENCE;
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
 
     /* The same file on another socket is another transfer. */
     row->sock_id = 422;
     row->bytes = 7;
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
 
     /* Events that carry no bytes are never joined. */
     struct ft_row_event *loss = calloc(1, sizeof(*loss));
     loss->type = FT_REC_EVENT_LOSS;
     loss->bytes = 12;
     loss->loss_kind = FT_LOSS_EVENT_QUEUE;
-    CHECK(ft_otlp_logs_add(batch, loss));
-    CHECK(ft_otlp_logs_add(batch, loss));
+    CHECK(ft_otlp_logs_add(batch, loss, nullptr));
+    CHECK(ft_otlp_logs_add(batch, loss, nullptr));
     CHECK_U64(ft_otlp_logs_count(batch), 4);
 
     LogsRequest *request = encode(batch);
@@ -205,8 +209,8 @@ static void leaves_paths_out_on_request_and_keeps_text_valid(void)
     struct ft_row_event *row = transfer_row(10, 1);
 
     ft_strlcpy(row->text, "/data/caf\xe9.pdf", sizeof(row->text));
-    CHECK(ft_otlp_logs_add(hidden, row));
-    CHECK(ft_otlp_logs_add(shown, row));
+    CHECK(ft_otlp_logs_add(hidden, row, nullptr));
+    CHECK(ft_otlp_logs_add(shown, row, nullptr));
 
     LogsRequest *request = encode(hidden);
     const LogRecord *r = request->resource_logs[0]->scope_logs[0]->log_records[0];
@@ -230,14 +234,14 @@ static void refuses_more_than_a_batch_holds(void)
     struct ft_otlp_logs *batch = ft_otlp_logs_new(2, true, false, true);
     struct ft_row_event *row = transfer_row(10, 1);
 
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     row->sock_id++;
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     row->sock_id++;
-    CHECK(!ft_otlp_logs_add(batch, row));
+    CHECK(!ft_otlp_logs_add(batch, row, nullptr));
     /* What is already in the batch still takes its bytes. */
     row->sock_id--;
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     CHECK_U64(ft_otlp_logs_count(batch), 2);
 
     ft_otlp_logs_free(batch);
@@ -347,9 +351,9 @@ static void says_what_a_process_runs(void)
     struct ft_row_event *row = transfer_row(10, 1);
 
     set_strings(row, "python3 export.py --token=abc", "/srv/app", "/srv/app/export.py");
-    CHECK(ft_otlp_logs_add(quiet, row));
-    CHECK(ft_otlp_logs_add(full, row));
-    CHECK(ft_otlp_logs_add(pathless, row));
+    CHECK(ft_otlp_logs_add(quiet, row, nullptr));
+    CHECK(ft_otlp_logs_add(full, row, nullptr));
+    CHECK(ft_otlp_logs_add(pathless, row, nullptr));
 
     LogsRequest *request = encode(quiet);
     const LogRecord *r = only_record(request);
@@ -376,7 +380,7 @@ static void says_what_a_process_runs(void)
     free(row);
     row = transfer_row(10, 1);
     set_strings(row, "php-fpm: pool site1", "/", "pool:site1");
-    CHECK(ft_otlp_logs_add(pathless, row));
+    CHECK(ft_otlp_logs_add(pathless, row, nullptr));
     request = encode(pathless);
     CHECK_STR(text(only_record(request), "filetrace.process.script"), "pool:site1");
     release(request);
@@ -395,14 +399,14 @@ static void sums_keep_the_first_strings(void)
     struct ft_row_event *described = transfer_row(20, 2);
 
     set_strings(described, "python3 export.py", "/srv/app", "/srv/app/export.py");
-    CHECK(ft_otlp_logs_add(batch, bare));
-    CHECK(ft_otlp_logs_add(batch, described));
+    CHECK(ft_otlp_logs_add(batch, bare, nullptr));
+    CHECK(ft_otlp_logs_add(batch, described, nullptr));
     described->sock_id++;
-    CHECK(ft_otlp_logs_add(batch, described));
+    CHECK(ft_otlp_logs_add(batch, described, nullptr));
     bare->sock_id = described->sock_id;
-    CHECK(ft_otlp_logs_add(batch, bare));
+    CHECK(ft_otlp_logs_add(batch, bare, nullptr));
     described->sock_id++;
-    CHECK(ft_otlp_logs_add(batch, described));
+    CHECK(ft_otlp_logs_add(batch, described, nullptr));
 
     LogsRequest *request = encode(batch);
     const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
@@ -436,7 +440,7 @@ static void keeps_named_records_apart(void)
         ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP, "files.example.com");
         for (uint64_t sock = 1; sock <= 3; sock++) {
             row->sock_id = sock;
-            CHECK(ft_otlp_logs_add(batch, row));
+            CHECK(ft_otlp_logs_add(batch, row, nullptr));
         }
         LogsRequest *request = encode(batch);
         const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
@@ -465,7 +469,7 @@ static void names_the_remote_end(void)
     ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP_TLS, "files.example.com");
     for (size_t i = 0; i < FT_ARRAY_LEN(types); i++) {
         row->type = (uint8_t)types[i];
-        CHECK(ft_otlp_logs_add(batch, row));
+        CHECK(ft_otlp_logs_add(batch, row, nullptr));
     }
     LogsRequest *request = encode(batch);
     const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
@@ -482,17 +486,17 @@ static void names_the_remote_end(void)
 
     /* Each source by its name; without a name, no attribute. */
     ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP, "files.example.com");
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     request = encode(batch);
     CHECK_STR(text(only_record(request), "filetrace.server.address.source"), "lookup");
     release(request);
     ft_row_event_set_name(row, FT_NAME_SOURCE_TLS, "files.example.com");
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     request = encode(batch);
     CHECK_STR(text(only_record(request), "filetrace.server.address.source"), "tls");
     release(request);
     ft_row_event_set_name(row, FT_NAME_SOURCE_NONE, "");
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     request = encode(batch);
     CHECK_STR(text(only_record(request), "server.address"), "(absent)");
     CHECK_STR(text(only_record(request), "filetrace.server.address.source"), "(absent)");
@@ -504,7 +508,7 @@ static void names_the_remote_end(void)
 
 static uint8_t *encode_one(struct ft_otlp_logs *batch, const struct ft_row_event *row, size_t *size)
 {
-    CHECK(ft_otlp_logs_add(batch, row));
+    CHECK(ft_otlp_logs_add(batch, row, nullptr));
     uint8_t *bytes = ft_otlp_logs_encode(batch, resource, FT_ARRAY_LEN(resource), 9000, size);
     CHECK(bytes != nullptr);
     return bytes;
@@ -545,8 +549,8 @@ static void sums_under_one_name(void)
     for (int i = 0; i < 4; i++) {
         if (i == 2)
             ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP_TLS, "files.example.com");
-        CHECK(ft_otlp_logs_add(batch, row));
-        CHECK(ft_otlp_logs_add(off, row));
+        CHECK(ft_otlp_logs_add(batch, row, nullptr));
+        CHECK(ft_otlp_logs_add(off, row, nullptr));
     }
     CHECK_U64(ft_otlp_logs_count(batch), 2);
     CHECK_U64(ft_otlp_logs_count(off), 1);
@@ -571,6 +575,263 @@ static void sums_under_one_name(void)
     free(row);
 }
 
+static const KeyValue *attribute(const LogRecord *r, const char *key)
+{
+    return find(r->attributes, r->n_attributes, key);
+}
+
+/* The looked-up names go with the record of a transfer, as a list of strings. */
+static void lists_the_names_looked_up(void)
+{
+    /* AnyValue{array_value: {values: [{string_value: ...}, {string_value: ...}]}} */
+    static const char list[] = "\x2a\x29"
+                               "\x0a\x11\x0a\x0f"
+                               "cdn.example.com"
+                               "\x0a\x14\x0a\x12"
+                               "static.example.com";
+    struct ft_remote_names names = {
+        .tls = "",
+        .resolved = {"cdn.example.com", "static.example.com"},
+        .listed = 2,
+        .count = 3,
+    };
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false, true);
+    struct ft_otlp_logs *off = ft_otlp_logs_new(16, true, false, false);
+    struct ft_row_event *row = transfer_row(10, 1);
+
+    ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP, "cdn.example.com");
+    CHECK(ft_otlp_logs_add(batch, row, &names));
+    CHECK(ft_otlp_logs_add(off, row, &names));
+    row->type = FT_REC_NETWORK_SEND;
+    CHECK(ft_otlp_logs_add(batch, row, &names));
+    LogsRequest *request = encode(batch);
+    const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
+        request->resource_logs[0]->scope_logs[0];
+    CHECK_U64(scope->n_log_records, 2);
+    const KeyValue *kv = attribute(scope->log_records[0], "filetrace.server.resolved_names");
+    CHECK(kv &&
+          kv->value->value_case == OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_ARRAY_VALUE);
+    if (kv &&
+        kv->value->value_case == OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_ARRAY_VALUE) {
+        uint8_t packed[sizeof(list)];
+        size_t size = opentelemetry__proto__common__v1__any_value__get_packed_size(kv->value);
+        CHECK_U64(size, sizeof(list) - 1);
+        if (size < sizeof(packed)) {
+            opentelemetry__proto__common__v1__any_value__pack(kv->value, packed);
+            CHECK(memcmp(packed, list, size) == 0);
+        }
+    }
+    CHECK_STR(text(scope->log_records[1], "server.address"), "cdn.example.com");
+    CHECK(attribute(scope->log_records[1], "filetrace.server.resolved_names") == nullptr);
+    release(request);
+
+    request = encode(off);
+    CHECK(attribute(only_record(request), "server.address") == nullptr);
+    CHECK(attribute(only_record(request), "filetrace.server.resolved_names") == nullptr);
+    release(request);
+
+    /* A name only from TLS has nothing looked up to list. */
+    struct ft_remote_names tls_only = {.tls = "files.example.com"};
+    row->type = FT_REC_FILE_TRANSFER;
+    ft_row_event_set_name(row, FT_NAME_SOURCE_TLS, "files.example.com");
+    CHECK(ft_otlp_logs_add(batch, row, &tls_only));
+    request = encode(batch);
+    CHECK_STR(text(only_record(request), "server.address"), "files.example.com");
+    CHECK(attribute(only_record(request), "filetrace.server.resolved_names") == nullptr);
+    release(request);
+
+    /* Parts with the same names are summed, and those with others are not. */
+    struct ft_remote_names fewer = {.tls = "", .resolved = {"cdn.example.com"}, .listed = 1};
+    ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP, "cdn.example.com");
+    CHECK(ft_otlp_logs_add(batch, row, &names));
+    CHECK(ft_otlp_logs_add(batch, row, &names));
+    CHECK(ft_otlp_logs_add(batch, row, &fewer));
+    CHECK_U64(ft_otlp_logs_count(batch), 2);
+    request = encode(batch);
+    scope = request->resource_logs[0]->scope_logs[0];
+    CHECK_U64(scope->n_log_records, 2);
+    if (scope->n_log_records == 2) {
+        CHECK_U64(number(scope->log_records[0], "filetrace.transfer.bytes"), 20);
+        kv = attribute(scope->log_records[1], "filetrace.server.resolved_names");
+        CHECK(kv && kv->value->array_value && kv->value->array_value->n_values == 1);
+    }
+    release(request);
+
+    ft_otlp_logs_free(batch);
+    ft_otlp_logs_free(off);
+    free(row);
+}
+
+/* Stands in for an OpenTelemetry collector and keeps the first log request it is sent. */
+static void collect(void *ctx, struct ft_grpc_call *call, const char *path, const uint8_t *request,
+                    size_t size)
+{
+    LogsRequest **logs = ctx;
+
+    if (strcmp(path, FT_OTLP_LOGS_PATH) == 0 && !*logs)
+        *logs = opentelemetry__proto__collector__logs__v1__export_logs_service_request__unpack(
+            nullptr, size, request);
+    ft_grpc_send(call, nullptr, 0);
+    ft_grpc_finish(call, FT_GRPC_OK, nullptr);
+}
+
+static void collect_end(void *ctx, struct ft_grpc_call *call)
+{
+    (void)ctx;
+    (void)call;
+}
+
+static void no_stats(void *agent, uint64_t now_ns, struct ft_row_stats *row)
+{
+    (void)agent;
+    (void)now_ns;
+    (void)row;
+}
+
+static void to_otlp(void *ctx, const struct ft_row_event *row)
+{
+    ft_otlp_record(ctx, row);
+}
+
+static void ingest(struct ft_state *st, struct ft_event *ev)
+{
+    static uint64_t now;
+
+    now = now ? now + FT_NS_PER_MS : ft_clock_mono_ns();
+    ev->ts_ns = now;
+    ft_state_ingest(st, ev);
+}
+
+/* A process looks up two names for an address, connects to it and sends a file. */
+static void send_to_two_names(struct ft_state *st)
+{
+    static const char *const looked_up[] = {"static.example.com", "cdn.example.com"};
+    static const uint8_t remote[16] = {203, 0, 113, 25};
+    static const enum ft_sock_state states[] = {FT_SOCK_CONNECTING, FT_SOCK_ESTABLISHED};
+    struct ft_event ev = {.type = FT_EVENT_PROCESS_EXEC};
+
+    ev.process.pid = 3312;
+    ev.process.ppid = 1;
+    ev.process.start_ns = 1;
+    ft_strlcpy(ev.process.comm, "curl", sizeof(ev.process.comm));
+    ingest(st, &ev);
+    for (size_t i = 0; i < FT_ARRAY_LEN(looked_up); i++) {
+        ev = (struct ft_event){.type = FT_EVENT_NAME_LOOKUP};
+        ev.lookup.pid = 3312;
+        ev.lookup.tid = 3312;
+        ev.lookup.name = looked_up[i];
+        ev.lookup.addr_count = 1;
+        ft_endpoint_set(&ev.lookup.addrs[0], false, remote, 0);
+        ingest(st, &ev);
+    }
+    for (size_t i = 0; i < FT_ARRAY_LEN(states); i++) {
+        ev = (struct ft_event){.type = FT_EVENT_SOCKET_STATE};
+        ev.socket.sock_id = 41;
+        ev.socket.pid = 3312;
+        ev.socket.tid = 3312;
+        ev.socket.proto = FT_PROTO_TCP;
+        ev.socket.state = states[i];
+        ft_endpoint_set(&ev.socket.remote, false, remote, 443);
+        ingest(st, &ev);
+    }
+    ev = (struct ft_event){.type = FT_EVENT_FILE_SEEN};
+    ev.file.id = (struct ft_file_id){.dev = 2049, .ino = 77};
+    ev.file.path = "/data/invoice.pdf";
+    ev.file.size = 65536;
+    ingest(st, &ev);
+    ev = (struct ft_event){.type = FT_EVENT_TRANSFER};
+    ev.transfer.sock_id = 41;
+    ev.transfer.pid = 3312;
+    ev.transfer.method = FT_METHOD_SENDFILE;
+    ev.transfer.file = (struct ft_file_id){.dev = 2049, .ino = 77};
+    ev.transfer.first_ns = ft_clock_mono_ns();
+    ev.transfer.bytes = 65536;
+    ev.transfer.ops = 1;
+    ingest(st, &ev);
+}
+
+/* What the agent's exporter sends a collector for that transfer, with names on or off. */
+static LogsRequest *exported(bool names)
+{
+    static struct ft_poller poller;
+    char dir[] = "/tmp/filetrace-otlp-XXXXXX";
+    struct ft_agent_config agent;
+    struct ft_state_config state_cfg;
+    struct ft_net_addr addr;
+    struct ft_error err = {0};
+    LogsRequest *logs = nullptr;
+    struct ft_grpc_service service = {.ctx = &logs, .on_call = collect, .on_end = collect_end};
+
+    CHECK(mkdtemp(dir) != nullptr);
+    ft_agent_config_defaults(&agent);
+    struct ft_otlp_config cfg = agent.otlp;
+    cfg.enabled = true;
+    cfg.metrics = false;
+    cfg.names = names;
+    cfg.flush_interval_ns = 10 * FT_NS_PER_MS;
+    snprintf(cfg.endpoint, sizeof(cfg.endpoint), "unix:%s/collector.sock", dir);
+    CHECK(ft_net_addr_parse(cfg.endpoint, &addr));
+    struct ft_grpc_server *collector =
+        ft_grpc_server_new(ft_net_listen(&addr, &err), true, &service);
+
+    ft_state_config_defaults(&state_cfg);
+    struct ft_state *st = ft_state_create(&state_cfg);
+    struct ft_telemetry_source src = {.state = st, .stats = no_stats, .host = "web-01"};
+    struct ft_otlp *o = ft_otlp_open(&cfg, &src, &err);
+    CHECK(o != nullptr);
+    st->on_record = to_otlp;
+    st->on_record_ctx = o;
+    send_to_two_names(st);
+
+    uint64_t give_up_ns = ft_clock_mono_ns() + 2 * FT_NS_PER_SEC;
+    while (!logs && ft_clock_mono_ns() < give_up_ns) {
+        uint64_t now_ns = ft_clock_mono_ns();
+        ft_poller_begin(&poller, now_ns + 10 * FT_NS_PER_MS);
+        ft_otlp_poll(o, &poller);
+        ft_grpc_server_poll(collector, &poller);
+        ft_poller_wait(&poller, now_ns);
+        ft_grpc_server_dispatch(collector, &poller);
+        ft_otlp_dispatch(o, &poller, ft_clock_mono_ns());
+    }
+    CHECK(logs != nullptr);
+
+    ft_otlp_close(o);
+    ft_grpc_server_free(collector);
+    ft_state_destroy(st);
+    unlink(cfg.endpoint + 5);
+    rmdir(dir);
+    return logs;
+}
+
+/* The exporter takes the looked-up names from the socket while the record is made. */
+static void exports_the_names_of_a_transfer(void)
+{
+    LogsRequest *on = exported(true);
+    LogsRequest *off = exported(false);
+
+    if (on) {
+        const LogRecord *r = only_record(on);
+        CHECK_STR(text(r, "file.path"), "/data/invoice.pdf");
+        CHECK_STR(text(r, "server.address"), "cdn.example.com");
+        CHECK_STR(text(r, "filetrace.server.address.source"), "lookup");
+        const KeyValue *kv = attribute(r, "filetrace.server.resolved_names");
+        CHECK(kv && kv->value->array_value && kv->value->array_value->n_values == 2);
+        if (kv && kv->value->array_value && kv->value->array_value->n_values == 2) {
+            CHECK_STR(kv->value->array_value->values[0]->string_value, "cdn.example.com");
+            CHECK_STR(kv->value->array_value->values[1]->string_value, "static.example.com");
+        }
+        release(on);
+    }
+    if (off) {
+        const LogRecord *r = only_record(off);
+        CHECK_STR(text(r, "file.path"), "/data/invoice.pdf");
+        CHECK(attribute(r, "server.address") == nullptr);
+        CHECK(attribute(r, "filetrace.server.address.source") == nullptr);
+        CHECK(attribute(r, "filetrace.server.resolved_names") == nullptr);
+        release(off);
+    }
+}
+
 void test_otlp(void)
 {
     describes_a_transfer_with_standard_names();
@@ -584,4 +845,6 @@ void test_otlp(void)
     names_the_remote_end();
     leaves_names_out_on_request();
     sums_under_one_name();
+    lists_the_names_looked_up();
+    exports_the_names_of_a_transfer();
 }

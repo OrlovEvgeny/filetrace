@@ -14,6 +14,7 @@
 #include <sys/wait.h>
 
 typedef Opentelemetry__Proto__Common__V1__AnyValue AnyValue;
+typedef Opentelemetry__Proto__Common__V1__ArrayValue ArrayValue;
 typedef Opentelemetry__Proto__Common__V1__KeyValue KeyValue;
 typedef Opentelemetry__Proto__Common__V1__InstrumentationScope Scope;
 typedef Opentelemetry__Proto__Resource__V1__Resource Resource;
@@ -100,6 +101,31 @@ static void attr_bool(struct attrs *l, const char *key, bool value)
     v->bool_value = value;
 }
 
+static void attr_strings(struct attrs *l, const char *key, const char *const *values, size_t count)
+{
+    ArrayValue *array = ft_arena_alloc(l->arena, sizeof(*array));
+    AnyValue **items = ft_arena_alloc(l->arena, (count ? count : 1) * sizeof(*items));
+    if (!array || !items)
+        return;
+    opentelemetry__proto__common__v1__array_value__init(array);
+    for (size_t i = 0; i < count; i++) {
+        AnyValue *item = ft_arena_alloc(l->arena, sizeof(*item));
+        if (!item)
+            return;
+        opentelemetry__proto__common__v1__any_value__init(item);
+        item->value_case = OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_STRING_VALUE;
+        item->string_value = ft_arena_text(l->arena, values[i]);
+        items[array->n_values++] = item;
+    }
+    array->values = items;
+
+    AnyValue *v = attr_add(l, key);
+    if (!v)
+        return;
+    v->value_case = OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_ARRAY_VALUE;
+    v->array_value = array;
+}
+
 static Resource *make_resource(struct ft_arena *a, const struct ft_metric_attr *attrs, size_t count)
 {
     Resource *resource = ft_arena_alloc(a, sizeof(*resource));
@@ -139,12 +165,19 @@ struct merge_key {
     struct ft_endpoint remote;
 };
 
+/* A record as a batch keeps it: its row up to the last string, then the names looked up. */
+struct entry {
+    uint32_t size;    /* of the whole entry, aligned */
+    uint8_t resolved; /* looked-up names after the row */
+    struct ft_row_event row;
+};
+
 struct ft_otlp_logs {
     size_t max_records;
     bool file_paths;
     bool command_line;
     bool names;
-    unsigned char *rows; /* struct ft_row_event up to its text's end, each aligned */
+    unsigned char *rows; /* struct entry, each aligned */
     size_t rows_len;
     size_t rows_cap;
     size_t count;
@@ -200,10 +233,10 @@ static bool carries_bytes(const struct ft_row_event *e)
            e->type == FT_REC_FILE_TRANSFER;
 }
 
-static size_t stored_size(size_t text_bytes)
+static size_t entry_size(size_t row_and_names)
 {
-    return (offsetof(struct ft_row_event, text) + text_bytes + alignof(struct ft_row_event) - 1) &
-           ~(alignof(struct ft_row_event) - 1);
+    return (offsetof(struct entry, row) + row_and_names + alignof(struct entry) - 1) &
+           ~(alignof(struct entry) - 1);
 }
 
 /* The process strings of the record that the batch's settings let leave. */
@@ -223,20 +256,59 @@ static bool exported_strings(const struct ft_otlp_logs *b, const struct ft_row_e
     return out->command_line[0] || out->cwd[0] || out->script[0];
 }
 
-static struct ft_row_event *row_at(const struct ft_otlp_logs *b, size_t offset)
+static struct entry *entry_at(const struct ft_otlp_logs *b, size_t offset)
 {
-    return (struct ft_row_event *)(void *)(b->rows + offset);
+    return (struct entry *)(void *)(b->rows + offset);
 }
 
-/* Whether a record in the batch has the name that a record taken now would keep. */
-static bool same_name(const struct ft_row_event *kept, const char *name, uint8_t source)
+static size_t entry_resolved(const struct entry *e, const char *out[static FT_RESOLVED_NAMES])
 {
+    const char *at = (const char *)&e->row + ft_row_event_size(&e->row);
+
+    for (size_t i = 0; i < e->resolved; i++) {
+        out[i] = at;
+        at += strlen(at) + 1;
+    }
+    return e->resolved;
+}
+
+/* Whether a record in the batch has the names that a record taken now would keep. */
+static bool same_names(const struct entry *kept, const char *name, uint8_t source,
+                       const char *const *resolved, size_t count)
+{
+    const char *kept_resolved[FT_RESOLVED_NAMES];
+
     if (!name[0])
-        return kept->name_source == FT_NAME_SOURCE_NONE;
-    return kept->name_source == source && strcmp(ft_row_event_name(kept), name) == 0;
+        return kept->row.name_source == FT_NAME_SOURCE_NONE;
+    if (kept->row.name_source != source || strcmp(ft_row_event_name(&kept->row), name) != 0 ||
+        entry_resolved(kept, kept_resolved) != count)
+        return false;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(kept_resolved[i], resolved[i]) != 0)
+            return false;
+    }
+    return true;
 }
 
-bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
+/* The looked-up names a record with this name keeps, and the bytes they take after its row. */
+static size_t names_to_keep(const struct ft_row_event *row, const char *name,
+                            const struct ft_remote_names *names,
+                            const char *out[static FT_RESOLVED_NAMES], size_t *size)
+{
+    size_t count = 0;
+
+    *size = 0;
+    if (!name[0] || !names || row->type != FT_REC_FILE_TRANSFER)
+        return 0;
+    for (uint32_t i = 0; i < names->listed && i < FT_RESOLVED_NAMES; i++) {
+        out[count++] = names->resolved[i];
+        *size += strnlen(names->resolved[i], FT_NAME_MAX - 1) + 1;
+    }
+    return count;
+}
+
+bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row,
+                      const struct ft_remote_names *names)
 {
     bool keep_text = b->file_paths || !about_file(row);
     size_t text_len = keep_text ? strnlen(row->text, FT_PATH_MAX - 1) : 0;
@@ -246,8 +318,12 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
                                              strlen(strings.script) + 3
                                        : 0;
     const char *name = b->names ? ft_row_event_name(row) : "";
-    size_t name_size = name[0] ? strlen(name) + 1 : 0;
-    size_t size = stored_size(text_len + 1 + strings_size + name_size);
+    size_t name_size = name[0] ? strnlen(name, FT_NAME_MAX - 1) + 1 : 0;
+    const char *resolved[FT_RESOLVED_NAMES];
+    size_t resolved_size;
+    size_t resolved_count = names_to_keep(row, name, names, resolved, &resolved_size);
+    size_t size = entry_size(offsetof(struct ft_row_event, text) + text_len + 1 + strings_size +
+                             name_size + resolved_size);
     struct merge_key key;
 
     if (carries_bytes(row)) {
@@ -262,8 +338,9 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
 
         const size_t *offset = ft_table_find(b->merged, &key);
         /* Bytes sent under another name of the remote end are a record of their own. */
-        if (offset && same_name(row_at(b, *offset), name, row->name_source)) {
-            struct ft_row_event *sum = row_at(b, *offset);
+        if (offset &&
+            same_names(entry_at(b, *offset), name, row->name_source, resolved, resolved_count)) {
+            struct ft_row_event *sum = &entry_at(b, *offset)->row;
             sum->bytes += row->bytes;
             sum->read_bytes += row->read_bytes;
             sum->time_ns = row->time_ns;
@@ -287,8 +364,10 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
         b->rows = grown;
         b->rows_cap = cap;
     }
-    struct ft_row_event *stored = row_at(b, b->rows_len);
-    memset(stored, 0, size);
+    struct entry *e = entry_at(b, b->rows_len);
+    struct ft_row_event *stored = &e->row;
+    memset(e, 0, size);
+    e->size = (uint32_t)size;
     memcpy(stored, row, offsetof(struct ft_row_event, text) + text_len);
     stored->flags &= (uint8_t)~FT_EVENT_PROCESS_TEXT;
     if (with_strings) {
@@ -296,6 +375,12 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
         stored->flags |= FT_EVENT_PROCESS_TEXT;
     }
     ft_row_event_set_name(stored, (enum ft_name_source)row->name_source, name);
+    char *after = (char *)stored + ft_row_event_size(stored);
+    for (size_t i = 0; i < resolved_count; i++) {
+        ft_strlcpy(after, resolved[i], FT_NAME_MAX);
+        after += strlen(after) + 1;
+    }
+    e->resolved = (uint8_t)resolved_count;
 
     if (carries_bytes(row)) {
         size_t *offset = ft_table_insert(b->merged, &key, nullptr);
@@ -320,8 +405,9 @@ static void attr_endpoint(struct attrs *l, const char *address_key, const char *
         attr_int(l, port_key, ep->port);
 }
 
-static void describe(struct attrs *l, const struct ft_row_event *e)
+static void describe(struct attrs *l, const struct entry *entry)
 {
+    const struct ft_row_event *e = &entry->row;
     const char *type = ft_record_type_name((enum ft_record_type)e->type);
     char text[32];
 
@@ -382,6 +468,10 @@ static void describe(struct attrs *l, const struct ft_row_event *e)
             attr_string(l, FT_ATTR_SERVER_ADDRESS_SOURCE,
                         ft_name_source_name((enum ft_name_source)e->name_source));
         }
+        const char *resolved[FT_RESOLVED_NAMES];
+        size_t count = entry_resolved(entry, resolved);
+        if (count)
+            attr_strings(l, FT_ATTR_SERVER_RESOLVED_NAMES, resolved, count);
     }
 
     switch (e->type) {
@@ -409,9 +499,9 @@ static void describe(struct attrs *l, const struct ft_row_event *e)
     }
 }
 
-static LogRecord *make_record(struct ft_arena *a, const struct ft_row_event *e,
-                              uint64_t now_wall_ns)
+static LogRecord *make_record(struct ft_arena *a, const struct entry *entry, uint64_t now_wall_ns)
 {
+    const struct ft_row_event *e = &entry->row;
     const char *type = ft_record_type_name((enum ft_record_type)e->type);
     LogRecord *record = ft_arena_alloc(a, sizeof(*record));
     AnyValue *body = ft_arena_alloc(a, sizeof(*body));
@@ -436,7 +526,7 @@ static LogRecord *make_record(struct ft_arena *a, const struct ft_row_event *e,
     record->body = body;
 
     struct attrs l = attrs_begin(a, MAX_ATTRS);
-    describe(&l, e);
+    describe(&l, entry);
     record->attributes = l.items;
     record->n_attributes = l.count;
     return record;
@@ -465,12 +555,12 @@ uint8_t *ft_otlp_logs_encode(struct ft_otlp_logs *b, const struct ft_metric_attr
     scope_logs.log_records = ft_arena_alloc(&a, (b->count ? b->count : 1) * sizeof(LogRecord *));
 
     for (size_t offset = 0; offset < b->rows_len && scope_logs.log_records;) {
-        const struct ft_row_event *row = row_at(b, offset);
-        LogRecord *record = make_record(&a, row, now_wall_ns);
+        const struct entry *e = entry_at(b, offset);
+        LogRecord *record = make_record(&a, e, now_wall_ns);
 
         if (record)
             scope_logs.log_records[scope_logs.n_log_records++] = record;
-        offset += stored_size(ft_row_event_size(row) - offsetof(struct ft_row_event, text));
+        offset += e->size;
     }
 
     if (!a.failed) {
