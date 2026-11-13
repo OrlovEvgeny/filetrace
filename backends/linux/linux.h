@@ -14,6 +14,7 @@ enum ft_probe_group : uint8_t {
     FT_PG_FILE_READ,
     FT_PG_SENDFILE,
     FT_PG_FILE_END, /* notices when a deleted file's inode number becomes free */
+    FT_PG_MAPPED,   /* reports the executable files processes map, for the libraries probed */
     FT_PG_COUNT,
 };
 

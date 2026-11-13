@@ -376,3 +376,10 @@ int BPF_PROG(ft_destroy_inode, struct inode *inode)
     forget_file(inode);
     return 0;
 }
+
+SEC("fentry/security_mmap_file")
+int BPF_PROG(ft_mapped_file, struct file *file, unsigned long prot, unsigned long flags)
+{
+    mapped_file(file, prot);
+    return 0;
+}
