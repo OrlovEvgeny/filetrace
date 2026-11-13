@@ -526,6 +526,24 @@ static void inspect_names(void)
     CHECK(ft_top_model_sample(f.m, &s));
     inspect_names_of(&f, 6, proxied_lines);
     inspect_names_of(&f, 7, looked_up_lines);
+
+    /* A process's transfers go to their names, or to their addresses after a. */
+    for (size_t i = 0; i < ft_top_row_count(f.m, FT_TOP_PROCESSES); i++) {
+        if (ft_top_row_at(f.m, FT_TOP_PROCESSES, i)->process->pid == 200)
+            ft_top_select_at(f.m, FT_TOP_PROCESSES, i);
+    }
+    f.ui.mode = FT_TOP_PROCESSES;
+    for (int addresses = 0; addresses < 2; addresses++) {
+        struct ft_canvas *c = canvas(174, 44);
+        struct ft_top_draw d = drawing(&f, c);
+        bool shown = false;
+        f.ui.addresses = addresses;
+        ft_top_draw_inspect(&d, (struct ft_rect){0, 36, 174, 7});
+        for (int y = 38; y <= 40; y++)
+            shown |= find_text(c, y, addresses ? "198.51.100.7:443" : "files.example.com:443") >= 0;
+        CHECK(shown);
+        ft_canvas_destroy(c);
+    }
     fixture_free(&f);
 }
 
