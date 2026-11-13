@@ -44,6 +44,14 @@ that explains the deviation. `OK` is derived from what the scenario sent, never 
 build did. A row fails when its verdict differs from the expected one, and is reported as worse
 than the release when the release passed it.
 
+## What has been run
+
+Every scenario of `expected.txt` has been run through `guest.sh` inside one privileged
+container on a Linux 7.0 kernel, on both probe sets, and the rows that differed from their
+expectations were run again in a container of their own each. `run.sh` itself (its image
+build and one container per scenario) and `tools/dev/vm/acceptance.sh` (the 6.1 and 6.12
+guests) have not been run on this tree.
+
 ## Adding a scenario
 
 Write `cases/<name>.sh`, which sources `lib.sh` and ends with `RESULT: OK` or `RESULT: BUG`, or
