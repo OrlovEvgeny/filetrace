@@ -5,6 +5,7 @@ RUN apt-get update \
         busybox-static \
         ca-certificates \
         cpio \
+        gnutls-bin \
         libbpf1 \
         libfcgi-bin \
         libnghttp2-14 \
