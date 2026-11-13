@@ -706,6 +706,14 @@ expect "small file in pieces after a head of 3000 bytes, then the answer: not re
 expect "small file in pieces, then 5000 bytes more and no answer: not reported" \
     "$(ft files --path "$data/reply-pieces-tail.txt" --format csv | rows)" 0
 
+# A reply is held while a send on its connection waits for room, also where a send is seen as it
+# returns: a template read before a page whose first piece is the template's size, the rest left
+# untaken by the peer for longer than the correlation window, is not the page.
+"$workload" pagestall "$data/page-stall.tpl" 16384 6 >/dev/null
+settle
+expect "page whose rest the peer left untaken: template not reported" \
+    "$(ft files --path "$data/page-stall.tpl" --format csv | rows)" 0
+
 # A thread that reads its file again leaves its first flights to their own connections: a hello
 # sent after each read is not the file, and a small file put to one connection after another,
 # each answered and kept open, is reported for each once they close.
