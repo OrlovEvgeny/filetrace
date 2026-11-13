@@ -298,11 +298,14 @@ static void method_words(uint8_t method, uint8_t confidence, char *buf, size_t s
              ft_top_confidence_word(confidence, false));
 }
 
-/* The host name instead of the address when one is known. */
-static void destination_text(const struct ft_top_transfer *t, char *buf, size_t size)
+/* The name the process used, or the host name, instead of the address when one is known. */
+static void destination_text(const struct ft_top_ui *ui, const struct ft_top_transfer *t, char *buf,
+                             size_t size)
 {
     const struct ft_top_destination *dest = t->destination;
-    if (dest && dest->host_state == FT_TOP_HOST_NAMED && dest->host)
+    if (t->names && !ui->addresses)
+        ft_remote_name_cell(t->names, t->remote.port, buf, size);
+    else if (dest && dest->host_state == FT_TOP_HOST_NAMED && dest->host)
         snprintf(buf, size, "%s:%u", dest->host, t->remote.port);
     else
         ft_strlcpy(buf, t->remote_text, size);
@@ -385,7 +388,7 @@ static void process_transfers(struct inspect *in, const struct ft_top_transfer *
         ft_canvas_text_right(d->canvas, x, y, 3, dim(), text);
         ft_canvas_text_cut(d->canvas, x + 8, y, file_w - 1, plain(FT_COLOR_BRIGHT),
                            t->path + t->name_offset, FT_CUT_START);
-        destination_text(t, text, sizeof(text));
+        destination_text(d->ui, t, text, sizeof(text));
         middle_cut(d->canvas, dest_x, y, dest_w - 1, plain(ft_top_egress_color(t->is_public)),
                    text);
         rate_cell(d, rate_x, y, 7, t);
@@ -728,7 +731,7 @@ static void inspect_file(struct inspect *in, const struct ft_top_file *f)
         const struct ft_top_transfer *t = f->transfers[i];
         char text[160];
         y = line_y(in, 2 + (int)i);
-        destination_text(t, text, sizeof(text));
+        destination_text(d->ui, t, text, sizeof(text));
         middle_cut(d->canvas, in->right_x, y, dest_w - 1, plain(ft_top_egress_color(t->is_public)),
                    text);
         rate_cell(d, rrate_x, y, 7, t);
