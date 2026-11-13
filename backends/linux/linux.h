@@ -50,6 +50,15 @@ struct ft_probe_status {
     int error; /* errno of a failed load or attach */
 };
 
+/* Whether a return probe leaves alive a process whose seccomp filter refuses its system call. */
+enum ft_linux_returns : uint8_t {
+    FT_RETURNS_NOT_TESTED, /* nothing that uses return probes is wanted */
+    FT_RETURNS_NO_SYSCALL, /* this architecture returns from them without a system call */
+    FT_RETURNS_SAFE,       /* such a process survived one */
+    FT_RETURNS_UNSAFE,     /* such a process was killed */
+    FT_RETURNS_UNKNOWN,    /* the test could not tell */
+};
+
 struct ft_linux_probes {
     const struct ft_probe_set *set;
     struct bpf_object *obj;
@@ -59,7 +68,18 @@ struct ft_linux_probes {
     bool listed_truncated;  /* more than the kernel table holds */
     struct bpf_link *aging; /* the iterator that judges windows nothing touched lately */
     int aging_error;        /* errno of the kernel's refusal of it */
+    enum ft_linux_returns returns;
+    int returns_error; /* FT_RETURNS_UNKNOWN: what kept the test from telling */
 };
+
+/* Whether the loaded object carries the program that tests return probes. */
+bool ft_linux_returns_tested(const struct ft_backend_config *cfg);
+
+/* Tests return probes in a process of its own, before any is attached for real. */
+void ft_linux_returns_test(struct ft_linux_probes *p, const struct ft_backend_config *cfg);
+bool ft_linux_returns_allowed(const struct ft_linux_probes *p, const struct ft_backend_config *cfg);
+/* Why the probes that need return probes are not attached. */
+const char *ft_linux_returns_refusal(const struct ft_linux_probes *p, char *buf, size_t size);
 
 /* Returns 0 once an object is loaded, even if single probes failed (see status); else -errno. */
 int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out);

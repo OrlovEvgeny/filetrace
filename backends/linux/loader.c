@@ -193,11 +193,15 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
     struct bpf_map *agg_a = bpf_object__find_map_by_name(obj, "agg_a");
     struct bpf_map *agg_b = bpf_object__find_map_by_name(obj, "agg_b");
     struct bpf_map *known = bpf_object__find_map_by_name(obj, "known_files");
-    if (!bpf_cfg || !events || !agg_a || !agg_b || !known) {
+    struct bpf_program *check = bpf_object__find_program_by_name(obj, "ft_return_check");
+    struct bpf_map *checks = bpf_object__find_map_by_name(obj, "return_checks");
+    if (!bpf_cfg || !events || !agg_a || !agg_b || !known || !check || !checks) {
         bpf_object__close(obj);
         errno = EINVAL;
         return nullptr;
     }
+    bpf_program__set_autoload(check, ft_linux_returns_tested(cfg));
+    bpf_map__set_autocreate(checks, ft_linux_returns_tested(cfg));
 
     uint32_t queue = round_up_pow2(cfg->queue_bytes, (uint32_t)sysconf(_SC_PAGESIZE));
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
@@ -371,10 +375,8 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     return 0;
 }
 
-int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
+static int load_probes(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
 {
-    libbpf_set_print(on_libbpf_print);
-
     if (cfg->probes == FT_PROBES_KPROBE)
         return load_set(&kprobe_set, cfg, out);
 
@@ -394,6 +396,15 @@ int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_pr
         ft_linux_probes_unload(out);
     *out = fallback;
     return 0;
+}
+
+int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
+{
+    libbpf_set_print(on_libbpf_print);
+    int err = load_probes(cfg, out);
+    if (!err)
+        ft_linux_returns_test(out, cfg);
+    return err;
 }
 
 void ft_linux_probes_unload(struct ft_linux_probes *p)
