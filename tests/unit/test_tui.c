@@ -418,6 +418,13 @@ static const struct ft_column_fit FIT[] = {
     {0},
     {.leave = 1},
 };
+/* NAME cut to 12 before PATH is cut, and to 8 after it. */
+static const struct ft_column_fit TWO_TURNS[] = {
+    {.cut = 3, .least = 8, .early_cut = 1, .early_least = 12},
+    {.cut = 2, .least = 16, .keep_end = true},
+    {0},
+    {.leave = 1},
+};
 /* Letters beyond ASCII both in what a cut takes and in what it keeps. */
 static const char *const FIT_CELLS[][4] = {
     {"alpha", "/vär/log/nginx/access.log", "12.5 MB/s", "EXACT"},
@@ -432,7 +439,7 @@ static const char *fit_cell(void *ctx, size_t r, size_t c, char *buf, size_t siz
 }
 
 /* The table fitted to width, or as ft_table_print prints it for 0; the caller frees it. */
-static char *fitted(size_t width, bool *fits)
+static char *fitted(const struct ft_column_fit *fit, size_t width, bool *fits)
 {
     char *text = nullptr;
     size_t size = 0;
@@ -442,17 +449,18 @@ static char *fitted(size_t width, bool *fits)
     if (!out)
         return strdup("");
     if (width)
-        *fits = ft_table_print_fit(out, FIT_COLUMNS, FIT, 4, 2, fit_cell, nullptr, false, width);
+        *fits = ft_table_print_fit(out, FIT_COLUMNS, fit, 4, 2, fit_cell, nullptr, false, width);
     else
         ft_table_print(out, FIT_COLUMNS, 4, 2, fit_cell, nullptr, false);
     fclose(out);
     return text;
 }
 
-static void check_fitted(size_t width, bool fits, const char *expected)
+static void check_fitted(const struct ft_column_fit *fit, size_t width, bool fits,
+                         const char *expected)
 {
     bool did = !fits;
-    char *text = fitted(width, &did);
+    char *text = fitted(fit, width, &did);
 
     CHECK(did == fits);
     CHECK_STR(text, expected);
@@ -465,45 +473,62 @@ static void test_table_fit_untouched(void)
                         "alpha            /vär/log/nginx/access.log  12.5 MB/s  EXACT\n"
                         "clickhoüse-serv  /srv/a.bin                     0 B/s  INFERRED\n";
     bool fits = false;
-    char *printed = fitted(0, &fits);
+    char *printed = fitted(FIT, 0, &fits);
 
     CHECK_STR(printed, table);
     free(printed);
-    check_fitted(63, true, table);
-    check_fitted(SIZE_MAX, true, table);
+    check_fitted(FIT, 63, true, table);
+    check_fitted(FIT, SIZE_MAX, true, table);
 }
 
 static void test_table_fit_cuts_cells(void)
 {
-    check_fitted(60, true,
+    check_fitted(FIT, 60, true,
                  "NAME             PATH                         RATE  NOTE\n"
                  "alpha            ...og/nginx/access.log  12.5 MB/s  EXACT\n"
                  "clickhoüse-serv  /srv/a.bin                  0 B/s  INFERRED\n");
-    check_fitted(54, true,
+    check_fitted(FIT, 54, true,
                  "NAME             PATH                   RATE  NOTE\n"
                  "alpha            ...nx/access.log  12.5 MB/s  EXACT\n"
                  "clickhoüse-serv  /srv/a.bin            0 B/s  INFERRED\n");
-    check_fitted(50, true,
+    check_fitted(FIT, 50, true,
                  "NAME         PATH                   RATE  NOTE\n"
                  "alpha        ...nx/access.log  12.5 MB/s  EXACT\n"
                  "clickhoü...  /srv/a.bin            0 B/s  INFERRED\n");
-    check_fitted(47, true,
+    check_fitted(FIT, 47, true,
                  "NAME      PATH                   RATE  NOTE\n"
                  "alpha     ...nx/access.log  12.5 MB/s  EXACT\n"
                  "click...  /srv/a.bin            0 B/s  INFERRED\n");
 }
 
+/* PATH, with one cut, gives way in its turn as it does in FIT. */
+static void test_table_fit_cuts_in_two_turns(void)
+{
+    check_fitted(TWO_TURNS, 60, true,
+                 "NAME          PATH                            RATE  NOTE\n"
+                 "alpha         /vär/log/nginx/access.log  12.5 MB/s  EXACT\n"
+                 "clickhoüs...  /srv/a.bin                     0 B/s  INFERRED\n");
+    check_fitted(TWO_TURNS, 54, true,
+                 "NAME          PATH                      RATE  NOTE\n"
+                 "alpha         ...nginx/access.log  12.5 MB/s  EXACT\n"
+                 "clickhoüs...  /srv/a.bin               0 B/s  INFERRED\n");
+    check_fitted(TWO_TURNS, 48, true,
+                 "NAME       PATH                   RATE  NOTE\n"
+                 "alpha      ...nx/access.log  12.5 MB/s  EXACT\n"
+                 "clickh...  /srv/a.bin            0 B/s  INFERRED\n");
+}
+
 static void test_table_fit_leaves_columns(void)
 {
-    check_fitted(46, true,
+    check_fitted(FIT, 46, true,
                  "NAME             PATH                     RATE\n"
                  "alpha            ...ginx/access.log  12.5 MB/s\n"
                  "clickhoüse-serv  /srv/a.bin              0 B/s\n");
-    check_fitted(37, true,
+    check_fitted(FIT, 37, true,
                  "NAME      PATH                   RATE\n"
                  "alpha     ...nx/access.log  12.5 MB/s\n"
                  "click...  /srv/a.bin            0 B/s\n");
-    check_fitted(36, false,
+    check_fitted(FIT, 36, false,
                  "NAME      PATH                   RATE\n"
                  "alpha     ...nx/access.log  12.5 MB/s\n"
                  "click...  /srv/a.bin            0 B/s\n");
@@ -516,7 +541,7 @@ static void test_table_fit_bounds(void)
 
     for (size_t width = 37; width <= 70; width++) {
         bool fits = false;
-        char *text = fitted(width, &fits);
+        char *text = fitted(FIT, width, &fits);
         size_t ends[3] = {0};
         char *line = text;
 
@@ -564,6 +589,160 @@ static void test_watch_network_filters(void)
     CHECK_STR(q.path, "");
 }
 
+struct watch_transfer {
+    const char *comm;
+    uint32_t pid;
+    const char *path;
+    const char *remote;
+    const struct ft_remote_names *names; /* nullptr: none */
+    uint8_t method;
+    uint64_t rate;
+};
+
+static const struct ft_remote_names BUCKET = {.tls = "pg-backups.s3.example.com",
+                                              .resolved = {"pg-backups.s3.example.com"},
+                                              .listed = 1,
+                                              .count = 1};
+static const struct ft_remote_names MIRROR = {
+    .tls = "", .resolved = {"mirror-2.internal"}, .listed = 1, .count = 1};
+static const struct ft_remote_names REGISTRY = {
+    .tls = "registry.ml.example.com", .resolved = {"proxy.corp.internal"}, .listed = 1, .count = 1};
+
+/* The rclone address, behind a name, is wider than the least a name is cut to. */
+static const struct watch_transfer WATCH_TRANSFERS[] = {
+    {"java", 12044, "/var/lib/kafka/data/events-7/00000000000191560343.log", "10.0.5.22", nullptr,
+     FT_METHOD_SENDFILE, 67'400'000},
+    {"rclone", 40112, "/srv/backups/pg/base-2026-11-12.tar.zst", "2001:db8:8a2e:370:7334::15",
+     &BUCKET, FT_METHOD_READ_SEND, 57'900'000},
+    {"nginx", 2218, "/var/www/cdn/video/launch-2026-hd.mp4", "203.0.113.61", nullptr,
+     FT_METHOD_SENDFILE, 42'900'000},
+    {"rsync", 5120, "/srv/releases/api-v4.18.2.tar.gz", "10.0.7.32", &MIRROR, FT_METHOD_READ_SEND,
+     40'400'000},
+    {"python3", 24410, "/srv/ml/models/brand-ner-v3.safetensors", "10.0.8.40", &REGISTRY,
+     FT_METHOD_READ_SEND, 28'600'000},
+};
+
+static void watch_rows(struct ft_rows *rows)
+{
+    static const struct ft_remote_names nameless = {.tls = ""};
+    struct ft_row_transfer *row = malloc(sizeof(*row));
+
+    ft_rows_init(rows, FT_MSG_ROW_TRANSFER);
+    for (size_t i = 0; row && i < FT_ARRAY_LEN(WATCH_TRANSFERS); i++) {
+        const struct watch_transfer *w = &WATCH_TRANSFERS[i];
+        memset(row, 0, sizeof(*row));
+        row->pid = w->pid;
+        row->rate = w->rate;
+        row->method = w->method;
+        row->confidence = w->method == FT_METHOD_SENDFILE ? FT_CONF_EXACT : FT_CONF_INFERRED;
+        row->flags = FT_XFER_ACTIVE | FT_XFER_FILE_KNOWN | FT_XFER_PATH_KNOWN;
+        CHECK(ft_addr_parse(w->remote, &row->remote));
+        ft_strlcpy(row->comm, w->comm, sizeof(row->comm));
+        ft_strlcpy(row->path, w->path, FT_PATH_MAX);
+        size_t lead = strlen(row->path) + 1;
+        ft_remote_names_pack(w->names ? w->names : &nameless, &row->names, row->path + lead,
+                             sizeof(row->path) - lead);
+        CHECK(ft_rows_append(rows, row, ft_row_transfer_size(row)));
+    }
+    free(row);
+}
+
+static void check_watch_files(size_t width, bool names, const char *expected)
+{
+    struct ft_rows rows;
+    char *text = nullptr;
+    size_t size = 0;
+    FILE *out = open_memstream(&text, &size);
+
+    CHECK(out != nullptr);
+    if (!out)
+        return;
+    watch_rows(&rows);
+    ft_watch_transfers_table(out, &rows, width, false, names);
+    fclose(out);
+    CHECK_STR(text, expected);
+    free(text);
+    ft_rows_free(&rows);
+}
+
+/* A long name gives way down to 24 columns before any path does. */
+static void test_watch_files_by_name(void)
+{
+    check_watch_files(
+        120, true,
+        "PROCESS        FILE                                          DESTINATION               "
+        "METHOD           RATE  CONFIDENCE\n"
+        "java 12044     ...ka/data/events-7/00000000000191560343.log  10.0.5.22                 "
+        "sendfile    64.3 MB/s  EXACT\n"
+        "rclone 40112   /srv/backups/pg/base-2026-11-12.tar.zst       pg-backups.s3.example...  "
+        "read-write  55.2 MB/s  INFERRED\n"
+        "nginx 2218     /var/www/cdn/video/launch-2026-hd.mp4         203.0.113.61              "
+        "sendfile    40.9 MB/s  EXACT\n"
+        "rsync 5120     /srv/releases/api-v4.18.2.tar.gz              mirror-2.internal         "
+        "read-write  38.5 MB/s  INFERRED\n"
+        "python3 24410  /srv/ml/models/brand-ner-v3.safetensors       registry.ml.example.c...  "
+        "read-write  27.3 MB/s  INFERRED\n");
+    check_watch_files(100, true,
+                      "PROCESS        FILE                      DESTINATION               METHOD "
+                      "          RATE  CONFIDENCE\n"
+                      "java 12044     ...00000000191560343.log  10.0.5.22                 sendfile "
+                      "   64.3 MB/s  EXACT\n"
+                      "rclone 40112   ...se-2026-11-12.tar.zst  pg-backups.s3.example...  "
+                      "read-write  55.2 MB/s  INFERRED\n"
+                      "nginx 2218     ...eo/launch-2026-hd.mp4  203.0.113.61              sendfile "
+                      "   40.9 MB/s  EXACT\n"
+                      "rsync 5120     ...es/api-v4.18.2.tar.gz  mirror-2.internal         "
+                      "read-write  38.5 MB/s  INFERRED\n"
+                      "python3 24410  ...nd-ner-v3.safetensors  registry.ml.example.c...  "
+                      "read-write  27.3 MB/s  INFERRED\n");
+    check_watch_files(57, true,
+                      "PROCESS      FILE              DESTINATION           RATE\n"
+                      "java 12044   ...191560343.log  10.0.5.22        64.3 MB/s\n"
+                      "rclone 4...  ...11-12.tar.zst  pg-backups.s...  55.2 MB/s\n"
+                      "nginx 2218   ...h-2026-hd.mp4  203.0.113.61     40.9 MB/s\n"
+                      "rsync 5120   ...4.18.2.tar.gz  mirror-2.int...  38.5 MB/s\n"
+                      "python3 ...  ...3.safetensors  registry.ml....  27.3 MB/s\n");
+}
+
+/* By address the paths give way first: no address is cut before a path is. */
+static void test_watch_files_by_address(void)
+{
+    check_watch_files(
+        120, false,
+        "PROCESS        FILE                                        DESTINATION                 "
+        "METHOD           RATE  CONFIDENCE\n"
+        "java 12044     .../data/events-7/00000000000191560343.log  10.0.5.22                   "
+        "sendfile    64.3 MB/s  EXACT\n"
+        "rclone 40112   /srv/backups/pg/base-2026-11-12.tar.zst     2001:db8:8a2e:370:7334::15  "
+        "read-write  55.2 MB/s  INFERRED\n"
+        "nginx 2218     /var/www/cdn/video/launch-2026-hd.mp4       203.0.113.61                "
+        "sendfile    40.9 MB/s  EXACT\n"
+        "rsync 5120     /srv/releases/api-v4.18.2.tar.gz            10.0.7.32                   "
+        "read-write  38.5 MB/s  INFERRED\n"
+        "python3 24410  /srv/ml/models/brand-ner-v3.safetensors     10.0.8.40                   "
+        "read-write  27.3 MB/s  INFERRED\n");
+    check_watch_files(100, false,
+                      "PROCESS        FILE                    DESTINATION                 METHOD   "
+                      "        RATE  CONFIDENCE\n"
+                      "java 12044     ...000000191560343.log  10.0.5.22                   sendfile "
+                      "   64.3 MB/s  EXACT\n"
+                      "rclone 40112   ...-2026-11-12.tar.zst  2001:db8:8a2e:370:7334::15  "
+                      "read-write  55.2 MB/s  INFERRED\n"
+                      "nginx 2218     .../launch-2026-hd.mp4  203.0.113.61                sendfile "
+                      "   40.9 MB/s  EXACT\n"
+                      "rsync 5120     .../api-v4.18.2.tar.gz  10.0.7.32                   "
+                      "read-write  38.5 MB/s  INFERRED\n"
+                      "python3 24410  ...-ner-v3.safetensors  10.0.8.40                   "
+                      "read-write  27.3 MB/s  INFERRED\n");
+    check_watch_files(57, false,
+                      "PROCESS      FILE              DESTINATION           RATE\n"
+                      "java 12044   ...191560343.log  10.0.5.22        64.3 MB/s\n"
+                      "rclone 4...  ...11-12.tar.zst  2001:db8:8a2...  55.2 MB/s\n"
+                      "nginx 2218   ...h-2026-hd.mp4  203.0.113.61     40.9 MB/s\n"
+                      "rsync 5120   ...4.18.2.tar.gz  10.0.7.32        38.5 MB/s\n"
+                      "python3 ...  ...3.safetensors  10.0.8.40        27.3 MB/s\n");
+}
+
 void test_tui(void)
 {
     test_watch_network_filters();
@@ -582,6 +761,9 @@ void test_tui(void)
     test_lineedit_words();
     test_table_fit_untouched();
     test_table_fit_cuts_cells();
+    test_table_fit_cuts_in_two_turns();
     test_table_fit_leaves_columns();
     test_table_fit_bounds();
+    test_watch_files_by_name();
+    test_watch_files_by_address();
 }

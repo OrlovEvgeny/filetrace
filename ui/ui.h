@@ -27,10 +27,12 @@ void ft_table_print(FILE *out, const struct ft_column_spec *cols, size_t ncols, 
 
 /* What a column gives up, and when, if its table is wider than the room for it. */
 struct ft_column_fit {
-    uint8_t cut;   /* turn in which its cells are cut, from 1; 0: never */
-    size_t least;  /* the narrowest a cut leaves them, and never narrower than the title */
-    bool keep_end; /* a cut keeps the end of the text, as of a path, rather than its start */
-    uint8_t leave; /* turn in which the column is left out whole, from 1; 0: never */
+    uint8_t cut;        /* turn in which its cells are cut, from 1; 0: never */
+    size_t least;       /* the narrowest a cut leaves them, and never narrower than the title */
+    uint8_t early_cut;  /* an earlier turn with a milder cut, from 1; 0: none */
+    size_t early_least; /* the narrowest that milder cut leaves them */
+    bool keep_end;      /* a cut keeps the end of the text, as of a path, rather than its start */
+    uint8_t leave;      /* turn in which the column is left out whole, from 1; 0: never */
 };
 
 /*
@@ -68,5 +70,9 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt);
 /* What the network view asks the agent for: the open connections the filters leave. */
 void ft_watch_connections_query(const struct ft_watch_options *opt, uint32_t limit,
                                 struct ft_query *q);
+
+/* Prints the table of the files view no wider than width, its remote ends by name or address. */
+void ft_watch_transfers_table(FILE *o, const struct ft_rows *rows, size_t width, bool resolve,
+                              bool names);
 
 #endif
