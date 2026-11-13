@@ -80,32 +80,147 @@ void ft_row_event_strings(const struct ft_row_event *row, struct ft_process_stri
         *out = (struct ft_process_strings){"", "", ""};
 }
 
+size_t ft_remote_names_pack(const struct ft_remote_names *names, struct ft_row_names *fixed,
+                            char *buf, size_t size)
+{
+    size_t used = 0;
+
+    *fixed = (struct ft_row_names){0};
+    for (uint32_t i = 0; i <= names->listed && i <= FT_RESOLVED_NAMES; i++) {
+        const char *name = i == 0 ? names->tls : names->resolved[i - 1];
+        size_t len = strnlen(name, FT_NAME_MAX - 1);
+        if ((i == 0 && len == 0) || len + 1 > size - used)
+            continue;
+        memcpy(buf + used, name, len);
+        buf[used + len] = '\0';
+        used += len + 1;
+        if (i == 0)
+            fixed->tls = 1;
+        else
+            fixed->listed++;
+    }
+    uint32_t count = names->count > fixed->listed ? names->count : fixed->listed;
+    fixed->count = (uint16_t)(count > UINT16_MAX ? UINT16_MAX : count);
+    return used;
+}
+
+/* Finds the names ft_remote_names_pack wrote; returns the bytes they take. */
+static size_t unpack_names(const struct ft_row_names *fixed, const char *buf, size_t size,
+                           struct ft_remote_names *out)
+{
+    size_t used = 0;
+
+    *out = (struct ft_remote_names){.tls = ""};
+    for (unsigned i = 0; i <= FT_RESOLVED_NAMES; i++) {
+        if (i == 0 ? !fixed->tls : i > fixed->listed)
+            continue;
+        size_t len = used < size ? strnlen(buf + used, size - used) : 0;
+        /* A name is never empty and never runs to the end of the row. */
+        if (len == 0 || used + len >= size)
+            break;
+        if (i == 0)
+            out->tls = buf + used;
+        else
+            out->resolved[out->listed++] = buf + used;
+        used += len + 1;
+    }
+    out->count = fixed->count > out->listed ? fixed->count : out->listed;
+    return used;
+}
+
+/* Where a transfer row's names start: after its path and any process strings. */
+static size_t transfer_names_offset(const struct ft_row_transfer *row)
+{
+    struct ft_process_strings ignored;
+    size_t lead = lead_size(row->path);
+
+    if (row->flags & FT_XFER_PROCESS_TEXT)
+        lead += unpack(row->path + lead, sizeof(row->path) - lead, &ignored);
+    return lead;
+}
+
+static size_t event_name_offset(const struct ft_row_event *row)
+{
+    struct ft_process_strings ignored;
+    size_t lead = lead_size(row->text);
+
+    if (row->flags & FT_EVENT_PROCESS_TEXT)
+        lead += unpack(row->text + lead, sizeof(row->text) - lead, &ignored);
+    return lead;
+}
+
+void ft_row_connection_names(const struct ft_row_connection *row, struct ft_remote_names *out)
+{
+    unpack_names(&row->names, row->text, sizeof(row->text), out);
+}
+
+void ft_row_flow_names(const struct ft_row_flow *row, struct ft_remote_names *out)
+{
+    unpack_names(&row->names, row->text, sizeof(row->text), out);
+}
+
+void ft_row_transfer_names(const struct ft_row_transfer *row, struct ft_remote_names *out)
+{
+    size_t at = transfer_names_offset(row);
+    unpack_names(&row->names, row->path + at, sizeof(row->path) - at, out);
+}
+
+void ft_row_event_set_name(struct ft_row_event *row, enum ft_name_source source, const char *name)
+{
+    size_t at = event_name_offset(row);
+
+    row->name_source = FT_NAME_SOURCE_NONE;
+    if (source == FT_NAME_SOURCE_NONE || !name[0] || at + FT_NAME_MAX > sizeof(row->text))
+        return;
+    ft_strlcpy(row->text + at, name, FT_NAME_MAX);
+    row->name_source = source;
+}
+
+const char *ft_row_event_name(const struct ft_row_event *row)
+{
+    size_t at = event_name_offset(row);
+
+    if (row->name_source == FT_NAME_SOURCE_NONE || at >= sizeof(row->text) ||
+        strnlen(row->text + at, sizeof(row->text) - at) == sizeof(row->text) - at)
+        return "";
+    return row->text + at;
+}
+
 size_t ft_row_process_size(const struct ft_row_process *row)
 {
     struct ft_process_strings ignored;
     return offsetof(struct ft_row_process, text) + unpack(row->text, sizeof(row->text), &ignored);
 }
 
+size_t ft_row_connection_size(const struct ft_row_connection *row)
+{
+    struct ft_remote_names ignored;
+    return offsetof(struct ft_row_connection, text) +
+           unpack_names(&row->names, row->text, sizeof(row->text), &ignored);
+}
+
+size_t ft_row_flow_size(const struct ft_row_flow *row)
+{
+    struct ft_remote_names ignored;
+    return offsetof(struct ft_row_flow, text) +
+           unpack_names(&row->names, row->text, sizeof(row->text), &ignored);
+}
+
 size_t ft_row_transfer_size(const struct ft_row_transfer *row)
 {
-    struct ft_process_strings ignored;
-    size_t lead = lead_size(row->path);
-    size_t size = offsetof(struct ft_row_transfer, path) + lead;
+    struct ft_remote_names ignored;
+    size_t at = transfer_names_offset(row);
 
-    if (row->flags & FT_XFER_PROCESS_TEXT)
-        size += unpack(row->path + lead, sizeof(row->path) - lead, &ignored);
-    return size;
+    return offsetof(struct ft_row_transfer, path) + at +
+           unpack_names(&row->names, row->path + at, sizeof(row->path) - at, &ignored);
 }
 
 size_t ft_row_event_size(const struct ft_row_event *row)
 {
-    struct ft_process_strings ignored;
-    size_t lead = lead_size(row->text);
-    size_t size = offsetof(struct ft_row_event, text) + lead;
+    size_t at = event_name_offset(row);
+    const char *name = ft_row_event_name(row);
 
-    if (row->flags & FT_EVENT_PROCESS_TEXT)
-        size += unpack(row->text + lead, sizeof(row->text) - lead, &ignored);
-    return size;
+    return offsetof(struct ft_row_event, text) + at + (name[0] ? strlen(name) + 1 : 0);
 }
 
 size_t ft_row_leader_size(const struct ft_row_leader *row)
