@@ -691,6 +691,21 @@ expect "send that failed before taking anything, then another file: not reported
 expect "reply held while the peer stopped taking it: template not reported" \
     "$(ft files --path "$data/stalled-page.tpl" --format csv | rows)" 0
 
+# A small file read and sent in pieces as a reply is reported whole when only a small trailer
+# follows it before the answer. A read that does not start at the beginning of the file does not
+# end the reply, so with more than a head besides, after the pieces or between the first read and
+# its piece, the reply is not told from one larger than the file and the file is not reported.
+"$workload" replypieces "$data/reply-pieces.txt" 20000 0 5 hear >/dev/null
+"$workload" replypieces "$data/reply-pieces-head.txt" 20000 3000 0 hear >/dev/null
+"$workload" replypieces "$data/reply-pieces-tail.txt" 20000 0 5000 wait >/dev/null
+settle
+expect "small file in pieces, a trailer, then the answer: bytes" \
+    "$(ft files --path "$data/reply-pieces.txt" --format csv | column transfer.bytes_sent)" 20000
+expect "small file in pieces after a head of 3000 bytes, then the answer: not reported" \
+    "$(ft files --path "$data/reply-pieces-head.txt" --format csv | rows)" 0
+expect "small file in pieces, then 5000 bytes more and no answer: not reported" \
+    "$(ft files --path "$data/reply-pieces-tail.txt" --format csv | rows)" 0
+
 # A thread that reads its file again leaves its first flights to their own connections: a hello
 # sent after each read is not the file, and a small file put to one connection after another,
 # each answered and kept open, is reported for each once they close.
