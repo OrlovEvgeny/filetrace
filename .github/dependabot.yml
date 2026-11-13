@@ -19,6 +19,8 @@ updates:
     directories:
       - /tools/dev
       - /tools/dev/vm
+      - /tools/dev/vm/x86_64
+      - /tools/dev/vm/x86_64/qemu
       - /tools/dist
       - /tests/packaging/images
     schedule:
