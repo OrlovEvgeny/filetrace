@@ -77,11 +77,12 @@ struct ft_backend_stats {
     uint64_t events; /* records received from the kernel */
     uint64_t queue_bytes;
     uint64_t queue_peak_bytes;
-    uint64_t listed_files;          /* the kernel's table of listed files: entries */
-    uint64_t listed_capacity;       /* 0 when the backend keeps no such table */
-    uint64_t listed_refused;        /* files it had no room for */
-    uint64_t name_libraries;        /* library files probed for names */
-    uint64_t name_library_capacity; /* 0 when the backend probes none */
+    uint64_t listed_files;              /* the kernel's table of listed files: entries */
+    uint64_t listed_capacity;           /* 0 when the backend keeps no such table */
+    uint64_t listed_refused;            /* files it had no room for */
+    uint64_t name_libraries;            /* library files probed for names */
+    uint64_t name_library_capacity;     /* 0 when the backend probes none */
+    uint64_t name_libraries_configured; /* more than the capacity when open files cut it */
 };
 
 struct ft_backend;

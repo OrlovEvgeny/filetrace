@@ -317,6 +317,8 @@ struct ft_row_stats {
     struct ft_table_usage name_libraries; /* library files probed for names; capacity 0: none */
     uint64_t names_invalid;               /* names refused: not host names */
     uint64_t names_refused; /* names refused: listed connections held every kept name */
+    /* [limits] name_libraries, more than name_libraries.capacity when open files cut it */
+    uint64_t name_libraries_configured;
 };
 
 struct ft_row_capability {

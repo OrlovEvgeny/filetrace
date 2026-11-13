@@ -137,6 +137,17 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
         } else {
             printf("  %-18s%s\n", "Event log:", "off");
         }
+        if (stats->name_libraries_configured) {
+            char b[64];
+            ft_format_count(stats->name_libraries.count, a, sizeof(a));
+            ft_format_count(stats->name_libraries.capacity, b, sizeof(b));
+            printf("  %-18s%s of %s", "Name libraries:", a, b);
+            if (stats->name_libraries_configured > stats->name_libraries.capacity) {
+                ft_format_count(stats->name_libraries_configured, a, sizeof(a));
+                printf(", not the %s configured: the agent's open file limit holds no more", a);
+            }
+            putchar('\n');
+        }
     } else if (agent == FT_AGENT_UNREACHABLE) {
         printf("  %-18s%s\n", "Agent:", "running, but its socket is not accessible to this user");
     } else {
@@ -209,6 +220,11 @@ static void doctor_json(const struct ft_diagnosis *d, const struct ft_host_info 
                stats->pid, stats->mode, (unsigned long long)stats->events_received,
                (unsigned long long)stats->events_dropped, (unsigned long long)stats->queue_bytes,
                (unsigned long long)stats->event_log_bytes);
+    if (agent == FT_AGENT_RUNNING && stats->name_libraries_configured)
+        printf(",\"name_libraries\":{\"entries\":%llu,\"capacity\":%llu,\"configured\":%llu}",
+               (unsigned long long)stats->name_libraries.count,
+               (unsigned long long)stats->name_libraries.capacity,
+               (unsigned long long)stats->name_libraries_configured);
     printf("}}\n");
 }
 

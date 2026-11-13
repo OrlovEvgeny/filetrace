@@ -857,8 +857,15 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
         if (s->names.capacity) {
             usage_line(o, "Names:", &s->names);
             usage_line(o, "Name lookups:", &s->name_lookups);
-            if (s->name_libraries.capacity)
+            if (s->name_libraries_configured > s->name_libraries.capacity) {
+                ft_format_count(s->name_libraries.count, a, sizeof(a));
+                ft_format_count(s->name_libraries.capacity, b, sizeof(b));
+                fprintf(o, "%-18s%s of %s, ", "Name libraries:", a, b);
+                ft_format_count(s->name_libraries_configured, a, sizeof(a));
+                fprintf(o, "not the %s configured: the open file limit holds no more\n", a);
+            } else if (s->name_libraries.capacity) {
                 usage_line(o, "Name libraries:", &s->name_libraries);
+            }
             if (s->names_invalid || s->names_refused) {
                 ft_format_count(s->names_invalid, a, sizeof(a));
                 ft_format_count(s->names_refused, b, sizeof(b));
@@ -938,8 +945,10 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
         usage_json(o, "names", &s->names, false);
         usage_json(o, "name_lookups", &s->name_lookups, false);
         usage_json(o, "name_libraries", &s->name_libraries, false);
-        fprintf(o, "\"names_refused_invalid\":%" PRIu64 ",\"names_refused_full\":%" PRIu64,
-                s->names_invalid, s->names_refused);
+        fprintf(o,
+                "\"name_libraries_configured\":%" PRIu64 ",\"names_refused_invalid\":%" PRIu64
+                ",\"names_refused_full\":%" PRIu64,
+                s->name_libraries_configured, s->names_invalid, s->names_refused);
     }
     fprintf(o,
             "},\"network\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64

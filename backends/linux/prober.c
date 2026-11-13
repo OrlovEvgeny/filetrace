@@ -47,7 +47,7 @@ struct kind {
     struct probed *files;
     size_t count;
     bool full_logged;
-    struct identity skipped[MAX_SKIPPED]; /* not of the kind, or refused the probe */
+    struct identity skipped[MAX_SKIPPED]; /* not of the kind, refused the probe, or no room */
     size_t skipped_count;
 };
 
@@ -230,6 +230,8 @@ static void consider(struct kind *k, const char *path, const char *name, uint32_
             ft_log(FT_LOG_WARN, "already probing %zu %s; %s and later ones are not probed",
                    k->def.capacity, k->def.many, name);
         k->full_logged = true;
+        /* Every process that maps it would otherwise have it read again. */
+        skip(k, &id);
         close(fd);
         return;
     }

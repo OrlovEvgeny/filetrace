@@ -295,6 +295,7 @@ static void fill_stats(void *agent, uint64_t now_ns, struct ft_row_stats *row)
         .count = bs.listed_files, .capacity = bs.listed_capacity, .evictions = bs.listed_refused};
     row->name_libraries =
         (struct ft_table_usage){.count = bs.name_libraries, .capacity = bs.name_library_capacity};
+    row->name_libraries_configured = bs.name_libraries_configured;
     row->pid = (uint32_t)getpid();
     if (d->cfg->backend->describe)
         d->cfg->backend->describe(d->backend, row->backend, sizeof(row->backend));

@@ -16,7 +16,6 @@
 
 #include "backends/linux/bpf/abi.h"
 
-#define MAX_BINARIES 64
 #define SCRIPT_SLOTS 4096
 
 struct ft_linux_php {
@@ -86,7 +85,7 @@ struct ft_linux_php *ft_linux_php_open(struct bpf_object *obj, struct ft_linux_p
     struct ft_linux_probe_kind kind = {
         .one = "the PHP binary",
         .many = "PHP binaries",
-        .capacity = MAX_BINARIES,
+        .capacity = FT_LINUX_PHP_FILES,
         .probes = {{start, "php_execute_script", false}, {end, "php_request_shutdown", true}},
         .runs = php_runs,
         .maps_of = php_maps_of,
