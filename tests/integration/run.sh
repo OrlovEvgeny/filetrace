@@ -1504,7 +1504,7 @@ if [ -n "$dynamic" ]; then
     mkdir -p "$work/loaded"
     cp "$("$dynamic" libcpath)" "$work/loaded/libc.so.6"
     cp "$dynamic" "$work/loaded/ft_workload"
-    loaded=$(named "$work/loaded/ft_workload" dlopensend "$work/loaded/libc.so.6" 100 \
+    loaded=$(named "$work/loaded/ft_workload" dlopensend "$work/loaded/libc.so.6" 0 100 \
         alone.ft.test "$data/loaded.bin")
     if [ "$(field "$loaded" loaded)" = unsupported ]; then
         echo "SKIP: this C library loads no second copy of itself;" \

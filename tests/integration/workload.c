@@ -4531,25 +4531,36 @@ static void scenario_wait_send(const char *go, const char *name, const char *pat
     send_to(&addr, path);
 }
 
+static void pause_ms(size_t ms)
+{
+    struct timespec pause = {.tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000};
+    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {
+    }
+}
+
 /* sleepsend <ms> <name> <file>: after that many milliseconds, looks the name up and sends the file.
  */
 static void scenario_sleep_send(size_t ms, const char *name, const char *path)
 {
     struct sockaddr_storage addr;
-    struct timespec pause = {.tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000};
-    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {
-    }
+    pause_ms(ms);
     lookup(name, AF_UNSPEC, 0, &addr);
     send_to(&addr, path);
 }
 
 /*
- * dlopensend <libc> <ms> <name> <file>: loads the C library file libc into a namespace of its own
- * and, that many milliseconds later, looks the name up through it and sends the file there.
+ * dlopensend <libc> <before> <after> <name> <file>: that many milliseconds after it starts, loads
+ * the C library file libc into a namespace of its own and, after so many more, looks the name up
+ * through it and sends the file there. Prints when the load was done, from the start.
  */
 #ifdef __GLIBC__
-static void scenario_dlopen_send(const char *libc, size_t ms, const char *name, const char *path)
+static void scenario_dlopen_send(const char *libc, size_t before, size_t after, const char *name,
+                                 const char *path)
 {
+    struct timespec start;
+    struct timespec loaded;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    pause_ms(before);
     void *h = dlmopen(LM_ID_NEWLM, libc, RTLD_NOW);
     if (!h)
         die(libc);
@@ -4559,9 +4570,12 @@ static void scenario_dlopen_send(const char *libc, size_t ms, const char *name, 
     void (*release)(struct addrinfo *) = (void (*)(struct addrinfo *))dlsym(h, "freeaddrinfo");
     if (!resolve || !release)
         die("dlsym");
-    struct timespec pause = {.tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000};
-    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {
-    }
+    clock_gettime(CLOCK_MONOTONIC, &loaded);
+    printf(
+        "scenario=dlopensend loaded_ms=%ld\n",
+        (long)((loaded.tv_sec - start.tv_sec) * 1000 + (loaded.tv_nsec - start.tv_nsec) / 1000000));
+    fflush(stdout);
+    pause_ms(after);
     struct addrinfo hints = {.ai_socktype = SOCK_STREAM};
     struct addrinfo *res;
     if (resolve(name, nullptr, &hints, &res) != 0)
@@ -4573,7 +4587,7 @@ static void scenario_dlopen_send(const char *libc, size_t ms, const char *name, 
 }
 #else
 /* Only glibc loads a second copy of a C library into a namespace of its own. */
-static void scenario_dlopen_send(const char *, size_t, const char *, const char *)
+static void scenario_dlopen_send(const char *, size_t, size_t, const char *, const char *)
 {
     printf("scenario=dlopensend loaded=unsupported\n");
 }
@@ -4827,8 +4841,8 @@ int main(int argc, char **argv)
         scenario_partial_send(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "partialsendfile") == 0 && argc == 4)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
-    else if (strcmp(name, "dlopensend") == 0 && argc == 6)
-        scenario_dlopen_send(argv[2], arg_size(argv[3]), argv[4], argv[5]);
+    else if (strcmp(name, "dlopensend") == 0 && argc == 7)
+        scenario_dlopen_send(argv[2], arg_size(argv[3]), arg_size(argv[4]), argv[5], argv[6]);
     else if (strcmp(name, "sleepsend") == 0 && argc == 5)
         scenario_sleep_send(arg_size(argv[2]), argv[3], argv[4]);
     else if (strcmp(name, "lookupsend") == 0 && (argc == 5 || argc == 6))
