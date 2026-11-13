@@ -16,6 +16,9 @@ void ft_backend_config_defaults(struct ft_backend_config *cfg)
         .drain_batch = 512,
         .corr_window_ns = 2 * FT_NS_PER_SEC,
         .php_scripts = true,
+        .lookup_names = true,
+        .tls_names = true,
+        .name_libraries = 256,
     };
 }
 
