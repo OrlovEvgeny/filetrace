@@ -133,6 +133,8 @@
 # file_paths = true
 # Arguments can hold passwords and tokens, and the records leave this host.
 # command_line = false
+# Names of remote ends in the log records (server.address).
+# names = true
 # Records per request.
 # batch_size = 1024
 # flush_interval = "5s"

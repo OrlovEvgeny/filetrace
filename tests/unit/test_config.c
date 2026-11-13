@@ -92,6 +92,7 @@ static const char every_section[] = "[agent]\n"
                                     "events = [\"file_transfer\", \"process_exec\"]\n"
                                     "file_paths = false\n"
                                     "command_line = true\n"
+                                    "names = false\n"
                                     "batch_size = 256\n"
                                     "flush_interval = \"500ms\"\n"
                                     "timeout = \"3s\"\n"
@@ -127,6 +128,7 @@ static void reads_every_section(void)
     CHECK(!cfg->agent.otlp.metrics);
     CHECK(!cfg->agent.otlp.file_paths);
     CHECK(cfg->agent.otlp.command_line);
+    CHECK(!cfg->agent.otlp.names);
     CHECK(!cfg->agent.state_cfg.command_line_arguments);
     CHECK_STR(cfg->agent.otlp.endpoint, "unix:/run/otelcol.sock");
     CHECK_U64(cfg->agent.otlp.event_types, 1u << FT_REC_FILE_TRANSFER | 1u << FT_REC_PROCESS_EXEC);
@@ -323,6 +325,7 @@ static void prints_what_it_reads(void)
     CHECK_U64(second->agent.otlp.flush_interval_ns, 500 * FT_NS_PER_MS);
     CHECK(!second->agent.otlp.file_paths);
     CHECK(second->agent.otlp.command_line);
+    CHECK(!second->agent.otlp.names);
     CHECK(!second->agent.state_cfg.command_line_arguments);
     CHECK_STR(second->agent.api.listen, "127.0.0.1:9500");
     CHECK_U64(second->agent.state_cfg.leader_entries, 0);
@@ -346,6 +349,7 @@ static void prints_what_it_reads(void)
     CHECK(reread->agent.state_cfg.command_line_arguments);
     CHECK(reread->agent.backend_cfg.php_scripts);
     CHECK(!reread->agent.otlp.command_line);
+    CHECK(reread->agent.otlp.names);
 
     free(text);
     ft_config_free(first);

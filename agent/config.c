@@ -826,6 +826,8 @@ static bool apply_otlp(struct ft_config *cfg, const char *key, struct value *v, 
         return want_bool(v, &otlp->file_paths, why, size);
     if (strcmp(key, "command_line") == 0)
         return want_bool(v, &otlp->command_line, why, size);
+    if (strcmp(key, "names") == 0)
+        return want_bool(v, &otlp->names, why, size);
     if (strcmp(key, "events") == 0) {
         uint32_t types = 0;
 
@@ -1240,6 +1242,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fputs("]\n", o);
     fprintf(o, "file_paths = %s\n", yes_no(otlp->file_paths));
     fprintf(o, "command_line = %s\n", yes_no(otlp->command_line));
+    fprintf(o, "names = %s\n", yes_no(otlp->names));
     fprintf(o, "batch_size = %u\n", otlp->batch_size);
     print_duration(o, "flush_interval", otlp->flush_interval_ns);
     print_duration(o, "metrics_interval", otlp->metrics_interval_ns);
