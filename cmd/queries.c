@@ -781,6 +781,18 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
             ft_format_bytes(s->leaders_bytes, a, sizeof(a));
             fprintf(o, "%-18s%s\n", "File rankings:", a);
         }
+        if (s->names.capacity) {
+            usage_line(o, "Names:", &s->names);
+            usage_line(o, "Name lookups:", &s->name_lookups);
+            if (s->name_libraries.capacity)
+                usage_line(o, "Name libraries:", &s->name_libraries);
+            if (s->names_invalid || s->names_refused) {
+                ft_format_count(s->names_invalid, a, sizeof(a));
+                ft_format_count(s->names_refused, b, sizeof(b));
+                fprintf(o, "%-18s%s (invalid or too long), %s (table full)\n", "Names refused:", a,
+                        b);
+            }
+        }
         if (s->candidates_rejected) {
             ft_format_count(s->candidates_rejected, a, sizeof(a));
             fprintf(o, "%-18s%s below the inference thresholds\n", "Candidates:", a);
@@ -848,7 +860,14 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
     usage_json(o, "flows", &s->flows, false);
     usage_json(o, "files", &s->files, false);
     usage_json(o, "transfers", &s->transfers, false);
-    usage_json(o, "listed_files", &s->listed_files, true);
+    usage_json(o, "listed_files", &s->listed_files, !s->names.capacity);
+    if (s->names.capacity) {
+        usage_json(o, "names", &s->names, false);
+        usage_json(o, "name_lookups", &s->name_lookups, false);
+        usage_json(o, "name_libraries", &s->name_libraries, false);
+        fprintf(o, "\"names_refused_invalid\":%" PRIu64 ",\"names_refused_full\":%" PRIu64,
+                s->names_invalid, s->names_refused);
+    }
     fprintf(o,
             "},\"network\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
             ",\"bytes_sent_per_second\":%" PRIu64 ",\"bytes_received_per_second\":%" PRIu64

@@ -598,6 +598,17 @@ static void full_tables(void)
     CHECK_STR(connection(&f, SOCK + 2), "");
     CHECK_U64(ft_names_refused(f.st->names), 1);
     CHECK_U64(ft_names_forgotten(f.st->names), 0);
+
+    struct ft_row_stats stats = {0};
+    lookup(&f, CURL, CURL, "no name", numbered(9));
+    ft_state_fill_stats(f.st, f.now, &stats);
+    CHECK_U64(stats.names.count, 2);
+    CHECK_U64(stats.names.capacity, 2);
+    CHECK_U64(stats.names.evictions, 0);
+    CHECK_U64(stats.name_lookups.count, 2);
+    CHECK_U64(stats.name_lookups.capacity, 16384);
+    CHECK_U64(stats.names_refused, 1);
+    CHECK_U64(stats.names_invalid, 1);
     fixture_close(&f);
 
     /*
@@ -678,6 +689,12 @@ static void names_off(void)
         CHECK_STR(got.record_names[i], "");
         CHECK_U64(got.record_sources[i], FT_NAME_SOURCE_NONE);
     }
+
+    struct ft_row_stats stats = {0};
+    ft_state_fill_stats(f.st, f.now, &stats);
+    CHECK_U64(stats.names.capacity + stats.name_lookups.capacity, 0);
+    CHECK_U64(stats.names.count + stats.name_lookups.count, 0);
+    CHECK_U64(stats.names_invalid + stats.names_refused, 0);
     fixture_close(&f);
 }
 

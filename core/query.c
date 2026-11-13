@@ -1044,6 +1044,16 @@ void ft_state_fill_stats(struct ft_state *st, uint64_t now_ns, struct ft_row_sta
     row->files = table_usage(st->files);
     row->transfers = table_usage(st->transfers);
     row->leaders_bytes = ft_leaders_memory(st->leaders);
+    if (st->names) {
+        row->names = (struct ft_table_usage){
+            .count = ft_names_count(st->names),
+            .capacity = ft_names_capacity(st->names),
+            .evictions = ft_names_forgotten(st->names),
+        };
+        row->name_lookups = table_usage(st->lookups);
+        row->names_invalid = ft_names_invalid(st->names);
+        row->names_refused = ft_names_refused(st->names);
+    }
     for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++) {
         if (!st->logs[i])
             continue;

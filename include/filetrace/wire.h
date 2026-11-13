@@ -309,7 +309,12 @@ struct ft_row_stats {
     char mode[16];
     char version[48];
     uint64_t leaders_bytes; /* memory of the rankings of the most sent files; 0 when off */
-    struct ft_table_usage listed_files; /* the kernel's table of listed files; capacity 0: none */
+    struct ft_table_usage listed_files;   /* the kernel's table of listed files; capacity 0: none */
+    struct ft_table_usage names;          /* names of remote ends; capacity 0: they are off */
+    struct ft_table_usage name_lookups;   /* what processes looked up, per process and address */
+    struct ft_table_usage name_libraries; /* library files probed for names; capacity 0: none */
+    uint64_t names_invalid;               /* names refused: not host names */
+    uint64_t names_refused; /* names refused: listed connections held every kept name */
 };
 
 struct ft_row_capability {
