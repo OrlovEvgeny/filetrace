@@ -875,6 +875,10 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
             } else if (s->name_libraries.capacity) {
                 usage_line(o, "Name libraries:", &s->name_libraries);
             }
+            if (s->tls_libraries) {
+                ft_format_count(s->tls_libraries, a, sizeof(a));
+                fprintf(o, "%-18s%s\n", "TLS libraries:", a);
+            }
             if (s->names_invalid || s->names_refused) {
                 ft_format_count(s->names_invalid, a, sizeof(a));
                 ft_format_count(s->names_refused, b, sizeof(b));
@@ -956,8 +960,8 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
         usage_json(o, "name_libraries", &s->name_libraries, false);
         fprintf(o,
                 "\"name_libraries_configured\":%" PRIu64 ",\"names_refused_invalid\":%" PRIu64
-                ",\"names_refused_full\":%" PRIu64,
-                s->name_libraries_configured, s->names_invalid, s->names_refused);
+                ",\"names_refused_full\":%" PRIu64 ",\"tls_libraries\":%" PRIu64,
+                s->name_libraries_configured, s->names_invalid, s->names_refused, s->tls_libraries);
     }
     fprintf(o,
             "},\"network\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64

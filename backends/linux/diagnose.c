@@ -55,52 +55,69 @@ static const char *group_problem(const struct ft_linux_probes *p, enum ft_probe_
 static void name_capability(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
                             const struct ft_backend_stats *libraries, struct ft_capabilities *out)
 {
-    const char *tls = cfg->tls_names ? "TLS server names are read where the client's library is "
-                                       "probed"
-                                     : "TLS server names are not read";
+    bool lookups = cfg->lookup_names;
+    bool tls = cfg->tls_names;
 
     if (cfg->mode < FT_MODE_STANDARD) {
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_DISABLED, "%s",
                           "disabled in minimal mode");
-    } else if (!cfg->lookup_names) {
+        return;
+    }
+    if (!lookups && !tls) {
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_DISABLED, "%s",
                           "turned off in the configuration");
-    } else if (!ft_sysinfo_host_pid_namespace()) {
+        return;
+    }
+    if (!ft_sysinfo_host_pid_namespace()) {
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_UNAVAILABLE, "%s",
                           "the agent is not in the host's PID namespace, where it finds the C "
                           "libraries processes map");
-    } else if (!p->lookups) {
+        return;
+    }
+    if (lookups && !p->lookups) {
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_UNAVAILABLE,
                           "the kernel refused the probes of getaddrinfo: %s",
                           error_text(p->lookups_error));
-    } else if (!ft_linux_returns_allowed(p, cfg)) {
+        return;
+    }
+    if (!ft_linux_returns_allowed(p, cfg)) {
         char why[320];
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_UNAVAILABLE, "%s",
                           ft_linux_returns_refusal(p, why, sizeof(why)));
-    } else if (!libraries) {
-        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL,
-                          "lookups are probed in the C libraries processes map; %s", tls);
-    } else {
-        char cut[96] = "";
-        if (libraries->name_libraries_configured > libraries->name_library_capacity)
-            snprintf(cut, sizeof(cut), "; the open file limit holds no more than %llu",
-                     (unsigned long long)libraries->name_library_capacity);
-        if (cfg->tls_names && libraries->tls_libraries) {
-            ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_FULL,
-                              "lookups probed in %llu %s%s; TLS server names in %llu %s",
-                              (unsigned long long)libraries->name_libraries,
-                              libraries->name_libraries == 1 ? "library" : "libraries", cut,
-                              (unsigned long long)libraries->tls_libraries,
-                              libraries->tls_libraries == 1 ? "library" : "libraries");
-        } else {
-            ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL,
-                              "lookups probed in %llu %s%s; %s",
-                              (unsigned long long)libraries->name_libraries,
-                              libraries->name_libraries == 1 ? "library" : "libraries", cut, tls);
-        }
+        return;
     }
-}
 
+    /* One sentence for each half of the feature: what is probed, or that it is turned off. */
+    uint64_t name_libs = libraries ? libraries->name_libraries : 0;
+    uint64_t tls_libs = libraries ? libraries->tls_libraries : 0;
+    char cut[96] = "";
+    if (libraries && libraries->name_libraries_configured > libraries->name_library_capacity)
+        snprintf(cut, sizeof(cut), "; the open file limit holds no more than %llu",
+                 (unsigned long long)libraries->name_library_capacity);
+
+    char lookup[200];
+    if (!lookups)
+        snprintf(lookup, sizeof(lookup), "lookups are turned off in the configuration");
+    else if (name_libs == 0)
+        snprintf(lookup, sizeof(lookup), "lookups are probed in the C libraries processes map");
+    else
+        snprintf(lookup, sizeof(lookup), "lookups probed in %llu %s%s",
+                 (unsigned long long)name_libs, name_libs == 1 ? "library" : "libraries", cut);
+
+    char tlsc[120];
+    if (!tls)
+        snprintf(tlsc, sizeof(tlsc), "TLS server names are turned off in the configuration");
+    else if (tls_libs == 0)
+        snprintf(tlsc, sizeof(tlsc),
+                 "TLS server names are read where the client's library is probed");
+    else
+        snprintf(tlsc, sizeof(tlsc), "TLS server names in %llu %s", (unsigned long long)tls_libs,
+                 tls_libs == 1 ? "library" : "libraries");
+
+    enum ft_cap_status status =
+        lookups && tls && name_libs && tls_libs ? FT_CAP_FULL : FT_CAP_PARTIAL;
+    ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, status, "%s; %s", lookup, tlsc);
+}
 static void php_capability(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
                            struct ft_capabilities *out)
 {

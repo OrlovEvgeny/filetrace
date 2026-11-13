@@ -297,6 +297,7 @@ static void fill_stats(void *agent, uint64_t now_ns, struct ft_row_stats *row)
                                                   .capacity = bs.name_library_capacity,
                                                   .evictions = bs.name_libraries_forgotten};
     row->name_libraries_configured = bs.name_libraries_configured;
+    row->tls_libraries = bs.tls_libraries;
     row->pid = (uint32_t)getpid();
     if (d->cfg->backend->describe)
         d->cfg->backend->describe(d->backend, row->backend, sizeof(row->backend));

@@ -319,6 +319,7 @@ struct ft_row_stats {
     uint64_t names_refused; /* names refused: listed connections held every kept name */
     /* [limits] name_libraries, more than name_libraries.capacity when open files cut it */
     uint64_t name_libraries_configured;
+    uint64_t tls_libraries; /* TLS library files probed for server names; 0: none or TLS off */
 };
 
 struct ft_row_capability {
