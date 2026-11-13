@@ -147,6 +147,8 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     if (!cfg.file_corr)
         return 0;
     bool tcp = proto == IPPROTO_TCP;
+    if (tcp)
+        carry_left_behind(map, (__u64)sk, key.cookie);
     if (dir == FT_BPF_TX) {
         /* Pages spliced in by sendfile belong to the transfer that sendfile reports. */
         __u64 bytes = spliced ? 0 : (__u64)ret;
