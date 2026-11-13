@@ -721,6 +721,12 @@ static const char *group_text(const struct ft_top_transfer *t, enum ft_top_group
         text = buf;
         break;
     }
+    case FT_TOP_GROUP_NAME:
+        if (t->names) {
+            ft_remote_name_format(t->names, buf, size);
+            text = buf;
+        }
+        break;
     default:
         break;
     }
@@ -741,7 +747,7 @@ static bool emit_sections(struct ft_top_model *m, struct ft_top_mode_state *ms, 
 {
     struct ft_top_item *items = ms->items;
     size_t nsections = 0;
-    char buf[64];
+    char buf[FT_NAMES_TEXT_MAX];
 
     ft_top_map_clear(&ms->scratch);
     if (!ft_top_reserve(&ms->sections, &ms->sections_cap, n, sizeof(*ms->sections)) ||

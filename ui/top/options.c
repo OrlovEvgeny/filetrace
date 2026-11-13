@@ -57,6 +57,7 @@ const char *ft_top_group_name(enum ft_top_group group)
         [FT_TOP_GROUP_NONE] = "none",     [FT_TOP_GROUP_PROCESS] = "process",
         [FT_TOP_GROUP_SCRIPT] = "script", [FT_TOP_GROUP_DESTINATION] = "dest",
         [FT_TOP_GROUP_DIRECTORY] = "dir", [FT_TOP_GROUP_SUBNET] = "subnet",
+        [FT_TOP_GROUP_NAME] = "name",
     };
     return group < FT_TOP_GROUP_COUNT ? names[group] : "?";
 }

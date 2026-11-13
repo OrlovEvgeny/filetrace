@@ -44,6 +44,7 @@ enum ft_top_group : uint8_t {
     FT_TOP_GROUP_DESTINATION,
     FT_TOP_GROUP_DIRECTORY,
     FT_TOP_GROUP_SUBNET, /* IPv4 /24, IPv6 /64 */
+    FT_TOP_GROUP_NAME,   /* of the remote end, as the table shows it */
     FT_TOP_GROUP_COUNT,
 };
 
