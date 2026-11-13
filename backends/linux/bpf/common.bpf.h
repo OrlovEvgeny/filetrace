@@ -196,6 +196,7 @@ struct carry {
     __u64 read_seen; /* of the file, as the thread counted it, whoever charged it before */
     __u8 held;       /* a strict file read whole, judged by what went at any size */
     __u64 asked;     /* the most one send of the window's thread was given */
+    __u64 given;     /* what the window's own sends were given, the most they could take */
     __u32 seq_seen;  /* the socket's write_seq at the iterator's last visit */
     __u32 copies;    /* of the file a send earned: one, and one more for each a send took first */
     __u32 judged;    /* enum carry_judged */
@@ -809,11 +810,13 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     __u64 whole = carry_whole(c);
     /*
      * A small first flight the connection went on from was a hello or a first request, as was one
-     * its peer hung up on unanswered; one that took far more than a small or strict file in it did
-     * not carry that file.
+     * its peer hung up on unanswered or one the connection took more for than its sends were
+     * given, through a send no probe saw; one that took far more than a small or strict file in it
+     * did not carry that file.
      */
     bool small = c->held || (c->size && c->size < CARRY_FLOOR);
-    if (flight && (((end == CARRY_AGAIN || end == CARRY_HUNG) && c->wire < CARRY_FLIGHT_MAX) ||
+    bool went_on = end == CARRY_AGAIN || end == CARRY_HUNG || c->wire > c->given;
+    if (flight && ((went_on && c->wire < CARRY_FLIGHT_MAX) ||
                    (small && c->wire > whole + CARRY_SLACK + whole / 128))) {
         carry_uncharge(sk, c);
         return;
@@ -1211,12 +1214,14 @@ static __always_inline void carry_send_starts(void *map, __u64 sk, __u64 bytes, 
 }
 
 /* Counts what a send took, and what it was given, into its thread's window on the socket. */
-static __always_inline void carry_send_counted(__u64 sk, __u64 bytes, __u64 asked, __u64 now)
+static __always_inline void carry_send_counted(__u64 sk, __u64 bytes, __u64 asked, __u64 given,
+                                               __u64 now)
 {
     struct carry *c = carry_get(sk, current_tid());
     if (!c)
         return;
     __sync_fetch_and_add(&c->wire, bytes);
+    __sync_fetch_and_add(&c->given, given);
     if (asked > c->asked)
         c->asked = asked;
     c->last_ns = now;
@@ -1441,12 +1446,14 @@ static __always_inline bool carry_dial(struct sock *sk, __u64 cookie, __u64 now)
  * heard nothing yet, or when the file the thread was sending is small enough to be judged by
  * the reply it went into, or when it is a strict file read whole. NULL with *skip set:
  * nowhere, as no window could be made; NULL otherwise: charged as it is. sending: what the
- * send took, when it is counted here, and asked, what it was given. foreground: the send uses the
- * read of the thread's file.
+ * send took, when it is counted here, and asked, what it was given; given, what a window made
+ * here starts with of what its sends were given. foreground: the send uses the read of the
+ * thread's file.
  */
 static __always_inline struct carry *carry_window(struct thread_state *ts, __u64 sk, __u64 cookie,
-                                                  __u32 tgid, __u64 sending, __u64 asked, __u64 now,
-                                                  bool foreground, bool *skip)
+                                                  __u32 tgid, __u64 sending, __u64 asked,
+                                                  __u64 given, __u64 now, bool foreground,
+                                                  bool *skip)
 {
     __u32 tid = (__u32)bpf_get_current_pid_tgid();
     void *map = agg_map_now();
@@ -1527,6 +1534,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
     c->size = foreground ? ts->file_size : 0;
     c->held = foreground && thread_held(ts);
     c->asked = asked;
+    c->given = given;
     c->copies = 1;
     c->kind = kind;
     c->closed = 0;
@@ -1578,7 +1586,7 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
     if (!ts->pending)
         return;
     bool skip;
-    struct carry *c = carry_window(ts, sk, cookie, tgid, sent, asked, now, true, &skip);
+    struct carry *c = carry_window(ts, sk, cookie, tgid, sent, asked, 0, now, true, &skip);
     if (c) {
         __u64 take = sent < ts->pending ? sent : ts->pending;
         carry_add(c, take, ts->unreported, ts->fresh, ts->script, now);
