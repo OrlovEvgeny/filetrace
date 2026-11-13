@@ -125,6 +125,8 @@ struct ft_query {
     struct ft_endpoint local;
     char process[64];
     char script[1024]; /* of the process; matched as process is */
+    /* A pattern for the names of the remote end, as ft_name_pattern writes one; "": any. */
+    char remote_name[256];
     char path[FT_PATH_MAX];
 };
 

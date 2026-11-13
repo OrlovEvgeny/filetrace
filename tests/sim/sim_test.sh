@@ -110,6 +110,11 @@ ok "a looked-up name is shown" grep -Eq ' 10\.0\.7\.3[12]:873 +mirror-[12]\.inte
 ok "several looked-up names are counted" grep -q ' ch-replica-2\.internal (+1) ' connections.txt
 ok "a server name through a proxy says so" grep -q ' registry\.ml\.example\.com via proxy\.corp\.internal ' connections.txt
 ok "an accepted connection has no name" grep -Eq ' nginx +TCP +[^ ]+:443 +[^ ]+ +- ' connections.txt
+ok "files are listed by a name" query named.jsonl files --remote '*.s3.example.com' --jsonl
+ok "the name filter leaves what has the name" grep -q '"remote_name":"pg-backups.s3.example.com","remote_name_source":"lookup+tls","resolved_names":\["pg-backups.s3.example.com"\],"resolved_name_count":1' named.jsonl
+ok "the name filter leaves nothing else" test "$(grep -vc '"remote_name":"pg-backups.s3.example.com"' named.jsonl)" -eq 0
+ok "an unknown name lists nothing" query unnamed.txt files --remote none.example.com --format quiet
+ok "nothing is listed for it" test ! -s unnamed.txt
 
 
 ok "top prints a snapshot" query top.txt top --once

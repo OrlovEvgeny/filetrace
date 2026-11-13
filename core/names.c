@@ -69,6 +69,60 @@ enum ft_name_kind ft_name_normalise(const char *text, char out[static FT_NAME_MA
     return FT_NAME_HOST;
 }
 
+static char lower(char c)
+{
+    return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+}
+
+bool ft_name_pattern(const char *text, char out[static FT_NAME_MAX])
+{
+    bool letter = false;
+    bool digit = false;
+    size_t len = 0;
+
+    for (; text[len]; len++) {
+        char c = lower(text[len]);
+        bool part = (c >= 'a' && c <= 'z') || is_digit(c) || c == '-' || c == '_' || c == '.';
+        if (len >= FT_NAME_MAX - 1 || (!part && c != '*')) {
+            out[0] = '\0';
+            return false;
+        }
+        letter = letter || (c >= 'a' && c <= 'z');
+        digit = digit || is_digit(c);
+        out[len] = c;
+    }
+    if (len > 1 && out[len - 1] == '.')
+        len--;
+    out[len] = '\0';
+    if (len == 0 || (digit && !letter))
+        out[0] = '\0';
+    return out[0] != '\0';
+}
+
+bool ft_name_matches(const char *pattern, const char *name)
+{
+    const char *after_star = nullptr;
+    const char *retry = nullptr;
+
+    while (*name) {
+        if (*pattern == '*') {
+            after_star = ++pattern;
+            retry = name;
+        } else if (lower(*pattern) == *name) {
+            pattern++;
+            name++;
+        } else if (after_star) {
+            pattern = after_star;
+            name = ++retry;
+        } else {
+            return false;
+        }
+    }
+    while (*pattern == '*')
+        pattern++;
+    return *pattern == '\0';
+}
+
 const char *ft_name_source_name(enum ft_name_source source)
 {
     switch (source) {

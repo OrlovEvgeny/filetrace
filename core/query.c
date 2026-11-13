@@ -89,6 +89,31 @@ static bool match_tuple(const struct ft_query *q, uint16_t proto, const struct f
     return true;
 }
 
+/* A remote end matches by any name it has; one without a name matches no pattern. */
+static bool match_remote_name(const struct ft_state *st, const struct ft_query *q,
+                              const struct ft_name_binding *b)
+{
+    struct ft_remote_names names;
+
+    if (!q->remote_name[0])
+        return true;
+    ft_binding_names(st, b, &names);
+    if (names.tls[0] && ft_name_matches(q->remote_name, names.tls))
+        return true;
+    for (uint32_t i = 0; i < names.listed; i++) {
+        if (ft_name_matches(q->remote_name, names.resolved[i]))
+            return true;
+    }
+    return false;
+}
+
+static const struct ft_name_binding *flow_names(const struct ft_state *st, const struct ft_flow *f)
+{
+    const struct ft_socket *s =
+        f->proto == FT_PROTO_TCP ? ft_table_find(st->sockets, &f->sock_id) : nullptr;
+    return s ? &s->names : &f->names;
+}
+
 static bool process_in_scope(const struct ft_query *q, const struct ft_process *p)
 {
     if ((q->flags & FT_QF_HAS_UID) && q->uid != p->uid)
@@ -399,6 +424,8 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
             continue;
         if (!match_tuple(q, s->proto, &s->local, &s->remote))
             continue;
+        if (!match_remote_name(st, q, ft_state_socket_names(st, s)))
+            continue;
         if (!in_span(&sp, s->first_ns, s->last_ns))
             continue;
         if (!owner_in_scope(st, q, s->pid))
@@ -483,6 +510,8 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
             continue;
         if (!match_tuple(q, f->proto, &f->local, &f->remote))
             continue;
+        if (!match_remote_name(st, q, flow_names(st, f)))
+            continue;
         if (f->tx_bytes + f->rx_bytes < q->min_bytes)
             continue;
         if ((q->flags & FT_QF_ACTIVE) && now_ns - f->last_ns > st->cfg.active_window_ns)
@@ -544,10 +573,7 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
             .remote = f->remote,
         };
         ft_strlcpy(row.comm, f->comm, sizeof(row.comm));
-        const struct ft_socket *s =
-            f->proto == FT_PROTO_TCP ? ft_table_find(st->sockets, &f->sock_id) : nullptr;
-        size_t names =
-            pack_names(st, s ? &s->names : &f->names, &row.names, row.text, sizeof(row.text));
+        size_t names = pack_names(st, flow_names(st, f), &row.names, row.text, sizeof(row.text));
         emit(ctx, FT_MSG_ROW_FLOW, &row, offsetof(struct ft_row_flow, text) + names);
     }
     end->rows = (uint32_t)n;
@@ -756,6 +782,8 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         if (!match_tuple(q, s ? s->proto : 0, s ? &s->local : &unspecified,
                          s ? &s->remote : &unspecified))
             continue;
+        if (!match_remote_name(st, q, s ? ft_state_socket_names(st, s) : nullptr))
+            continue;
         if (!owner_in_scope(st, q, t->pid))
             continue;
 
@@ -804,6 +832,8 @@ static bool query_transfers(struct ft_state *st, const struct ft_query *q, uint6
         if (!in_span(&sp, s->first_ns, s->last_ns))
             continue;
         if (!match_tuple(q, s->proto, &s->local, &s->remote))
+            continue;
+        if (!match_remote_name(st, q, ft_state_socket_names(st, s)))
             continue;
         if (!owner_in_scope(st, q, s->pid))
             continue;
@@ -860,6 +890,11 @@ bool ft_state_record_matches(const struct ft_query *q, uint64_t from_ns, uint64_
         return false;
     if (network_filter && !(row->sock_id && match_tuple(q, row->proto, &row->local, &row->remote)))
         return false;
+    if (q->remote_name[0]) {
+        const char *name = ft_row_event_name(row);
+        if (!name[0] || !ft_name_matches(q->remote_name, name))
+            return false;
+    }
     return true;
 }
 
