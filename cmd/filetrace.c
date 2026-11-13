@@ -175,6 +175,15 @@ static void help_transfer_options(FILE *o)
     ft_query_args_help(o, FT_OPTS_TRANSFERS, FT_SORTS_TRANSFERS, FT_FORMATS_ALL);
 }
 
+static const char remote_names[] =
+    "NAME is the name the process used for the remote end, where one is known:\n"
+    "a name it looked up and got this address for, or the server name it asked\n"
+    "for over TLS. \"name (+2)\" says it looked up two more names for the\n"
+    "address; \"name via other\" is a server name on an address it looked up as\n"
+    "another, as through a proxy. A process picks its names, so the address\n"
+    "stays the fact. The column is left out when no row has a name.\n"
+    "\n";
+
 static void help_files(FILE *o)
 {
     fputs("Usage:\n"
@@ -187,8 +196,10 @@ static void help_files(FILE *o)
           "BYTES counts what the socket accepted from this file. It is neither the\n"
           "size of the file nor the bytes read from it; machine-readable formats\n"
           "carry all three as file.size, transfer.bytes_read and transfer.bytes_sent.\n"
-          "\n"
-          "Options:\n"
+          "\n",
+          o);
+    fputs(remote_names, o);
+    fputs("Options:\n"
           "  --deleted               Only files that no longer have a directory entry\n"
           "  --include-unknown       Also list sent bytes with no associated file\n",
           o);
@@ -198,6 +209,7 @@ static void help_files(FILE *o)
           "  filetrace files --active\n"
           "  filetrace files --path /data/report.csv\n"
           "  filetrace files --path '/data/*' --since 1h\n"
+          "  filetrace files --remote '*.example.com'\n"
           "  filetrace files --confidence exact --min-bytes 100MB\n"
           "  filetrace files --jsonl\n"
           "\n"
@@ -214,8 +226,10 @@ static void help_transfers(FILE *o)
           "\n"
           "Transfer records, most recent first, including sent bytes that could not\n"
           "be associated with a file (FILE shows 'unknown').\n"
-          "\n"
-          "Options:\n"
+          "\n",
+          o);
+    fputs(remote_names, o);
+    fputs("Options:\n"
           "  --deleted               Only files that no longer have a directory entry\n",
           o);
     help_transfer_options(o);
@@ -265,14 +279,17 @@ static void help_connections(FILE *o)
           "REMOTE are the two ends as this machine sees them: for a server the remote\n"
           "end is the client. The owning process of an accepted connection is known\n"
           "once it sends or receives. SOCKET is the ID that 'inspect socket' takes.\n"
-          "\n"
-          "Options:\n"
+          "\n",
+          o);
+    fputs(remote_names, o);
+    fputs("Options:\n"
           "  --active                Only sockets that are open\n",
           o);
     ft_query_args_help(o, FT_OPTS_CONNECTIONS, FT_SORTS_CONNECTIONS, FT_FORMATS_ALL);
     fputs("\nExamples:\n"
           "  filetrace connections --protocol tcp\n"
           "  filetrace connections --remote 203.0.113.42\n"
+          "  filetrace connections --remote files.example.com\n"
           "  filetrace connections --pid 1842 --state established\n"
           "\n"
           "--format quiet prints one socket ID per row.\n",
@@ -289,8 +306,10 @@ static void help_flows(FILE *o)
           "Bytes exchanged per process, socket and remote endpoint, largest sender\n"
           "first. SENT counts bytes the local socket accepted, not bytes the remote\n"
           "end acknowledged. FLOW is the ID that 'inspect flow' takes.\n"
-          "\n"
-          "Options:\n"
+          "\n",
+          o);
+    fputs(remote_names, o);
+    fputs("Options:\n"
           "  --group-by <key>        Merge flows by process, remote, port or protocol\n"
           "  --direction <dir>       Order by inbound, outbound (default) or both\n"
           "  --active                Only flows with recent traffic\n",
@@ -372,7 +391,10 @@ static void help_events(FILE *o)
           "                   the confidence of the association so far\n"
           "  event_loss       Events the collector could not record\n"
           "\n"
-          "File opens and individual system calls are not recorded.\n"
+          "File opens and individual system calls are not recorded. A socket, network\n"
+          "or transfer event has remote_name and remote_name_source when the process\n"
+          "used a name for the remote end: the name the connection had when the event\n"
+          "was recorded.\n"
           "\n"
           "Options:\n"
           "  --type <types>          Only these event types, separated by commas\n"
