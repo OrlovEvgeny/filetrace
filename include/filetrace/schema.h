@@ -40,6 +40,7 @@
 /* The name the process used for the remote end; never an address, which has its own key. */
 #define FT_ATTR_SERVER_ADDRESS "server.address"
 #define FT_ATTR_SERVER_ADDRESS_SOURCE "filetrace.server.address.source"
+#define FT_ATTR_SERVER_RESOLVED_NAMES "filetrace.server.resolved_names"
 
 #define FT_ATTR_EVENT_TYPE "filetrace.event.type"
 #define FT_ATTR_SOCKET_ID "filetrace.socket.id"

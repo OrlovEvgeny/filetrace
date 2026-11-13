@@ -254,14 +254,22 @@ struct ft_otlp *ft_otlp_open(const struct ft_otlp_config *cfg,
 
 void ft_otlp_record(struct ft_otlp *o, const struct ft_row_event *row)
 {
+    struct ft_remote_names names;
+    const struct ft_remote_names *resolved = nullptr;
+
     if (!o || !o->cfg.logs || !(o->cfg.event_types & (1u << row->type)))
         return;
+    /* A record carries one name; the looked-up ones are its socket's, read while it is made. */
+    if (o->cfg.names && row->type == FT_REC_FILE_TRANSFER) {
+        ft_telemetry_transfer_names(&o->src, row, &names);
+        resolved = &names;
+    }
     memcpy(o->row, row, ft_row_event_size(row));
     o->row->time_ns = ft_clock_mono_to_wall(row->time_ns);
-    if (ft_otlp_logs_add(o->batch, o->row))
+    if (ft_otlp_logs_add(o->batch, o->row, resolved))
         return;
     flush_batch(o);
-    if (!ft_otlp_logs_add(o->batch, o->row))
+    if (!ft_otlp_logs_add(o->batch, o->row, resolved))
         o->dropped++;
 }
 

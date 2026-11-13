@@ -21,8 +21,12 @@ struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths, bool 
                                       bool names);
 void ft_otlp_logs_free(struct ft_otlp_logs *b);
 
-/* row carries wall-clock time. False when the batch is full: the record was not taken. */
-bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row);
+/*
+ * row carries wall-clock time; names are those of a transfer record's remote end, or nullptr.
+ * False when the batch is full: the record was not taken.
+ */
+bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row,
+                      const struct ft_remote_names *names);
 
 size_t ft_otlp_logs_count(const struct ft_otlp_logs *b);
 
