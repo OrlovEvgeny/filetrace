@@ -3,6 +3,9 @@
 #include "ui/tui/canvas.h"
 #include "ui/tui/lineedit.h"
 #include "ui/tui/theme.h"
+#include "ui/ui.h"
+
+#include <stdlib.h>
 
 static const struct ft_style TEXT = {.fg = FT_COLOR_TEXT};
 
@@ -403,6 +406,135 @@ static void test_lineedit_words(void)
     CHECK_STR(e.text, "");
 }
 
+static const struct ft_column_spec FIT_COLUMNS[] = {
+    {"NAME", false},
+    {"PATH", false},
+    {"RATE", true},
+    {"NOTE", false},
+};
+static const struct ft_column_fit FIT[] = {
+    {.cut = 2, .least = 8},
+    {.cut = 1, .least = 16, .keep_end = true},
+    {0},
+    {.leave = 1},
+};
+/* Letters beyond ASCII both in what a cut takes and in what it keeps. */
+static const char *const FIT_CELLS[][4] = {
+    {"alpha", "/vär/log/nginx/access.log", "12.5 MB/s", "EXACT"},
+    {"clickhoüse-serv", "/srv/a.bin", "0 B/s", "INFERRED"},
+};
+
+static const char *fit_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
+{
+    (void)ctx;
+    snprintf(buf, size, "%s", FIT_CELLS[r][c]);
+    return buf;
+}
+
+/* The table fitted to width, or as ft_table_print prints it for 0; the caller frees it. */
+static char *fitted(size_t width, bool *fits)
+{
+    char *text = nullptr;
+    size_t size = 0;
+    FILE *out = open_memstream(&text, &size);
+
+    CHECK(out != nullptr);
+    if (!out)
+        return strdup("");
+    if (width)
+        *fits = ft_table_print_fit(out, FIT_COLUMNS, FIT, 4, 2, fit_cell, nullptr, false, width);
+    else
+        ft_table_print(out, FIT_COLUMNS, 4, 2, fit_cell, nullptr, false);
+    fclose(out);
+    return text;
+}
+
+static void check_fitted(size_t width, bool fits, const char *expected)
+{
+    bool did = !fits;
+    char *text = fitted(width, &did);
+
+    CHECK(did == fits);
+    CHECK_STR(text, expected);
+    free(text);
+}
+
+static void test_table_fit_untouched(void)
+{
+    const char *table = "NAME             PATH                            RATE  NOTE\n"
+                        "alpha            /vär/log/nginx/access.log  12.5 MB/s  EXACT\n"
+                        "clickhoüse-serv  /srv/a.bin                     0 B/s  INFERRED\n";
+    bool fits = false;
+    char *printed = fitted(0, &fits);
+
+    CHECK_STR(printed, table);
+    free(printed);
+    check_fitted(63, true, table);
+    check_fitted(SIZE_MAX, true, table);
+}
+
+static void test_table_fit_cuts_cells(void)
+{
+    check_fitted(60, true,
+                 "NAME             PATH                         RATE  NOTE\n"
+                 "alpha            ...og/nginx/access.log  12.5 MB/s  EXACT\n"
+                 "clickhoüse-serv  /srv/a.bin                  0 B/s  INFERRED\n");
+    check_fitted(54, true,
+                 "NAME             PATH                   RATE  NOTE\n"
+                 "alpha            ...nx/access.log  12.5 MB/s  EXACT\n"
+                 "clickhoüse-serv  /srv/a.bin            0 B/s  INFERRED\n");
+    check_fitted(50, true,
+                 "NAME         PATH                   RATE  NOTE\n"
+                 "alpha        ...nx/access.log  12.5 MB/s  EXACT\n"
+                 "clickhoü...  /srv/a.bin            0 B/s  INFERRED\n");
+    check_fitted(47, true,
+                 "NAME      PATH                   RATE  NOTE\n"
+                 "alpha     ...nx/access.log  12.5 MB/s  EXACT\n"
+                 "click...  /srv/a.bin            0 B/s  INFERRED\n");
+}
+
+static void test_table_fit_leaves_columns(void)
+{
+    check_fitted(46, true,
+                 "NAME             PATH                     RATE\n"
+                 "alpha            ...ginx/access.log  12.5 MB/s\n"
+                 "clickhoüse-serv  /srv/a.bin              0 B/s\n");
+    check_fitted(37, true,
+                 "NAME      PATH                   RATE\n"
+                 "alpha     ...nx/access.log  12.5 MB/s\n"
+                 "click...  /srv/a.bin            0 B/s\n");
+    check_fitted(36, false,
+                 "NAME      PATH                   RATE\n"
+                 "alpha     ...nx/access.log  12.5 MB/s\n"
+                 "click...  /srv/a.bin            0 B/s\n");
+}
+
+/* Every line within the width, and the rates ending where their title does. */
+static void test_table_fit_bounds(void)
+{
+    const char *const rates[] = {"RATE", FIT_CELLS[0][2], FIT_CELLS[1][2]};
+
+    for (size_t width = 37; width <= 70; width++) {
+        bool fits = false;
+        char *text = fitted(width, &fits);
+        size_t ends[3] = {0};
+        char *line = text;
+
+        CHECK(fits);
+        for (size_t i = 0; i < 3 && line; i++) {
+            char *next = strchr(line, '\n');
+            if (next)
+                *next = '\0';
+            const char *rate = strstr(line, rates[i]);
+            ends[i] = rate ? ft_text_width(line) - ft_text_width(rate) + strlen(rates[i]) : 0;
+            CHECK(ft_text_width(line) <= width);
+            line = next ? next + 1 : nullptr;
+        }
+        CHECK(ends[0] > 0 && ends[1] == ends[0] && ends[2] == ends[0]);
+        free(text);
+    }
+}
+
 void test_tui(void)
 {
     test_text_clipping();
@@ -418,4 +550,8 @@ void test_tui(void)
     test_theme_detect();
     test_lineedit_utf8();
     test_lineedit_words();
+    test_table_fit_untouched();
+    test_table_fit_cuts_cells();
+    test_table_fit_leaves_columns();
+    test_table_fit_bounds();
 }

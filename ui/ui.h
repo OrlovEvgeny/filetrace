@@ -25,6 +25,24 @@ typedef const char *ft_cell_fn(void *ctx, size_t row, size_t col, char *buf, siz
 void ft_table_print(FILE *out, const struct ft_column_spec *cols, size_t ncols, size_t nrows,
                     ft_cell_fn *cell, void *ctx, bool styled);
 
+/* What a column gives up, and when, if its table is wider than the room for it. */
+struct ft_column_fit {
+    uint8_t cut;   /* turn in which its cells are cut, from 1; 0: never */
+    size_t least;  /* the narrowest a cut leaves them, and never narrower than the title */
+    bool keep_end; /* a cut keeps the end of the text, as of a path, rather than its start */
+    uint8_t leave; /* turn in which the column is left out whole, from 1; 0: never */
+};
+
+/*
+ * Prints a table as ft_table_print does, no wider than width. A wider one has its cells cut with
+ * "...", the cut columns in turn, each no further than needed nor below its least width. If that
+ * is not enough, whole columns are left out in turn, the rest cut afresh each time. Returns false
+ * if the table is still too wide, and prints it at its narrowest.
+ */
+bool ft_table_print_fit(FILE *out, const struct ft_column_spec *cols,
+                        const struct ft_column_fit *fit, size_t ncols, size_t nrows,
+                        ft_cell_fn *cell, void *ctx, bool styled, size_t width);
+
 /* Display width of UTF-8 text, counting each code point as one column. */
 size_t ft_text_width(const char *s);
 
