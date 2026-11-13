@@ -404,6 +404,7 @@ struct destination {
     uint64_t tx;
     uint64_t rx;
     uint64_t rate;
+    struct ft_kept_names names;
 };
 
 struct destinations {
@@ -423,6 +424,14 @@ static int by_rate_then_bytes(const void *a, const void *b)
     return compare_addr(&x->addr, &y->addr);
 }
 
+static void destinations_free(struct destinations *d)
+{
+    for (size_t i = 0; i < d->count; i++)
+        ft_kept_names_free(&d->items[i].names);
+    free(d->items);
+}
+
+/* On failure, d holds what destinations_free needs. */
 static bool group_destinations(const struct ft_rows *flows, struct destinations *d)
 {
     d->items = calloc(flows->count + 1, sizeof(*d->items));
@@ -432,12 +441,18 @@ static bool group_destinations(const struct ft_rows *flows, struct destinations 
 
     for (size_t i = 0; i < flows->count; i++) {
         struct ft_row_flow flow;
+        struct ft_remote_names names;
         ft_rows_get(flows, i, &flow, sizeof(flow));
+        ft_row_flow_names(&flow, &names);
         d->items[i].addr = flow.remote;
         d->items[i].addr.port = 0;
         d->items[i].tx = flow.tx_bytes;
         d->items[i].rx = flow.rx_bytes;
         d->items[i].rate = flow.tx_rate;
+        if (!ft_kept_names_add(&d->items[i].names, &names, flow.tx_bytes)) {
+            d->count = i;
+            return false;
+        }
     }
     /* The address is the first member, so the address order applies to the items. */
     qsort(d->items, flows->count, sizeof(*d->items), compare_addr);
@@ -447,6 +462,7 @@ static bool group_destinations(const struct ft_rows *flows, struct destinations 
             last->tx += d->items[i].tx;
             last->rx += d->items[i].rx;
             last->rate += d->items[i].rate;
+            ft_kept_names_join(&last->names, &d->items[i].names);
         } else {
             d->items[d->count++] = d->items[i];
         }
@@ -455,13 +471,32 @@ static bool group_destinations(const struct ft_rows *flows, struct destinations 
     return true;
 }
 
+enum destination_field : uint8_t {
+    DEST_ADDRESS,
+    DEST_NAME,
+    DEST_RATE,
+    DEST_TX,
+    DEST_RX,
+};
+
+struct destination_column {
+    struct ft_column_spec spec;
+    enum destination_field field;
+};
+
+struct destination_table {
+    const struct destinations *destinations;
+    enum destination_field fields[DEST_RX + 1];
+};
+
 static const char *destination_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
 {
-    const struct destinations *d = ctx;
+    const struct destination_table *t = ctx;
+    const struct destinations *d = t->destinations;
     const struct destination *it = &d->items[r];
 
-    switch (c) {
-    case 0: {
+    switch (t->fields[c]) {
+    case DEST_ADDRESS: {
         const char *host = d->resolve ? ft_resolver_name(&it->addr) : nullptr;
         if (host)
             snprintf(buf, size, "%s", host);
@@ -469,23 +504,49 @@ static const char *destination_cell(void *ctx, size_t r, size_t c, char *buf, si
             ft_addr_format(&it->addr, buf, size);
         break;
     }
-    case 1:
+    case DEST_NAME:
+        ft_kept_names_format(&it->names, buf, size);
+        return buf[0] ? buf : "-";
+    case DEST_RATE:
         ft_format_rate(it->rate, buf, size);
         break;
-    case 2:
+    case DEST_TX:
         ft_format_bytes(it->tx, buf, size);
         break;
-    default:
+    case DEST_RX:
         ft_format_bytes(it->rx, buf, size);
         break;
     }
     return buf;
 }
 
+/* The first shown of them in the columns, NAME left out where none of those has a name. */
+static void destinations_print(FILE *o, const struct destinations *d, size_t shown,
+                               const struct destination_column *columns, size_t ncolumns)
+{
+    struct ft_column_spec specs[DEST_RX + 1];
+    struct destination_table table = {.destinations = d};
+    bool named = false;
+    size_t n = 0;
+
+    for (size_t i = 0; i < shown; i++)
+        named = named || d->items[i].names.first;
+    for (size_t i = 0; i < ncolumns; i++) {
+        if (columns[i].field == DEST_NAME && !named)
+            continue;
+        table.fields[n] = columns[i].field;
+        specs[n++] = columns[i].spec;
+    }
+    ft_table_print(o, specs, n, shown, destination_cell, &table, ft_term_styled(o));
+}
+
 static void destinations_table(const struct inspect *in, const struct destinations *d)
 {
-    static const struct ft_column_spec columns[] = {
-        {"DESTINATION", false}, {"OUTBOUND", true}, {"SENT", true}, {"RECEIVED", true}};
+    static const struct destination_column columns[] = {
+        {{"DESTINATION", false}, DEST_ADDRESS}, {{"NAME", false}, DEST_NAME},
+        {{"OUTBOUND", true}, DEST_RATE},        {{"SENT", true}, DEST_TX},
+        {{"RECEIVED", true}, DEST_RX},
+    };
     FILE *o = in->out.stream;
     size_t shown = in->limit < d->count ? in->limit : d->count;
 
@@ -495,8 +556,7 @@ static void destinations_table(const struct inspect *in, const struct destinatio
         fputs("None observed.\n", o);
         return;
     }
-    ft_table_print(o, columns, FT_ARRAY_LEN(columns), shown, destination_cell, (void *)(uintptr_t)d,
-                   ft_term_styled(o));
+    destinations_print(o, d, shown, columns, FT_ARRAY_LEN(columns));
     more_note(o, d->count, shown, "destination", "destinations");
 }
 
@@ -507,11 +567,15 @@ static void destinations_json(FILE *o, const struct destinations *d)
     fputs("\"destinations\":[", o);
     for (size_t i = 0; i < d->count; i++) {
         const struct destination *it = &d->items[i];
+        struct ft_address_names behind;
         ft_addr_format(&it->addr, addr, sizeof(addr));
         fprintf(o,
                 "%s{\"remote_ip\":\"%s\",\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
-                ",\"bytes_sent_per_second\":%" PRIu64 "}",
+                ",\"bytes_sent_per_second\":%" PRIu64,
                 i ? "," : "", addr, it->tx, it->rx, it->rate);
+        ft_kept_names_behind(&it->names, &behind);
+        ft_json_names(o, "remote_names", &behind);
+        fputc('}', o);
     }
     fputc(']', o);
 }
@@ -654,7 +718,7 @@ static int inspect_process(struct inspect *in, const char *arg)
     history_note(in, o);
 
 out:
-    free(dest.items);
+    destinations_free(&dest);
     ft_rows_free(&processes);
     ft_rows_free(&flows);
     ft_rows_free(&transfers);
