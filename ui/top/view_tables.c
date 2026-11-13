@@ -147,7 +147,7 @@ static const struct column_spec named_destination_columns[] = {
     {COL_FILES, "FILES", 6, true, FT_TOP_SORT_FILES, FT_TOP_SORT_DEFAULT},
     {COL_PROCS, "PROCS", 6, true, FT_TOP_SORT_PROCESSES, FT_TOP_SORT_DEFAULT},
     {COL_TOP_PROCESS, "TOP PROCESS", 20, false, FT_TOP_SORT_PROCESS, FT_TOP_SORT_DEFAULT},
-    {COL_TOP_FILE, "TOP FILE", 30, false, FT_TOP_SORT_FILE, FT_TOP_SORT_DEFAULT},
+    {COL_TOP_FILE, "TOP FILE", 24, false, FT_TOP_SORT_FILE, FT_TOP_SORT_DEFAULT},
     {COL_TREND, "TREND 5m", 12, false, FT_TOP_SORT_DEFAULT, FT_TOP_SORT_DEFAULT},
 };
 
@@ -183,7 +183,7 @@ static const struct table_spec tables[] = {
 };
 
 static const struct table_spec named_destinations = {
-    named_destination_columns,  FT_ARRAY_LEN(named_destination_columns),  COL_NAME, 16, 30,
+    named_destination_columns,  FT_ARRAY_LEN(named_destination_columns),  COL_NAME, 20, 30,
     named_destination_squeezes, FT_ARRAY_LEN(named_destination_squeezes),
 };
 
@@ -378,6 +378,22 @@ static const char *cut_end(struct row_draw *rd, const char *text, int cols)
     return out;
 }
 
+/* Cuts a name and keeps the count of other names that follows it. */
+static const char *keep_count(struct row_draw *rd, const char *text, int cols)
+{
+    if (cols <= 0 || ft_text_columns(text) <= cols)
+        return text;
+
+    const char *count = strstr(text, " (+");
+    int count_cols = count ? ft_text_columns(count) : 0;
+    if (!count || count_cols + 2 > cols)
+        return cut_end(rd, text, cols);
+    char *out = row_text(rd);
+    size_t head = prefix_bytes(text, cols - count_cols - 1);
+    snprintf(out, ROW_TEXT_BYTES, "%.*s…%s", (int)head, text, count);
+    return out;
+}
+
 /*
  * Where a transfer goes: the name the process used, else the host name with the port when one
  * is known, else the address.
@@ -389,7 +405,10 @@ static const char *endpoint_text(struct row_draw *rd, const struct ft_top_transf
     if (t->names && !rd->d->ui->addresses) {
         char *name = row_text(rd);
         ft_remote_name_cell(t->names, t->remote.port, name, ROW_TEXT_BYTES);
-        return cut_end(rd, name, cols);
+        /* A port that would be cut is left out: half a port says nothing true of the name. */
+        if (cols > 0 && ft_text_columns(name) > cols)
+            ft_remote_name_cell(t->names, 0, name, ROW_TEXT_BYTES);
+        return keep_count(rd, name, cols);
     }
     if (t->destination && t->destination->host_state == FT_TOP_HOST_NAMED && t->destination->host) {
         char *buf = row_text(rd);
@@ -857,7 +876,8 @@ static void destination_cells(struct row_draw *rd, const struct columns *cols,
             break;
         }
         case COL_NAME:
-            cell(rd, c, style(rd, FT_COLOR_TEXT, false), dst->name, FT_TOP_FIELD_DEST);
+            cell(rd, c, style(rd, FT_COLOR_TEXT, false), keep_count(rd, dst->name, c->width - 1),
+                 FT_TOP_FIELD_DEST);
             break;
         case COL_RDNS: {
             const char *name = dst->host_state == FT_TOP_HOST_NAMED && dst->host ? dst->host

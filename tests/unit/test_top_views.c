@@ -358,6 +358,48 @@ static void transfer_names(void)
     fixture_free(&f);
 }
 
+/* A cell too narrow for its name gives up the port whole, and keeps the count of other names. */
+static void names_cut_to_the_cell(void)
+{
+    static const struct ft_remote_names replica = {
+        .tls = "", .resolved = {"ch-replica-3.internal"}, .listed = 1, .count = 1};
+    static const struct ft_remote_names cluster = {
+        .tls = "",
+        .resolved = {"ch-replica-2.internal", "clickhouse.internal"},
+        .listed = 2,
+        .count = 2,
+    };
+    static const struct ft_remote_names registry = {.tls = "registry.ml.example.com",
+                                                    .resolved = {"proxy.corp.internal"},
+                                                    .listed = 1,
+                                                    .count = 1};
+    static const char *const want[] = {
+        "ch-replica-3.internal    ",
+        "ch-replica-2.inter… (+1) ",
+        "registry.ml.example.com… ",
+    };
+    struct fixture f = {.m = ft_top_model_create()};
+    struct ft_top_ui ui = {.mode = FT_TOP_TRANSFERS, .full_paths = true};
+
+    ft_rows_init(&f.transfers, FT_MSG_ROW_TRANSFER);
+    ft_rows_init(&f.processes, FT_MSG_ROW_PROCESS);
+    process(&f, 300, 1, "clickhouse", "clickhouse-server", "");
+    add_transfer(&f, 1, 300, 3'000'000, "/srv/a.bin", "10.0.6.15", 9009, &replica);
+    add_transfer(&f, 2, 300, 2'000'000, "/srv/b.bin", "10.0.6.14", 9009, &cluster);
+    add_transfer(&f, 3, 300, 1'000'000, "/srv/c.bin", "10.0.8.40", 443, &registry);
+    f.stats.now_wall_ns = WALL;
+    struct ft_top_sample sample = {
+        .mono_ns = SECOND,
+        .stats = &f.stats,
+        .transfers = &f.transfers,
+        .processes = &f.processes,
+    };
+    CHECK(ft_top_model_sample(f.m, &sample));
+    ft_top_set_mode(f.m, FT_TOP_TRANSFERS);
+    destination_cells(&f, &ui, want);
+    fixture_free(&f);
+}
+
 /* The header of the Destinations table at a width, with the first row under it. */
 static struct ft_canvas *destinations_table(struct fixture *f, struct ft_top_ui *ui, int width)
 {
@@ -750,6 +792,7 @@ void test_top_views(void)
     live_modes();
     transfer_columns();
     transfer_names();
+    names_cut_to_the_cell();
     destination_columns();
     layout();
     tree_guides();
