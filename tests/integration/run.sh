@@ -204,6 +204,14 @@ expect_match "events: text fields" \
     "$(ft events --type file_seen --file "$data/report.csv" | tr '\n' ' ')" \
     "file=$data/report.csv +inode=[0-9]+ +device=[0-9]+ +size=5000000"
 
+# The kernel's recursion guard skips a few probe runs on a busy CPU; the agent reads that count
+# and reports it apart from dropped events. A quiet guest skips none, so the check is that the
+# figure is present and parses, in stats JSON and in doctor, not that it is above zero.
+expect_match "pipeline: stats reports skipped probe runs" "$(ft stats --json)" \
+    '"probe_runs_skipped":\{"total":[0-9]+,"sent":[0-9]+,"received":[0-9]+,"read":[0-9]+,"other":[0-9]+\}'
+expect_match "pipeline: doctor reports skipped probe runs" "$(ft doctor)" \
+    'Skipped probes: +[0-9]'
+
 # Both ends of its connection, and its listener, are closed. Checked before any
 # other scenario runs, because a later one can be given the same port.
 csv=$(ft connections --port "$first_port" --state closed --format csv)

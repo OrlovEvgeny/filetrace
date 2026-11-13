@@ -299,6 +299,10 @@ static void fill_stats(void *agent, uint64_t now_ns, struct ft_row_stats *row)
     row->name_libraries_configured = bs.name_libraries_configured;
     row->tls_libraries = bs.tls_libraries;
     row->tls_library_capacity = bs.tls_library_capacity;
+    row->probe_skips = bs.probe_skips;
+    row->probe_skips_sent = bs.probe_skips_sent;
+    row->probe_skips_received = bs.probe_skips_received;
+    row->probe_skips_read = bs.probe_skips_read;
     row->pid = (uint32_t)getpid();
     if (d->cfg->backend->describe)
         d->cfg->backend->describe(d->backend, row->backend, sizeof(row->backend));

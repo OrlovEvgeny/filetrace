@@ -321,6 +321,11 @@ struct ft_row_stats {
     uint64_t name_libraries_configured;
     uint64_t tls_libraries; /* TLS library files probed for server names; 0: none or TLS off */
     uint64_t tls_library_capacity; /* TLS library files that may be probed */
+    /* probe runs the kernel declined to nest on a busy CPU (recursion_misses) */
+    uint64_t probe_skips;
+    uint64_t probe_skips_sent;
+    uint64_t probe_skips_received;
+    uint64_t probe_skips_read;
 };
 
 struct ft_row_capability {

@@ -892,6 +892,17 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
             ft_format_count(s->candidates_rejected, a, sizeof(a));
             fprintf(o, "%-18s%s below the inference thresholds\n", "Candidates:", a);
         }
+        ft_format_count(s->probe_skips, a, sizeof(a));
+        if (s->probe_skips) {
+            char se[32], re[32], rd[32];
+            ft_format_count(s->probe_skips_sent, se, sizeof(se));
+            ft_format_count(s->probe_skips_received, re, sizeof(re));
+            ft_format_count(s->probe_skips_read, rd, sizeof(rd));
+            fprintf(o, "%-18s%s (sent %s, received %s, read %s)\n", "Skipped probes:", a, se, re,
+                    rd);
+        } else {
+            fprintf(o, "%-18s%s\n", "Skipped probes:", a);
+        }
         fputc('\n', o);
     }
 
@@ -967,6 +978,11 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
                 s->name_libraries_configured, s->names_invalid, s->names_refused, s->tls_libraries,
                 s->tls_library_capacity);
     }
+    fprintf(o,
+            ",\"probe_runs_skipped\":{\"total\":%" PRIu64 ",\"sent\":%" PRIu64
+            ",\"received\":%" PRIu64 ",\"read\":%" PRIu64 ",\"other\":%" PRIu64 "}",
+            s->probe_skips, s->probe_skips_sent, s->probe_skips_received, s->probe_skips_read,
+            s->probe_skips - s->probe_skips_sent - s->probe_skips_received - s->probe_skips_read);
     fprintf(o,
             "},\"network\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
             ",\"bytes_sent_per_second\":%" PRIu64 ",\"bytes_received_per_second\":%" PRIu64

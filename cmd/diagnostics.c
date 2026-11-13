@@ -129,6 +129,18 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
         printf("  %-18s%s\n", "Events received:", a);
         ft_format_count(stats->events_dropped, a, sizeof(a));
         printf("  %-18s%s\n", "Events dropped:", a);
+        ft_format_count(stats->probe_skips, a, sizeof(a));
+        if (stats->probe_skips) {
+            char se[32], re[32], rd[32];
+            ft_format_count(stats->probe_skips_sent, se, sizeof(se));
+            ft_format_count(stats->probe_skips_received, re, sizeof(re));
+            ft_format_count(stats->probe_skips_read, rd, sizeof(rd));
+            printf("  %-18s%s (sent %s, received %s, read %s)\n", "Skipped probes:", a, se, re, rd);
+            printf("  Skipped runs are probe runs the kernel would not nest on a busy CPU"
+                   " (roughly one in 100,000 on the kprobe set), not counted as dropped events.\n");
+        } else {
+            printf("  %-18s%s\n", "Skipped probes:", a);
+        }
         ft_format_bytes(stats->queue_bytes, a, sizeof(a));
         printf("  %-18s%s\n", "Ring buffer:", a);
         if (stats->event_log_bytes) {
@@ -235,6 +247,14 @@ static void doctor_json(const struct ft_diagnosis *d, const struct ft_host_info 
         printf(",\"tls_libraries\":%llu,\"tls_library_capacity\":%llu",
                (unsigned long long)stats->tls_libraries,
                (unsigned long long)stats->tls_library_capacity);
+    if (agent == FT_AGENT_RUNNING)
+        printf(",\"probe_runs_skipped\":{\"total\":%llu,\"sent\":%llu,\"received\":%llu,"
+               "\"read\":%llu,\"other\":%llu}",
+               (unsigned long long)stats->probe_skips, (unsigned long long)stats->probe_skips_sent,
+               (unsigned long long)stats->probe_skips_received,
+               (unsigned long long)stats->probe_skips_read,
+               (unsigned long long)(stats->probe_skips - stats->probe_skips_sent -
+                                    stats->probe_skips_received - stats->probe_skips_read));
     printf("}}\n");
 }
 

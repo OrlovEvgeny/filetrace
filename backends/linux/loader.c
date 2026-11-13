@@ -1182,6 +1182,64 @@ static void open_wake(struct ft_backend *b)
     }
 }
 
+enum probe_class {
+    PROBE_OTHER,
+    PROBE_SENT,
+    PROBE_RECEIVED,
+    PROBE_READ
+};
+
+static enum probe_class probe_class(const char *name)
+{
+    static const char *const sent[] = {
+        "ft_tcp_sendmsg",     "ft_ip_send_skb",   "ft_ip6_send_skb",    "ft_inet_sendmsg",
+        "ft_inet_send_begin", "ft_inet6_sendmsg", "ft_inet6_send_begin"};
+    static const char *const received[] = {"ft_tcp_cleanup_rbuf", "ft_skb_consume_udp",
+                                           "ft_inet_recvmsg", "ft_inet6_recvmsg"};
+    static const char *const read[] = {"ft_vfs_read", "ft_splice_direct"};
+    for (size_t i = 0; i < FT_ARRAY_LEN(sent); i++)
+        if (strcmp(name, sent[i]) == 0)
+            return PROBE_SENT;
+    for (size_t i = 0; i < FT_ARRAY_LEN(received); i++)
+        if (strcmp(name, received[i]) == 0)
+            return PROBE_RECEIVED;
+    for (size_t i = 0; i < FT_ARRAY_LEN(read); i++)
+        if (strcmp(name, read[i]) == 0)
+            return PROBE_READ;
+    return PROBE_OTHER;
+}
+
+/* recursion_misses is a lifetime count the kernel keeps per program; reading it on query is cheap.
+ */
+static void read_probe_skips(struct ft_backend *b, struct ft_backend_stats *out)
+{
+    struct bpf_program *prog;
+    bpf_object__for_each_program(prog, b->probes.obj)
+    {
+        int fd = bpf_program__fd(prog);
+        if (fd < 0)
+            continue;
+        struct bpf_prog_info info = {0};
+        __u32 len = sizeof(info);
+        if (bpf_prog_get_info_by_fd(fd, &info, &len) != 0)
+            continue;
+        out->probe_skips += info.recursion_misses;
+        switch (probe_class(bpf_program__name(prog))) {
+        case PROBE_SENT:
+            out->probe_skips_sent += info.recursion_misses;
+            break;
+        case PROBE_RECEIVED:
+            out->probe_skips_received += info.recursion_misses;
+            break;
+        case PROBE_READ:
+            out->probe_skips_read += info.recursion_misses;
+            break;
+        case PROBE_OTHER:
+            break;
+        }
+    }
+}
+
 static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
 {
     out->events = b->events;
@@ -1198,6 +1256,7 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
     out->tls_libraries = ft_linux_prober_count(b->prober, b->tls.openssl) +
                          ft_linux_prober_count(b->prober, b->tls.gnutls);
     out->tls_library_capacity = b->tls_capacity;
+    read_probe_skips(b, out);
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
