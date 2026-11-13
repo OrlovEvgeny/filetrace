@@ -1771,6 +1771,374 @@ static void scenario_reset_retry(const char *path, size_t size)
     stop_sink(&answer);
 }
 
+/* The kernel's address of a connected IPv4 socket as /proc/net/tcp shows it, or 0. */
+static unsigned long long sock_address(int sock)
+{
+    struct sockaddr_in local;
+    struct sockaddr_in peer;
+    socklen_t len = sizeof(local);
+    if (getsockname(sock, (struct sockaddr *)&local, &len) != 0)
+        return 0;
+    len = sizeof(peer);
+    if (getpeername(sock, (struct sockaddr *)&peer, &len) != 0)
+        return 0;
+    FILE *table = fopen("/proc/net/tcp", "r");
+    if (!table)
+        return 0;
+    char line[512];
+    unsigned long long found = 0;
+    while (!found && fgets(line, sizeof(line), table)) {
+        unsigned lport;
+        unsigned rport;
+        unsigned state;
+        unsigned long long address;
+        if (sscanf(line, " %*d: %*x:%x %*x:%x %x %*x:%*x %*x:%*x %*x %*u %*d %*u %*d %llx", &lport,
+                   &rport, &state, &address) == 4 &&
+            lport == ntohs(local.sin_port) && rport == ntohs(peer.sin_port) && state != 0x0a)
+            found = address;
+    }
+    fclose(table);
+    return found;
+}
+
+static void await_step(int fd)
+{
+    char c;
+    if (read(fd, &c, 1) != 1)
+        die("read");
+}
+
+static void take_step(int fd)
+{
+    if (write(fd, "", 1) != 1)
+        die("write");
+}
+
+/* A server's listener, and the two clients of a round of a banner scenario. */
+struct banner_round {
+    int listener;
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+    pid_t first;
+    pid_t next;
+    int ended; /* readable once the first client ended its connection */
+    int go;    /* lets the next client connect */
+};
+
+/*
+ * Starts a round: the next client makes its socket at once and connects on the signal, then
+ * reads the banner; the first client asks over its connection, hears a reply of 3300 bytes and
+ * resets the connection, or closes it.
+ */
+static void banner_clients(struct banner_round *r, bool reset, size_t banner)
+{
+    int ready[2];
+    int go[2];
+    int ended[2];
+    if (pipe(ready) != 0 || pipe(go) != 0 || pipe(ended) != 0)
+        die("pipe");
+    r->next = fork();
+    if (r->next < 0)
+        die("fork");
+    if (r->next == 0) {
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        char *in = malloc(banner);
+        char c;
+        if (sock < 0 || !in || write(ready[1], "", 1) != 1 || read(go[0], &c, 1) != 1 ||
+            connect(sock, (struct sockaddr *)&r->addr, r->addr_len) != 0 ||
+            recv(sock, in, banner, MSG_WAITALL) != (ssize_t)banner)
+            _exit(1);
+        _exit(0);
+    }
+    await_step(ready[0]);
+    r->first = fork();
+    if (r->first < 0)
+        die("fork");
+    if (r->first == 0) {
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        char request[100] = {0};
+        char reply[3300];
+        struct linger abort = {.l_onoff = 1, .l_linger = 0};
+        if (sock < 0 || connect(sock, (struct sockaddr *)&r->addr, r->addr_len) != 0 ||
+            send(sock, request, sizeof(request), 0) != (ssize_t)sizeof(request) ||
+            recv(sock, reply, sizeof(reply), MSG_WAITALL) != (ssize_t)sizeof(reply) ||
+            (reset && setsockopt(sock, SOL_SOCKET, SO_LINGER, &abort, sizeof(abort)) != 0))
+            _exit(1);
+        close(sock);
+        _exit(write(ended[1], "", 1) == 1 ? 0 : 1);
+    }
+    close(ready[0]);
+    close(ready[1]);
+    close(go[0]);
+    close(ended[1]);
+    r->go = go[1];
+    r->ended = ended[0];
+}
+
+static void banner_clients_done(struct banner_round *r)
+{
+    int status;
+    if (waitpid(r->first, &status, 0) != r->first || status != 0 ||
+        waitpid(r->next, &status, 0) != r->next || status != 0)
+        die("client");
+    close(r->go);
+    close(r->ended);
+}
+
+static void banner_listen(struct banner_round *r)
+{
+    r->addr_len = loopback(false, &r->addr);
+    r->listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (r->listener < 0 || bind(r->listener, (struct sockaddr *)&r->addr, r->addr_len) != 0 ||
+        getsockname(r->listener, (struct sockaddr *)&r->addr, &r->addr_len) != 0 ||
+        listen(r->listener, 4) != 0)
+        die("listen");
+}
+
+/* Hears what the peer says first and replies with the file of 3000 bytes after a head of 300. */
+static void reply_with(int sock, const char *path, size_t heard)
+{
+    char request[100];
+    if (heard > sizeof(request) || recv(sock, request, heard, MSG_WAITALL) != (ssize_t)heard)
+        die("recv");
+    char *contents = read_file(path, 3000);
+    char reply[3300] = {0};
+    memcpy(reply + 300, contents, 3000);
+    send_all(sock, reply, sizeof(reply));
+    free(contents);
+}
+
+static void send_banner(int sock, size_t size)
+{
+    char *banner = calloc(1, size);
+    if (!banner)
+        die("malloc");
+    send_all(sock, banner, size);
+    free(banner);
+}
+
+/*
+ * resetbanner <dir> <rounds>: a server thread hears a request, reads <dir>/<i>-motd.txt (3000
+ * bytes) and replies with it after a head of 300; the client resets the connection; the server
+ * closes it, accepts the next connection and sends a banner of 2000 bytes from memory before
+ * hearing anything. On one CPU, the next client's socket made before the reset one is freed, so
+ * that the accepted connection likely gets its memory.
+ */
+static void scenario_reset_banner(const char *dir, size_t rounds)
+{
+    one_cpu();
+    struct banner_round r;
+    banner_listen(&r);
+    size_t landed = 0;
+    for (size_t i = 0; i < rounds; i++) {
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%zu-motd.txt", dir, i);
+        make_file(path, 3000);
+        banner_clients(&r, true, 2000);
+        int a = accept(r.listener, nullptr, nullptr);
+        if (a < 0)
+            die("accept");
+        unsigned long long at = sock_address(a);
+        reply_with(a, path, 100);
+        await_step(r.ended);
+        close(a);
+        take_step(r.go);
+        int b = accept(r.listener, nullptr, nullptr);
+        if (b < 0)
+            die("accept");
+        send_banner(b, 2000);
+        landed += at && at == sock_address(b);
+        banner_clients_done(&r);
+        close(b);
+    }
+    close(r.listener);
+    printf("scenario=resetbanner pid=%d rounds=%zu landed=%zu\n", (int)getpid(), rounds, landed);
+}
+
+struct pool_banner {
+    struct banner_round *round;
+    const char *dir;
+    size_t rounds;
+    int sock;
+    pthread_barrier_t step;
+};
+
+static void *pool_banner_main(void *arg)
+{
+    struct pool_banner *o = arg;
+    for (size_t i = 0; i < o->rounds; i++) {
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%zu-a.json", o->dir, i);
+        pthread_barrier_wait(&o->step);
+        reply_with(o->sock, path, 100);
+        pthread_barrier_wait(&o->step);
+        pthread_barrier_wait(&o->step);
+        o->sock = accept(o->round->listener, nullptr, nullptr);
+        if (o->sock < 0)
+            die("accept");
+        send_banner(o->sock, 5000);
+        pthread_barrier_wait(&o->step);
+    }
+    return nullptr;
+}
+
+/*
+ * closebanner <dir> <rounds>: a pool thread hears a request, reads <dir>/<i>-a.json (3000 bytes)
+ * and replies with it after a head of 300; the client closes the connection, and then the main
+ * thread; the pool thread accepts the next connection and sends a banner of 5000 bytes from
+ * memory before hearing anything. On one CPU, as resetbanner.
+ */
+static void scenario_close_banner(const char *dir, size_t rounds)
+{
+    one_cpu();
+    struct banner_round r;
+    banner_listen(&r);
+    struct pool_banner o = {.round = &r, .dir = dir, .rounds = rounds};
+    if (pthread_barrier_init(&o.step, nullptr, 2) != 0)
+        die("pthread_barrier_init");
+    pthread_t worker;
+    if (pthread_create(&worker, nullptr, pool_banner_main, &o) != 0)
+        die("pthread_create");
+    size_t landed = 0;
+    for (size_t i = 0; i < rounds; i++) {
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%zu-a.json", dir, i);
+        make_file(path, 3000);
+        banner_clients(&r, false, 5000);
+        int a = accept(r.listener, nullptr, nullptr);
+        if (a < 0)
+            die("accept");
+        unsigned long long at = sock_address(a);
+        o.sock = a;
+        pthread_barrier_wait(&o.step);
+        pthread_barrier_wait(&o.step);
+        await_step(r.ended);
+        close(a);
+        take_step(r.go);
+        pthread_barrier_wait(&o.step);
+        pthread_barrier_wait(&o.step);
+        landed += at && at == sock_address(o.sock);
+        banner_clients_done(&r);
+        close(o.sock);
+    }
+    pthread_join(worker, nullptr);
+    pthread_barrier_destroy(&o.step);
+    close(r.listener);
+    printf("scenario=closebanner pid=%d rounds=%zu landed=%zu\n", (int)getpid(), rounds, landed);
+}
+
+struct dial_reply {
+    const char *dir;
+    size_t rounds;
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+    int sock;
+    unsigned long long address; /* of the connection the worker replied on */
+    pthread_barrier_t step;
+};
+
+static void *dial_reply_main(void *arg)
+{
+    struct dial_reply *o = arg;
+    char line[6];
+    for (size_t i = 0; i < o->rounds; i++) {
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%zu-c.json", o->dir, i);
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0 || connect(sock, (struct sockaddr *)&o->addr, o->addr_len) != 0)
+            die("connect");
+        o->sock = sock;
+        o->address = sock_address(sock);
+        reply_with(sock, path, sizeof(line));
+        pthread_barrier_wait(&o->step);
+        pthread_barrier_wait(&o->step);
+        send_banner(o->sock, 2000);
+        if (recv(o->sock, line, sizeof(line), MSG_WAITALL) != (ssize_t)sizeof(line))
+            die("recv");
+        pthread_barrier_wait(&o->step);
+    }
+    return nullptr;
+}
+
+/*
+ * dialreply <dir> <rounds>: a worker hears a greeting, reads <dir>/<i>-c.json (3000 bytes) and
+ * replies with it after a head of 300; the peer closes the connection, and then the main thread,
+ * which reads a large file and connects again; the worker sends a request of 2000 bytes from
+ * memory over the new connection and hears the answer. On one CPU, so that the new connection
+ * likely gets the memory of the closed one.
+ */
+static void scenario_dial_reply(const char *dir, size_t rounds)
+{
+    one_cpu();
+    char big[4096];
+    snprintf(big, sizeof(big), "%s/big.bin", dir);
+    make_file(big, 100000);
+    struct dial_reply o = {.dir = dir, .rounds = rounds};
+    o.addr_len = loopback(false, &o.addr);
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0 || bind(listener, (struct sockaddr *)&o.addr, o.addr_len) != 0 ||
+        getsockname(listener, (struct sockaddr *)&o.addr, &o.addr_len) != 0 ||
+        listen(listener, 4) != 0)
+        die("listen");
+    int closed[2];
+    if (pipe(closed) != 0)
+        die("pipe");
+    pid_t peer = fork();
+    if (peer < 0)
+        die("fork");
+    if (peer == 0) {
+        char buf[3300];
+        for (size_t i = 0; i < rounds; i++) {
+            int a = accept(listener, nullptr, nullptr);
+            if (a < 0 || write(a, "hello\n", 6) != 6 || recv(a, buf, 3300, MSG_WAITALL) != 3300)
+                _exit(1);
+            close(a);
+            if (write(closed[1], "", 1) != 1)
+                _exit(1);
+            int b = accept(listener, nullptr, nullptr);
+            if (b < 0 || recv(b, buf, 2000, MSG_WAITALL) != 2000 || write(b, "hello\n", 6) != 6)
+                _exit(1);
+            while (recv(b, buf, sizeof(buf), 0) > 0) {
+            }
+            close(b);
+        }
+        _exit(0);
+    }
+    close(listener);
+    for (size_t i = 0; i < rounds; i++) {
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%zu-c.json", dir, i);
+        make_file(path, 3000);
+    }
+    if (pthread_barrier_init(&o.step, nullptr, 2) != 0)
+        die("pthread_barrier_init");
+    pthread_t worker;
+    if (pthread_create(&worker, nullptr, dial_reply_main, &o) != 0)
+        die("pthread_create");
+    size_t landed = 0;
+    for (size_t i = 0; i < rounds; i++) {
+        pthread_barrier_wait(&o.step);
+        unsigned long long at = o.address;
+        free(read_file(big, 100000));
+        await_step(closed[0]);
+        close(o.sock);
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0 || connect(sock, (struct sockaddr *)&o.addr, o.addr_len) != 0)
+            die("connect");
+        o.sock = sock;
+        pthread_barrier_wait(&o.step);
+        pthread_barrier_wait(&o.step);
+        landed += at && at == sock_address(sock);
+        close(sock);
+    }
+    pthread_join(worker, nullptr);
+    pthread_barrier_destroy(&o.step);
+    int status;
+    if (waitpid(peer, &status, 0) != peer || status != 0)
+        die("peer");
+    printf("scenario=dialreply pid=%d rounds=%zu landed=%zu\n", (int)getpid(), rounds, landed);
+}
+
 struct side_send {
     int sock;
     size_t bytes;
@@ -3725,6 +4093,12 @@ int main(int argc, char **argv)
                              argc == 5 && strcmp(argv[4], "again") == 0);
     else if (strcmp(name, "resetretry") == 0 && argc == 4)
         scenario_reset_retry(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "resetbanner") == 0 && argc == 4)
+        scenario_reset_banner(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "closebanner") == 0 && argc == 4)
+        scenario_close_banner(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "dialreply") == 0 && argc == 4)
+        scenario_dial_reply(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "twosenders") == 0 && argc == 6)
         scenario_two_senders(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "latebody") == 0 && argc == 7)

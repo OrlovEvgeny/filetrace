@@ -732,12 +732,19 @@ expect "page whose rest the peer left untaken: template not reported" \
 # reported, also once a thread made room among the socket's owners. A connection that another
 # thread closes ends the sender's window there, and the sender's next connection starts its own.
 # A retry made right after the peer reset the connection, which the kernel builds where the reset
-# one was, is not taken for it.
-mkdir -p "$data/pool-whole"
+# one was, is not taken for it. A reply sent before the client reset its connection, or before
+# the client and then another thread closed it, is reported as it went when the next connection
+# the server accepts, built where that one was, takes a banner before it is heard; so is a reply
+# a client sent before the peer and then another thread closed the connection, when that thread
+# connects again after reading a large file and the client sends a request over the new one.
+mkdir -p "$data/pool-whole" "$data/reset-banner" "$data/close-banner" "$data/dial-reply"
 "$workload" poolreply "$data/pool-whole" 10 whole >/dev/null
 "$workload" closeother "$data/close-other.json" 2000 >/dev/null
 "$workload" closeother "$data/close-again.json" 2000 again >/dev/null
 "$workload" resetretry "$data/reset-retry.json" 2000 >/dev/null
+"$workload" resetbanner "$data/reset-banner" 8 >"$work/reset-banner.out"
+"$workload" closebanner "$data/close-banner" 8 >"$work/close-banner.out"
+"$workload" dialreply "$data/dial-reply" 8 >"$work/dial-reply.out"
 sleep 2
 for i in 0 1 2 3 4 5 6 7 8 9; do
     case $((i % 3)) in
@@ -760,6 +767,21 @@ expect "connection another thread closed, then a new one: bytes of each" \
 csv=$(ft transfers --path "$data/reset-retry.json" --format csv)
 expect "retry after a reset: rows" "$(printf '%s\n' "$csv" | rows)" 1
 expect "retry after a reset: bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 2000
+for i in 0 1 2 3 4 5 6 7; do
+    expect "reply before a reset, a banner where its connection was: round $i bytes" \
+        "$(ft files --path "$data/reset-banner/$i-motd.txt" --format csv |
+            column transfer.bytes_sent)" 3000
+    expect "pool reply before two closes, a banner where its connection was: round $i bytes" \
+        "$(ft files --path "$data/close-banner/$i-a.json" --format csv |
+            column transfer.bytes_sent)" 3000
+    expect "client reply before two closes, a request where its connection was: round $i bytes" \
+        "$(ft files --path "$data/dial-reply/$i-c.json" --format csv |
+            column transfer.bytes_sent)" 3000
+done
+for out in reset-banner close-banner dial-reply; do
+    grep -q 'landed=[1-9]' "$work/$out.out" ||
+        echo "NOTE: $out: no connection was built where the one closed before it was"
+done
 
 # A thread that reads its file again leaves its first flights to their own connections: a hello
 # sent after each read is not the file, and a small file put to one connection after another,
