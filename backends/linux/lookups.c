@@ -38,14 +38,21 @@ static bool libc_mapped(const char *path, const char *name)
 }
 
 /* struct addrinfo, which the probes read, is laid out alike only for this machine's programs. */
-static uint64_t libc_cookie(int fd)
+static uint64_t libc_cookie(int fd, const char **missing)
 {
     static const char *const names[] = {"getaddrinfo"};
     bool found[FT_ARRAY_LEN(names)];
     uint16_t machine = 0;
 
-    return ft_linux_elf_exports(fd, names, FT_ARRAY_LEN(names), found, &machine) && found[0] &&
-           machine == NATIVE_MACHINE;
+    if (!ft_linux_elf_exports(fd, names, FT_ARRAY_LEN(names), found, &machine) || !found[0]) {
+        *missing = names[0];
+        return 0;
+    }
+    if (machine != NATIVE_MACHINE) {
+        *missing = nullptr;
+        return 0;
+    }
+    return 1;
 }
 
 static void libc_probed(const char *name, uint32_t pid, uint64_t cookie)

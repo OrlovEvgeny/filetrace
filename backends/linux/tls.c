@@ -24,29 +24,32 @@ static bool gnutls_mapped(const char *path, const char *name)
     return starts_with(name, "libgnutls.so");
 }
 
-static bool exports_all(int fd, const char *const *names, size_t count)
+/* The first of names the ELF at fd does not export, or nullptr when it exports them all. */
+static const char *exports_missing(int fd, const char *const *names, size_t count)
 {
     bool found[8];
     if (count > FT_ARRAY_LEN(found) || !ft_linux_elf_exports(fd, names, count, found, nullptr))
-        return false;
+        return names[0];
     for (size_t i = 0; i < count; i++) {
         if (!found[i])
-            return false;
+            return names[i];
     }
-    return true;
+    return nullptr;
 }
 
-static uint64_t openssl_cookie(int fd)
+static uint64_t openssl_cookie(int fd, const char **missing)
 {
     static const char *const names[] = {"SSL_ctrl", "SSL_connect", "SSL_do_handshake", "SSL_free"};
-    return exports_all(fd, names, FT_ARRAY_LEN(names));
+    *missing = exports_missing(fd, names, FT_ARRAY_LEN(names));
+    return *missing ? 0 : 1;
 }
 
-static uint64_t gnutls_cookie(int fd)
+static uint64_t gnutls_cookie(int fd, const char **missing)
 {
     static const char *const names[] = {"gnutls_server_name_set", "gnutls_handshake",
                                         "gnutls_deinit"};
-    return exports_all(fd, names, FT_ARRAY_LEN(names));
+    *missing = exports_missing(fd, names, FT_ARRAY_LEN(names));
+    return *missing ? 0 : 1;
 }
 
 static void tls_probed(const char *name, uint32_t pid, uint64_t cookie)

@@ -182,8 +182,9 @@ struct ft_linux_probe_kind {
     bool (*maps_of)(const char *program); /* the maps of a process running it are read */
     /* A file mapped at path, whose base name is name, may be of the kind. */
     bool (*mapped)(const char *path, const char *name);
-    /* The cookie of the probes, from the ELF file open at fd; 0 when it is not of the kind. */
-    uint64_t (*cookie)(int fd);
+    /* The cookie of the probes, from the ELF at fd; 0 when not of the kind, then
+     * *missing names what it lacks, if that is why. */
+    uint64_t (*cookie)(int fd, const char **missing);
     /* Reports a file probed, by the name the process pid knows it by. */
     void (*probed)(const char *name, uint32_t pid, uint64_t cookie);
 };

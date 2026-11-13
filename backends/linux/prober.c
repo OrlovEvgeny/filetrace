@@ -474,8 +474,11 @@ static enum considered consider(struct kind *k, const char *path, const char *ma
         return CONSIDERED_OPEN;
     }
 
-    uint64_t cookie = k->def.cookie(fd);
+    const char *missing = nullptr;
+    uint64_t cookie = k->def.cookie(fd, &missing);
     if (!cookie) {
+        if (missing)
+            ft_log(FT_LOG_INFO, "not probing %s: it does not export %s", name, missing);
         skip(k, &id);
         close(fd);
         return CONSIDERED_NEW;

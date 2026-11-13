@@ -49,7 +49,7 @@ static bool php_mapped(const char *path, const char *name)
  * The layout of php_execute_script's argument in the ELF file, from its dynamic symbols; 0 if it
  * does not export both functions the probes attach to.
  */
-static uint64_t php_layout(int fd)
+static uint64_t php_layout(int fd, const char **missing)
 {
     static const char *const names[] = {
         "php_execute_script",
@@ -59,9 +59,14 @@ static uint64_t php_layout(int fd)
     };
     bool found[FT_ARRAY_LEN(names)];
 
-    if (!ft_linux_elf_exports(fd, names, FT_ARRAY_LEN(names), found, nullptr) || !found[0] ||
-        !found[1])
+    if (!ft_linux_elf_exports(fd, names, FT_ARRAY_LEN(names), found, nullptr) || !found[0]) {
+        *missing = names[0];
         return 0;
+    }
+    if (!found[1]) {
+        *missing = names[1];
+        return 0;
+    }
     return found[2] ? FT_BPF_PHP_ZEND_STRING : FT_BPF_PHP_CHAR_NAME;
 }
 
