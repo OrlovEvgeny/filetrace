@@ -1093,7 +1093,7 @@ struct help_key {
 
 struct help_group {
     const char *title;
-    struct help_key keys[7];
+    struct help_key keys[8];
 };
 
 static const struct help_group help_groups[] = {
@@ -1134,6 +1134,7 @@ static const struct help_group help_groups[] = {
       {"Enter", "inspect file: senders and dests"}}},
     {"Display",
      {{"n", "resolve destination hostnames"},
+      {"a", "destination names or addresses"},
       {"p", "full paths or file names"},
       {"s", "show / hide SCRIPT column"},
       {"m", "color by egress or by method"},

@@ -618,6 +618,7 @@ static void count_view(struct ft_top_model *m, struct ft_top_mode_state *ms)
         struct ft_top_destination_entry *d =
             (struct ft_top_destination_entry *)(void *)t->destination;
         v->transfers++;
+        v->named += t->names != nullptr;
         v->rate += t->rate;
         if (p->mark != mark) {
             p->mark = mark;

@@ -69,6 +69,7 @@ struct ft_top_ui {
     bool script_column;
     bool full_paths;
     bool color_by_method; /* false: destinations carry the color, by egress */
+    bool addresses;       /* destination cells show addresses where processes used names */
     bool no_selection;    /* a table printed outside the screen has no cursor to show */
     uint64_t delay_ns;
 

@@ -1176,6 +1176,8 @@ static size_t fkeys_of(const struct ft_top_draw *d, struct fkey *keys)
     push(keys, &n, FKEY(F9, "Pause", 7, ui->paused));
     if (mode == FT_TOP_DESTINATIONS && !prompt)
         push(keys, &n, CKEY("  n", "rDNS", 7, 'n', false));
+    if (mode == FT_TOP_TRANSFERS && !prompt && ft_top_view_of(d->model, mode)->named)
+        push(keys, &n, CKEY("  a", ui->addresses ? "Names" : "Address", 8, 'a', ui->addresses));
     if (mode == FT_TOP_FILES && !prompt)
         push(keys, &n, CKEY("  p", "FullPath", 9, 'p', false));
     if (back)

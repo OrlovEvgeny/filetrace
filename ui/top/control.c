@@ -1792,6 +1792,11 @@ static unsigned char_key(struct ft_top_controller *c, uint32_t rune)
     case 'm':
         ui->color_by_method = !ui->color_by_method;
         return FT_TOP_DO_REDRAW;
+    case 'a':
+        if (leaders)
+            return 0;
+        ui->addresses = !ui->addresses;
+        return FT_TOP_DO_REDRAW;
     case 'u':
         return toggle_user(c);
     case 'p':

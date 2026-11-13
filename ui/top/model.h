@@ -256,6 +256,7 @@ struct ft_top_view {
     size_t matches; /* rows the search matches */
     /* Of the transfers the filter passed: */
     size_t transfers;
+    size_t named; /* those whose remote end has a name */
     size_t processes;
     size_t files;
     size_t destinations;
