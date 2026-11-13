@@ -4,7 +4,7 @@ Filetrace shows which files a machine sends over the network, which process
 sends them, and where they go. It reads this from the kernel with eBPF, so no
 application has to be changed.
 
-![filetrace top switching between the transfers in progress, the process tree, the destinations, the files and the ranking of the files sent most, then filtering the transfers to public destinations](.github/assets/filetrace-top.gif)
+![filetrace top switching between the transfers in progress, their destinations by name and by address, the process tree, the destinations, the files and the ranking of the files sent most, then filtering the transfers to public destinations](.github/assets/filetrace-top.gif)
 
 `sudo filetrace top` is the live view above, recorded on simulated traffic:
 the transfers in progress, the same traffic by process, destination and file,
