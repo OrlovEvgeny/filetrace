@@ -2194,6 +2194,57 @@ static void scenario_reply_pieces(const char *path, size_t size, size_t head, si
     stop_sink(&sink);
 }
 
+static int listen_loopback(struct sockaddr_in *addr);
+
+/*
+ * pagestall <path> <bytes> <seconds>: over a connection that has heard from its peer, reads a
+ * template of that many bytes and sends a page of a megabyte from memory, its first piece the
+ * template's size and the rest in one blocking send, which the peer leaves untaken for that many
+ * seconds; then closes.
+ */
+static void scenario_page_stall(const char *path, size_t size, size_t seconds)
+{
+    struct sockaddr_in addr;
+    int listener = listen_loopback(&addr);
+    size_t page = 1048576;
+    char *out = calloc(1, page);
+    if (!out)
+        die("malloc");
+
+    pid_t peer = fork();
+    if (peer < 0)
+        die("fork");
+    if (peer == 0) {
+        char buf[65536];
+        int c = accept(listener, nullptr, nullptr);
+        if (c < 0 || write(c, "hello\n", 6) != 6)
+            _exit(1);
+        sleep((unsigned)seconds);
+        while (read(c, buf, sizeof(buf)) > 0)
+            ;
+        _exit(0);
+    }
+    close(listener);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0 || connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+        die("connect");
+    hear(sock);
+    /* A send buffer that is set is not grown to hold the rest of the page. */
+    int small = 16384;
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+    free(read_whole_file(path, size));
+    send_all(sock, out, size);
+    time_t start = time(nullptr);
+    send_all(sock, out + size, page - size);
+    if (time(nullptr) - start + 1 < (time_t)seconds)
+        die("the rest of the page did not wait for the peer");
+    close(sock);
+    waitpid(peer, nullptr, 0);
+    free(out);
+    report("pagestall", path, size, ntohs(addr.sin_port));
+}
+
 /*
  * rereadhello <path> <bytes>: reads the file and sends a hello the size of a TLS ClientHello on a
  * connection whose peer answers late; reads the file again and does the same on a second one.
@@ -3237,6 +3288,8 @@ int main(int argc, char **argv)
     else if (strcmp(name, "replypieces") == 0 && argc == 7)
         scenario_reply_pieces(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]),
                               strcmp(argv[6], "hear") == 0);
+    else if (strcmp(name, "pagestall") == 0 && argc == 5)
+        scenario_page_stall(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "rereadhello") == 0 && argc == 4)
         scenario_reread_hello(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "rereadput") == 0 && argc == 4)
