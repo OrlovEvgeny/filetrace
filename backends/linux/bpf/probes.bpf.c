@@ -57,8 +57,8 @@ int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
     e->proto = IPPROTO_TCP;
     e->old_state = (__u8)oldstate;
     e->new_state = (__u8)newstate;
-    e->pad[0] = 0;
-    e->pad[1] = 0;
+    __builtin_memset(e->pad, 0, sizeof(e->pad));
+    e->tid = newstate == TCP_SYN_SENT ? (__u32)bpf_get_current_pid_tgid() : 0;
     sock_local(sk, family, e->laddr, &e->lport);
     sock_remote(sk, family, e->raddr, &e->rport);
     bpf_ringbuf_submit(e, wake_flags());
