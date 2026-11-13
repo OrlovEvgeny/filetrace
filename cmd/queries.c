@@ -960,8 +960,10 @@ static void stats_json(FILE *o, const struct ft_row_stats *s)
         usage_json(o, "name_libraries", &s->name_libraries, false);
         fprintf(o,
                 "\"name_libraries_configured\":%" PRIu64 ",\"names_refused_invalid\":%" PRIu64
-                ",\"names_refused_full\":%" PRIu64 ",\"tls_libraries\":%" PRIu64,
-                s->name_libraries_configured, s->names_invalid, s->names_refused, s->tls_libraries);
+                ",\"names_refused_full\":%" PRIu64 ",\"tls_libraries\":%" PRIu64
+                ",\"tls_library_capacity\":%" PRIu64,
+                s->name_libraries_configured, s->names_invalid, s->names_refused, s->tls_libraries,
+                s->tls_library_capacity);
     }
     fprintf(o,
             "},\"network\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64

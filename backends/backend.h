@@ -87,6 +87,7 @@ struct ft_backend_stats {
     uint64_t name_libraries_configured; /* more than the capacity when open files cut it */
     uint64_t name_libraries_forgotten;  /* probed files that made room for newer ones */
     uint64_t tls_libraries;             /* TLS library files probed for server names */
+    uint64_t tls_library_capacity;      /* TLS library files that may be probed */
 };
 
 struct ft_backend;

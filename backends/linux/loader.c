@@ -612,6 +612,8 @@ struct ft_backend {
     int lookup_kind; /* the prober's kind for C libraries, or -1 */
     size_t lookup_capacity;
     size_t lookup_wanted; /* [limits] name_libraries, which the open file limit may cut */
+    size_t name_libraries_configured; /* [limits] name_libraries, when a half is on */
+    size_t tls_capacity;              /* TLS library files that may be probed */
     struct ft_linux_tls tls;
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
@@ -1155,10 +1157,11 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
     }
     out->name_libraries = ft_linux_prober_count(b->prober, b->lookup_kind);
     out->name_library_capacity = b->lookup_capacity;
-    out->name_libraries_configured = b->lookup_wanted;
+    out->name_libraries_configured = b->name_libraries_configured;
     out->name_libraries_forgotten = ft_linux_prober_forgotten(b->prober, b->lookup_kind);
     out->tls_libraries = ft_linux_prober_count(b->prober, b->tls.openssl) +
                          ft_linux_prober_count(b->prober, b->tls.gnutls);
+    out->tls_library_capacity = b->tls_capacity;
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
@@ -1320,6 +1323,8 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         b->prober = ft_linux_prober_create();
         ft_linux_prober_quiet(b->prober, bpf_object__find_map_fd_by_name(obj, "quiet_programs"));
     }
+    if (lookups || tls)
+        b->name_libraries_configured = cfg->name_libraries;
     if (b->prober && php)
         b->php = ft_linux_php_open(obj, b->prober);
     if (b->prober && lookups) {
@@ -1340,6 +1345,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
             libraries_within(open_files, cfg->name_libraries, php_on, FT_LINUX_SSL_DESCRIPTORS);
         size_t gnutls =
             libraries_within(open_files, cfg->name_libraries, php_on, FT_LINUX_GNUTLS_DESCRIPTORS);
+        b->tls_capacity = ssl + gnutls;
         ft_linux_tls_open(obj, b->prober, ssl, gnutls, &b->tls);
     }
     ft_linux_prober_rescan(b->prober);
