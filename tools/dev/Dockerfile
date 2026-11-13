@@ -7,6 +7,7 @@ RUN apt-get update \
         clang \
         cmake \
         git \
+        gnutls-bin \
         iproute2 \
         libbpf-dev \
         libclang-rt-dev \
