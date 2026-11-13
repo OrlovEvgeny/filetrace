@@ -1587,6 +1587,92 @@ stop_agent
 expect "agent exit code" "$?" 0
 expect "socket removed" "$([ -e "$sock" ] && echo present || echo removed)" removed
 
+# A GnuTLS client sets the name of the server it means to reach, and it binds to the connection
+# the handshake opens. The server is real so the client ends cleanly; its only part is to accept,
+# since the name is read from the client's own call. Skipped where no gnutls-cli is installed.
+if command -v gnutls-cli >/dev/null 2>&1 && command -v gnutls-serv >/dev/null 2>&1 &&
+    command -v certtool >/dev/null 2>&1; then
+    certtool --generate-privkey --outfile "$work/tls-key.pem" >/dev/null 2>&1
+    cat >"$work/tls.tmpl" <<'TMPL'
+cn = "files.ft.test"
+tls_www_server
+expiration_days = 1
+TMPL
+    certtool --generate-self-signed --load-privkey "$work/tls-key.pem" \
+        --template "$work/tls.tmpl" --outfile "$work/tls-cert.pem" >/dev/null 2>&1
+    # The client looks this name up through the C library, as a program reaching the host does.
+    grep -q 'files\.ft\.test' /etc/hosts || echo "127.0.0.1 files.ft.test" >>/etc/hosts
+    grep -q '^hosts:' /etc/nsswitch.conf 2>/dev/null || printf 'hosts: files dns\n' >>/etc/nsswitch.conf
+
+    tls_port=44300
+    gnutls-serv --http --port "$tls_port" --x509keyfile "$work/tls-key.pem" \
+        --x509certfile "$work/tls-cert.pem" >/dev/null 2>"$work/gnutls-serv.log" &
+    serv_pid=$!
+    i=0
+    until grep -qi listening "$work/gnutls-serv.log" 2>/dev/null; do
+        kill -0 "$serv_pid" 2>/dev/null || { echo "FAIL: gnutls-serv did not start"; break; }
+        [ $i -ge 150 ] && { echo "FAIL: gnutls-serv did not listen"; break; }
+        sleep 0.1
+        i=$((i + 1))
+    done
+
+    # The server maps the GnuTLS library before the agent starts, so it is probed at the first
+    # look and the client that follows is caught whoever wins the probe race.
+    start_agent || { echo "FAIL: the agent did not start for TLS server names"; exit 1; }
+
+    # The source bound to a connection to the server whose name is the argument.
+    tls_source_of() {
+        ft connections --port "$tls_port" --format csv 2>/dev/null | awk -F, -v want="$1" '
+            NR == 1 { for (i = 1; i <= NF; i++) { if ($i == "remote_name") n = i;
+                if ($i == "remote_name_source") c = i }; next }
+            n && c && $n == want { print $c; exit }'
+    }
+    tls_resolved_of() {
+        ft connections --port "$tls_port" --format csv 2>/dev/null | awk -F, -v want="$1" '
+            NR == 1 { for (i = 1; i <= NF; i++) { if ($i == "remote_name") n = i;
+                if ($i == "resolved_name_count") r = i }; next }
+            n && r && $n == want { print $r; exit }'
+    }
+    gnutls_get() { printf 'GET / HTTP/1.0\r\n\r\n' | "$@" >/dev/null 2>&1; }
+
+    # A host name: the lookup names the connection and the handshake adds the server name to it.
+    # Repeated until it binds, so a slow guest or a lost probe race does not decide the run.
+    i=0
+    while [ $i -lt 40 ]; do
+        gnutls_get gnutls-cli --insecure -p "$tls_port" files.ft.test
+        settle
+        [ "$(tls_source_of files.ft.test)" = lookup+tls ] && break
+        i=$((i + 1))
+    done
+    expect "names: a GnuTLS host name is looked up and read from the handshake" \
+        "$(tls_source_of files.ft.test)" lookup+tls
+
+    # A literal address with a forced server name: the handshake names it, and no lookup does.
+    i=0
+    while [ $i -lt 40 ]; do
+        gnutls_get gnutls-cli --insecure --sni-hostname=sharp.ft.test -p "$tls_port" 127.0.0.1
+        settle
+        [ "$(tls_source_of sharp.ft.test)" = tls ] && break
+        i=$((i + 1))
+    done
+    expect "names: a GnuTLS server name to a literal address is read from the handshake" \
+        "$(tls_source_of sharp.ft.test)" tls
+    # No lookup named it, so the resolved-name count is absent, not zero.
+    expect "names: a server name to a literal address resolves no name" \
+        "$(tls_resolved_of sharp.ft.test)" ""
+
+    expect_match "names: capability counts the probed TLS library" \
+        "$(ft capabilities | grep '^Destination names')" \
+        'TLS server names in [1-9][0-9]* librar(y|ies)'
+
+    stop_agent
+    expect "TLS server names agent exit code" "$?" 0
+    kill "$serv_pid" 2>/dev/null
+    wait "$serv_pid" 2>/dev/null
+else
+    echo "SKIP: no gnutls-cli, gnutls-serv or certtool here; the TLS server name check did not run"
+fi
+
 start_agent --mode minimal || { echo "FAIL: the agent did not start in minimal mode"; exit 1; }
 
 report=$("$workload" sendfile "$data/minimal.bin" 900000)

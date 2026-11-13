@@ -81,6 +81,28 @@ done | sort -u | while read -r lib; do
     cp -L "$lib" "$root$lib"
 done
 [ -e "$root/usr/bin/cgi-fcgi" ] && ln -sf /usr/bin/cgi-fcgi "$root/bin/cgi-fcgi"
+# A GnuTLS client, server and cert tool, for the checks of TLS server names.
+for binary in /usr/bin/gnutls-cli /usr/bin/gnutls-serv /usr/bin/certtool; do
+    [ -e "$binary" ] || continue
+    mkdir -p "$root$(dirname "$binary")"
+    cp -L "$binary" "$root$binary"
+    ldd "$binary" | awk '$3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }'
+done | sort -u | while read -r lib; do
+    [ -e "$root$lib" ] && continue
+    mkdir -p "$root$(dirname "$lib")"
+    cp -L "$lib" "$root$lib"
+done
+for tool in gnutls-cli gnutls-serv certtool; do
+    [ -e "$root/usr/bin/$tool" ] && ln -sf "/usr/bin/$tool" "$root/bin/$tool"
+done
+# The C library dlopens these to look host names up; ldd does not report them.
+for lib in /lib/*/libnss_files.so.2 /usr/lib/*/libnss_files.so.2 \
+    /lib/*/libnss_dns.so.2 /usr/lib/*/libnss_dns.so.2; do
+    [ -e "$lib" ] || continue
+    [ -e "$root$lib" ] && continue
+    mkdir -p "$root$(dirname "$lib")"
+    cp -L "$lib" "$root$lib"
+done
 cp -r /src/tests/integration "$root/ft/tests/"
 cp /src/benchmarks/run.sh "$root/ft/bin/bench.sh"
 
