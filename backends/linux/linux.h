@@ -150,9 +150,13 @@ size_t ft_linux_background_names(int names_fd, int suffixes_fd,
 struct ft_linux_prober;
 struct bpf_program;
 
-#define FT_LINUX_KIND_PROBES 2
-/* Descriptors a probed file holds: a perf event and a BPF link for each of its probes. */
-#define FT_LINUX_FILE_DESCRIPTORS (2 * FT_LINUX_KIND_PROBES)
+#define FT_LINUX_KIND_PROBES 6
+/* Descriptors a probed file holds: a perf event and a BPF link per probe; two probes for PHP
+ * and libc, six for OpenSSL, four for GnuTLS. */
+#define FT_LINUX_PHP_DESCRIPTORS 4
+#define FT_LINUX_LIBC_DESCRIPTORS 4
+#define FT_LINUX_SSL_DESCRIPTORS 12
+#define FT_LINUX_GNUTLS_DESCRIPTORS 8
 #define FT_LINUX_PHP_FILES 64
 
 /* A program attached to a function of each file of a kind. */
@@ -220,6 +224,14 @@ bool ft_linux_elf_exports(int fd, const char *const *names, size_t count, bool *
 
 /* C libraries probed for the names processes look up; returns the prober's kind, or -1. */
 int ft_linux_lookups_open(struct bpf_object *obj, struct ft_linux_prober *prober, size_t capacity);
+
+/* The prober's kinds for the TLS libraries whose server names the agent reads, or -1. */
+struct ft_linux_tls {
+    int openssl;
+    int gnutls;
+};
+bool ft_linux_tls_open(struct bpf_object *obj, struct ft_linux_prober *prober, size_t ssl_capacity,
+                       size_t gnutls_capacity, struct ft_linux_tls *out);
 
 /* PHP binaries probed for the script each request runs. */
 struct ft_linux_php;
