@@ -412,6 +412,20 @@ static void php_scripts_can_be_turned_off(void)
     ft_config_free(cfg);
 }
 
+/* The PHP probes follow the test of return probes at start unless the setting forces them on. */
+static void return_probes_can_be_forced(void)
+{
+    struct ft_config *cfg = ft_config_new();
+    struct ft_error err = {0};
+
+    ft_config_finish(cfg);
+    CHECK(!cfg->agent.backend_cfg.force_return_probes);
+    CHECK_U64(load(cfg, "[process]\nforce_return_probes = true\n", &err), FT_EXIT_OK);
+    ft_config_finish(cfg);
+    CHECK(cfg->agent.backend_cfg.force_return_probes);
+    ft_config_free(cfg);
+}
+
 void test_config(void)
 {
     reads_every_section();
@@ -420,4 +434,5 @@ void test_config(void)
     prints_what_it_reads();
     background_paths_default_to_shared_files();
     php_scripts_can_be_turned_off();
+    return_probes_can_be_forced();
 }

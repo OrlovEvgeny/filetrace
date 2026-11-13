@@ -1004,12 +1004,15 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
      * thread. */
     bool php = cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD;
     if (php && !ft_linux_returns_allowed(&b->probes, cfg)) {
-        char why[192];
+        char why[320];
         ft_log(FT_LOG_WARN,
                "%s; the PHP probes are not attached, so a PHP worker's transfers name its pool "
                "instead of the request's script",
                ft_linux_returns_refusal(&b->probes, why, sizeof(why)));
         php = false;
+    } else if (php && ft_linux_returns_refused(&b->probes)) {
+        char why[320];
+        ft_log(FT_LOG_WARN, "%s", ft_linux_returns_forced(&b->probes, why, sizeof(why)));
     }
     if (php) {
         b->php = ft_linux_php_open(obj);

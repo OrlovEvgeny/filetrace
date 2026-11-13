@@ -93,6 +93,12 @@
 # of each request: a PHP-FPM or mod_php worker's transfers name the request's
 # script instead of the pool. About a microsecond per request.
 # php_scripts = true
+# The PHP probes follow each request to its end with a return probe. A test at
+# start runs a process under a seccomp filter through one; where it is killed,
+# as on x86-64 kernels 6.11 to 6.12.13 and 6.13 to 6.13.2 under the filter of a
+# container runtime, the PHP probes are not attached. true attaches them anyway,
+# for a host whose PHP processes run under no seccomp filter.
+# force_return_probes = false
 
 # A page of metrics for Prometheus to scrape, served without authentication.
 [prometheus]
