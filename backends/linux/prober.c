@@ -1,5 +1,8 @@
 #include "backends/linux/linux.h"
 
+#include "filetrace/clock.h"
+#include "filetrace/sysinfo.h"
+
 #include <bpf/libbpf.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -16,6 +19,11 @@
 #define MAX_KINDS 4
 #define MAX_SKIPPED 256
 #define MAX_SYMBOL_BYTES (8u << 20)
+#define PENDING_MAX 4096
+#define PID_LIMIT_MAX (4u << 20) /* the kernel's PID_MAX_LIMIT on 64-bit */
+/* Time a flush gives to reading /proc, so that a host with many processes does not hold it. */
+#define WORK_BUDGET_NS (20 * FT_NS_PER_MS)
+#define SETTLE_NS (5 * FT_NS_PER_MS)
 
 /*
  * A file as probes see it. Uprobes attach to the file underneath overlayfs, which every
@@ -43,9 +51,21 @@ struct kind {
     size_t skipped_count;
 };
 
+/* A process that started, to be looked at once its program has had a moment to load. */
+struct pending {
+    uint32_t pid;
+    uint64_t ts_ns;
+};
+
 struct ft_linux_prober {
     struct kind kinds[MAX_KINDS];
     size_t kind_count;
+    uint8_t *seen; /* a bit per process ID looked at since its program started */
+    uint32_t pid_limit;
+    struct pending queue[PENDING_MAX];
+    size_t head;
+    size_t queued;
+    DIR *pass; /* a pass over /proc for the processes no event announced, while it runs */
 };
 
 static bool read_at(int fd, void *buf, size_t size, uint64_t off)
@@ -106,11 +126,6 @@ done:
     free(strings);
     free(sections);
     return read;
-}
-
-struct ft_linux_prober *ft_linux_prober_create(void)
-{
-    return calloc(1, sizeof(struct ft_linux_prober));
 }
 
 int ft_linux_prober_add(struct ft_linux_prober *p, const struct ft_linux_probe_kind *def)
@@ -287,21 +302,39 @@ static void consider_mapped(struct ft_linux_prober *p, const bool *wanted, uint3
     fclose(f);
 }
 
-bool ft_linux_prober_wants(const struct ft_linux_prober *p, const char *program)
+static bool wants(const struct ft_linux_prober *p, const char *program)
 {
-    for (size_t i = 0; p && i < p->kind_count; i++) {
+    for (size_t i = 0; i < p->kind_count; i++) {
         const struct ft_linux_probe_kind *def = &p->kinds[i].def;
-        if ((def->runs && def->runs(program)) || (def->maps_of && def->maps_of(program)))
+        if (def->every_process || (def->runs && def->runs(program)) ||
+            (def->maps_of && def->maps_of(program)))
             return true;
     }
     return false;
 }
 
-void ft_linux_prober_attach_pid(struct ft_linux_prober *p, uint32_t pid)
+static bool seen(const struct ft_linux_prober *p, uint32_t pid)
+{
+    return pid < p->pid_limit && (p->seen[pid / 8] & (1u << (pid % 8)));
+}
+
+static void mark(struct ft_linux_prober *p, uint32_t pid, bool on)
+{
+    if (pid >= p->pid_limit)
+        return;
+    if (on)
+        p->seen[pid / 8] |= (uint8_t)(1u << (pid % 8));
+    else
+        p->seen[pid / 8] &= (uint8_t)~(1u << (pid % 8));
+}
+
+/* Probes the files of the kinds that the process runs or has mapped. */
+static void look_at(struct ft_linux_prober *p, uint32_t pid)
 {
     char path[64];
     char exe[PATH_MAX];
 
+    mark(p, pid, true);
     snprintf(path, sizeof(path), "/proc/%" PRIu32 "/exe", pid);
     ssize_t n = readlink(path, exe, sizeof(exe) - 1);
     if (n <= 0)
@@ -315,41 +348,117 @@ void ft_linux_prober_attach_pid(struct ft_linux_prober *p, uint32_t pid)
         const struct ft_linux_probe_kind *def = &p->kinds[i].def;
         if (def->runs && def->runs(name))
             consider(&p->kinds[i], path, exe, pid);
-        else if (def->maps_of && def->maps_of(name))
+        else if (def->every_process || (def->maps_of && def->maps_of(name)))
             maps = wanted[i] = true;
     }
     if (maps)
         consider_mapped(p, wanted, pid);
 }
 
-void ft_linux_prober_scan(struct ft_linux_prober *p)
+/* Process IDs past this are looked at on every pass. */
+static uint32_t pid_limit(void)
 {
-    if (!p || !p->kind_count)
-        return;
-    DIR *d = opendir("/proc");
-    if (!d)
-        return;
-    struct dirent *e;
-    while ((e = readdir(d)) != nullptr) {
-        if (!isdigit((unsigned char)e->d_name[0]))
-            continue;
-        char *end;
-        unsigned long pid = strtoul(e->d_name, &end, 10);
-        if (*end == '\0' && pid > 0 && pid <= UINT32_MAX)
-            ft_linux_prober_attach_pid(p, (uint32_t)pid);
+    unsigned long max = 0;
+    FILE *f = fopen("/proc/sys/kernel/pid_max", "re");
+    if (f) {
+        if (fscanf(f, "%lu", &max) != 1)
+            max = 0;
+        fclose(f);
     }
-    closedir(d);
+    return max && max <= PID_LIMIT_MAX ? (uint32_t)max : PID_LIMIT_MAX;
+}
+
+struct ft_linux_prober *ft_linux_prober_create(void)
+{
+    struct ft_linux_prober *p = calloc(1, sizeof(*p));
+    if (!p)
+        return nullptr;
+    p->pid_limit = pid_limit();
+    p->seen = calloc(p->pid_limit / 8 + 1, 1);
+    if (!p->seen) {
+        free(p);
+        return nullptr;
+    }
+    return p;
+}
+
+void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char *program,
+                             uint64_t ts_ns)
+{
+    if (!p)
+        return;
+    mark(p, pid, false);
+    if (!wants(p, program))
+        return;
+    /* A process that finds no room is left for the next pass. */
+    if (p->queued == PENDING_MAX)
+        return;
+    p->queue[(p->head + p->queued++) % PENDING_MAX] = (struct pending){.pid = pid, .ts_ns = ts_ns};
+}
+
+void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid)
+{
+    if (p)
+        mark(p, pid, false);
+}
+
+void ft_linux_prober_rescan(struct ft_linux_prober *p)
+{
+    if (!p || !p->kind_count || p->pass)
+        return;
+    /* Outside the host's PID namespace no event names a process by its /proc entry. */
+    if (!ft_sysinfo_host_pid_namespace())
+        memset(p->seen, 0, p->pid_limit / 8 + 1);
+    p->pass = opendir("/proc");
+}
+
+/* Takes the next entry of the pass, looking at its process unless seen; false once it is over. */
+static bool pass_step(struct ft_linux_prober *p)
+{
+    struct dirent *e = readdir(p->pass);
+    if (!e) {
+        closedir(p->pass);
+        p->pass = nullptr;
+        return false;
+    }
+    char *end;
+    unsigned long pid = strtoul(e->d_name, &end, 10);
+    if (isdigit((unsigned char)e->d_name[0]) && *end == '\0' && pid > 0 && pid <= UINT32_MAX &&
+        !seen(p, (uint32_t)pid))
+        look_at(p, (uint32_t)pid);
+    return true;
+}
+
+void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
+{
+    if (!p)
+        return;
+    uint64_t until = ft_clock_mono_ns() + WORK_BUDGET_NS;
+    do {
+        /* A program's loader maps its libraries just after the exec. */
+        if (p->queued && p->queue[p->head].ts_ns + SETTLE_NS <= now_ns) {
+            uint32_t pid = p->queue[p->head].pid;
+            p->head = (p->head + 1) % PENDING_MAX;
+            p->queued--;
+            look_at(p, pid);
+        } else if (!p->pass || !pass_step(p)) {
+            break;
+        }
+    } while (ft_clock_mono_ns() < until);
 }
 
 void ft_linux_prober_destroy(struct ft_linux_prober *p)
 {
     if (!p)
         return;
+    if (p->pass)
+        closedir(p->pass);
     for (size_t i = 0; i < p->kind_count; i++) {
         struct kind *k = &p->kinds[i];
         for (size_t j = 0; j < k->count; j++)
             detach(&k->files[j]);
         free(k->files);
     }
+    free(p->seen);
     free(p);
 }

@@ -135,6 +135,7 @@ struct ft_linux_probe_kind {
     const char *many; /* "PHP binaries" */
     size_t capacity;
     struct ft_linux_uprobe probes[FT_LINUX_KIND_PROBES]; /* unused ones have no program */
+    bool every_process;                                  /* the maps of every process are read */
     bool (*runs)(const char *program);    /* the program file is of the kind; may be nullptr */
     bool (*maps_of)(const char *program); /* the maps of a process running it are read */
     bool (*mapped)(const char *file);     /* a mapped file of this base name may be of the kind */
@@ -151,12 +152,19 @@ void ft_linux_prober_destroy(struct ft_linux_prober *p);
 int ft_linux_prober_add(struct ft_linux_prober *p, const struct ft_linux_probe_kind *kind);
 size_t ft_linux_prober_count(const struct ft_linux_prober *p, int kind);
 
-/* Whether a process running the program named so is looked at. */
-bool ft_linux_prober_wants(const struct ft_linux_prober *p, const char *program);
+/*
+ * A process started the program named so, by an exec or a fork at ts_ns: it is looked at by
+ * the work after that, once. A process that ended is forgotten.
+ */
+void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char *program,
+                             uint64_t ts_ns);
+void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid);
 
-/* Probes the files that running processes execute or have mapped. */
-void ft_linux_prober_scan(struct ft_linux_prober *p);
-void ft_linux_prober_attach_pid(struct ft_linux_prober *p, uint32_t pid);
+/* Starts a pass over every running process not looked at yet, which the work carries on. */
+void ft_linux_prober_rescan(struct ft_linux_prober *p);
+
+/* Looks at the processes that started and at those of a pass, for a bounded time. */
+void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns);
 
 /*
  * Reads which of names the 64-bit ELF file open at fd defines among its dynamic symbols, and
