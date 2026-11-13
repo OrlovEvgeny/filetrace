@@ -1878,6 +1878,31 @@ if [ -n "$dynamic" ]; then
     stop_agent
     expect "names: restart agent exit code" "$?" 0
 
+    # A process still runs a C library whose file was deleted, as a daemon does after an
+    # upgrade replaced it: the library is probed from the mapping all the same.
+    mkdir -p "$work/deleted"
+    cp "$("$dynamic" libcpath)" "$work/deleted/"
+    rm -f "$work/go-deleted"
+    LD_LIBRARY_PATH=$work/deleted FT_ETC=$work/etc "$dynamic" waitsend "$work/go-deleted" \
+        alone.ft.test "$data/deleted.bin" >"$work/deleted.out" &
+    deleted_job=$!
+    i=0
+    while ! grep -q waiting "$work/deleted.out" && [ $i -lt 100 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    rm "$work/deleted/"libc*
+    start_agent || { echo "FAIL: the agent did not start for the deleted library"; exit 1; }
+    sleep 1
+    touch "$work/go-deleted"
+    wait "$deleted_job"
+    settle
+    expect "names: a deleted C library" "$(name_of deleted.bin)" alone.ft.test
+    expect_match "names: a deleted C library, probed" "$(ft stats --json)" \
+        '"name_libraries":\{"entries":[2-9]'
+    stop_agent
+    expect "names: deleted library agent exit code" "$?" 0
+
     # Once listed connections hold every kept name, a new name is refused and counted.
     printf '[limits]\nnames = 2\n' >"$work/two-names.toml"
     start_agent --config "$work/two-names.toml" ||

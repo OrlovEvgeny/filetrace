@@ -4323,6 +4323,53 @@ static void scenario_nofile(size_t limit, char **argv)
     die(argv[0]);
 }
 
+/* The path of the mapped file whose base name starts with prefix, from this process's maps. */
+static bool mapped_path(const char *prefix, char *out, size_t size)
+{
+    char line[4096 + 128];
+    bool found = false;
+    FILE *f = fopen("/proc/self/maps", "re");
+    if (!f)
+        die("maps");
+    while (!found && fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\n")] = '\0';
+        char *path = strchr(line, '/');
+        const char *slash = path ? strrchr(path, '/') : nullptr;
+        if (slash && strncmp(slash + 1, prefix, strlen(prefix)) == 0) {
+            snprintf(out, size, "%s", path);
+            found = true;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+/* libcpath: prints the path of the C library this program runs with. */
+static void scenario_libc_path(void)
+{
+    char path[4096];
+    if (!mapped_path("libc.so", path, sizeof(path)) && !mapped_path("libc-", path, sizeof(path)))
+        die("no C library mapped");
+    printf("%s\n", path);
+}
+
+static void wait_for(const char *go)
+{
+    for (int i = 0; i < 600 && access(go, F_OK) != 0; i++)
+        usleep(100 * 1000);
+}
+
+/* waitsend <go> <name> <file>: once go exists, looks the name up and sends the file there. */
+static void scenario_wait_send(const char *go, const char *name, const char *path)
+{
+    struct sockaddr_storage addr;
+    printf("scenario=waitsend pid=%d waiting\n", (int)getpid());
+    fflush(stdout);
+    wait_for(go);
+    lookup(name, AF_UNSPEC, 0, &addr);
+    send_to(&addr, path);
+}
+
 /* lookupwait <name> <file> <go>: looks the name up, then sends the file once go exists. */
 static void scenario_lookup_wait(const char *name, const char *path, const char *go)
 {
@@ -4330,8 +4377,7 @@ static void scenario_lookup_wait(const char *name, const char *path, const char 
     lookup(name, AF_UNSPEC, 0, &addr);
     printf("scenario=lookupwait pid=%d looked=up\n", (int)getpid());
     fflush(stdout);
-    for (int i = 0; i < 600 && access(go, F_OK) != 0; i++)
-        usleep(100 * 1000);
+    wait_for(go);
     send_to(&addr, path);
 }
 
@@ -4584,6 +4630,10 @@ int main(int argc, char **argv)
         scenario_lookup_wait(argv[2], argv[3], argv[4]);
     else if (strcmp(name, "nofile") == 0 && argc >= 4)
         scenario_nofile(arg_size(argv[2]), argv + 3);
+    else if (strcmp(name, "libcpath") == 0 && argc == 2)
+        scenario_libc_path();
+    else if (strcmp(name, "waitsend") == 0 && argc == 5)
+        scenario_wait_send(argv[2], argv[3], argv[4]);
     else if (strcmp(name, "pty") == 0 && argc >= 9 && strcmp(argv[7], "--") == 0)
         scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
                      nullptr, nullptr, nullptr, argv + 8);
