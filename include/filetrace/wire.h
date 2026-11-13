@@ -385,6 +385,7 @@ struct ft_row_event {
 
 #define FT_LEADERS_SHORT_HISTORY 0x1u /* the agent has run for less than the window */
 #define FT_LEADERS_CAPPED 0x2u        /* entries were replaced to keep memory bounded */
+#define FT_LEADERS_OFF 0x4u           /* the agent keeps no rankings; every figure is zero */
 
 /* Precedes the rows of a leaders query. */
 struct ft_row_leader_summary {

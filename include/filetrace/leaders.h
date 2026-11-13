@@ -34,7 +34,7 @@ void ft_leaders_add(struct ft_leaders *l, const struct ft_leader_sample *s);
 /* Where the current span of a window starts at now_ns; 0 for the lifetime window. */
 uint64_t ft_leaders_span_start(enum ft_leader_window window, uint64_t now_ns);
 
-/* The summary, then the rows; no span starts before since_ns; a null store gives zeros. */
+/* The summary, then the rows; no span starts before since_ns; a null store gives FT_LEADERS_OFF. */
 bool ft_leaders_query(struct ft_leaders *l, const struct ft_query *q, uint64_t since_ns,
                       uint64_t now_ns, ft_row_fn *emit, void *ctx, struct ft_error *err);
 

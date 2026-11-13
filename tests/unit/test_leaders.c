@@ -709,20 +709,9 @@ static void ingest(struct ft_state *st, struct ft_event *ev, uint64_t now)
     ft_state_ingest(st, ev);
 }
 
-static void through_the_state(void)
+/* nginx sends /data/export/report.csv with sendfile in two parts, a second apart. */
+static void send_report(struct ft_state *st, uint64_t now)
 {
-    struct ft_state_config cfg;
-    struct state_rows rows = {.leaders.rows = calloc(ROWS, sizeof(struct ft_row_leader))};
-    struct ft_msg_end end;
-    struct ft_error err = {0};
-    struct ft_query q;
-    uint64_t now = ft_clock_mono_ns();
-
-    ft_state_config_defaults(&cfg);
-    CHECK_U64(cfg.leader_entries, 512);
-    struct ft_state *st = ft_state_create(&cfg);
-    st->start_ns = now;
-
     struct ft_event ev = {.type = FT_EVENT_PROCESS_EXEC};
     ev.process.pid = 1842;
     ev.process.ppid = 1;
@@ -755,6 +744,23 @@ static void through_the_state(void)
         ev.transfer.ops = 1;
         ingest(st, &ev, now + part * SEC);
     }
+}
+
+static void through_the_state(void)
+{
+    struct ft_state_config cfg;
+    struct state_rows rows = {.leaders.rows = calloc(ROWS, sizeof(struct ft_row_leader))};
+    struct ft_row_stats stats = {0};
+    struct ft_msg_end end;
+    struct ft_error err = {0};
+    struct ft_query q;
+    uint64_t now = ft_clock_mono_ns();
+
+    ft_state_config_defaults(&cfg);
+    CHECK_U64(cfg.leader_entries, 512);
+    struct ft_state *st = ft_state_create(&cfg);
+    st->start_ns = now;
+    send_report(st, now);
 
     ft_query_init(&q, FT_Q_LEADERS);
     q.window = FT_WINDOW_1H;
@@ -776,8 +782,9 @@ static void through_the_state(void)
     CHECK_U64(row->file_size, 148293012);
     CHECK_STR(row->senders[0].name, "nginx");
     CHECK_U64(row->senders[0].transfers, 1);
+    CHECK_U64(rows.leaders.summary.flags & FT_LEADERS_OFF, 0);
 
-    ev = (struct ft_event){.type = FT_EVENT_FLOW};
+    struct ft_event ev = {.type = FT_EVENT_FLOW};
     ev.flow.sock_id = 0x1001;
     ev.flow.pid = 1842;
     ev.flow.proto = FT_PROTO_TCP;
@@ -789,18 +796,34 @@ static void through_the_state(void)
     CHECK_U64(rows.processes, 1);
     CHECK_U64(rows.process.file_bytes, 148293012);
     CHECK_U64(rows.process.tx_bytes, 148300000);
+    ft_state_fill_stats(st, now + 2 * SEC, &stats);
+    CHECK(stats.leaders_bytes > 0);
     ft_state_destroy(st);
 
-    /* With rankings off, a summary of zeros. */
+    /* With rankings off, nothing is allocated for them and the summary of zeros says so. */
     cfg.leader_entries = 0;
     st = ft_state_create(&cfg);
+    CHECK(st->leaders == nullptr);
+    st->start_ns = now;
+    send_report(st, now);
     rows.leaders.count = 0;
     rows.leaders.summaries = 0;
-    ft_query_init(&q, FT_Q_LEADERS);
-    CHECK(ft_state_query(st, &q, now, collect_state, &rows, &end, &err));
-    CHECK_U64(rows.leaders.summaries, 1);
-    CHECK_U64(rows.leaders.count, 0);
-    CHECK_U64(rows.leaders.summary.bytes, 0);
+    for (uint8_t key = 0; key < FT_LEADER_KEY_COUNT; key++) {
+        ft_query_init(&q, FT_Q_LEADERS);
+        q.window = FT_WINDOW_LIFETIME;
+        q.leader_key = key;
+        CHECK(ft_state_query(st, &q, now + 2 * SEC, collect_state, &rows, &end, &err));
+        CHECK_U64(rows.leaders.summaries, key + 1u);
+        CHECK_U64(rows.leaders.count, 0);
+        CHECK_U64(rows.leaders.summary.bytes, 0);
+        CHECK_U64(rows.leaders.summary.flags, FT_LEADERS_OFF);
+    }
+    ft_query_init(&q, FT_Q_PROCESSES);
+    CHECK(ft_state_query(st, &q, now + 2 * SEC, collect_state, &rows, &end, &err));
+    CHECK_U64(rows.process.file_bytes, 148293012);
+    stats = (struct ft_row_stats){0};
+    ft_state_fill_stats(st, now + 2 * SEC, &stats);
+    CHECK_U64(stats.leaders_bytes, 0);
     ft_state_destroy(st);
     free(rows.leaders.rows);
 }
