@@ -151,7 +151,9 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
 
     if (options.lossless)
         ft_sim_engine_lose_nothing(b->engine);
-    ft_sim_engine_names(b->engine, cfg->lookup_names, cfg->tls_names);
+    b->cfg.lookup_names = cfg->lookup_names && cfg->mode == FT_MODE_STANDARD;
+    b->cfg.tls_names = cfg->tls_names && cfg->mode == FT_MODE_STANDARD;
+    ft_sim_engine_names(b->engine, b->cfg.lookup_names, b->cfg.tls_names);
     make_history(b, now);
     catch_up(b);
     b->queued_seen = ft_sim_engine_queued_events(b->engine);

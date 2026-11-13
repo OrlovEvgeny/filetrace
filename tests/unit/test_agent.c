@@ -417,6 +417,46 @@ static void serves_a_single_session(void)
     free(r.transfer);
 }
 
+static void minimal_mode(struct ft_agent_config *cfg, void *arg)
+{
+    (void)arg;
+    cfg->backend_cfg.mode = FT_MODE_MINIMAL;
+}
+
+static void no_source_of_names(struct ft_agent_config *cfg, void *arg)
+{
+    (void)arg;
+    cfg->backend_cfg.lookup_names = false;
+    cfg->backend_cfg.tls_names = false;
+}
+
+/* How many names an agent started this way has room for. */
+static uint64_t room_for_names(void (*adjust)(struct ft_agent_config *cfg, void *arg))
+{
+    struct reply r = {0};
+    struct ft_error err = {0};
+    struct ft_query q;
+    int pair[2];
+
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    pid_t pid = start_agent_with(&scripted_ops, nullptr, pair[1], pair[0], adjust, nullptr);
+    close(pair[1]);
+
+    struct ft_client *c = ft_client_adopt(pair[0]);
+    ft_query_init(&q, FT_Q_STATS);
+    CHECK_U64(ft_client_query(c, &q, on_row, &r, nullptr, &err), FT_EXIT_OK);
+    ft_client_close(c);
+    CHECK_U64(wait_exit(pid), FT_EXIT_OK);
+    return r.stats.names.capacity + r.stats.name_lookups.capacity;
+}
+
+static void keeps_names_where_they_can_come_from(void)
+{
+    CHECK_U64(room_for_names(nullptr), 4096 + 16384);
+    CHECK_U64(room_for_names(minimal_mode), 0);
+    CHECK_U64(room_for_names(no_source_of_names), 0);
+}
+
 static void reports_a_backend_that_cannot_start(void)
 {
     struct ft_error err = {0};
@@ -945,6 +985,7 @@ void test_agent(void)
     serves_queries_over_a_socket();
     serves_a_single_session();
     streams_events_to_a_follower();
+    keeps_names_where_they_can_come_from();
     reports_a_backend_that_cannot_start();
     serves_metrics_to_a_scraper();
     exports_to_a_collector_that_appears_later();
