@@ -16,6 +16,7 @@ add_executable(ft_unit_tests
     unit/test_names.c
     unit/test_wire.c
     unit/test_binding.c
+    unit/test_sim_listings.c
     unit/test_top_model.c
     unit/test_top_filter.c
     unit/test_tui.c
@@ -24,6 +25,8 @@ add_executable(ft_unit_tests
     unit/test_top_panels.c
     unit/test_top_control.c
     unit/test_top_once.c
+    sim/engine.c
+    sim/scenario.c
 )
 target_link_libraries(ft_unit_tests PRIVATE ft_cli)
 set_property(SOURCE unit/test_agent.c unit/test_otlp.c

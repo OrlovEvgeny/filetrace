@@ -58,6 +58,7 @@ void test_leaders(void);
 void test_names(void);
 void test_wire(void);
 void test_binding(void);
+void test_sim_listings(void);
 void test_top_model(void);
 void test_top_filter(void);
 void test_tui(void);
