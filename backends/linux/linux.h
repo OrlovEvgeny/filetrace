@@ -72,6 +72,9 @@ struct ft_linux_probes {
     int lookups_error;      /* errno of the kernel's refusal of them */
     enum ft_linux_returns returns;
     int returns_error; /* FT_RETURNS_UNKNOWN: what kept the test from telling */
+    /* Where auto mode fell back to kprobes: the network's trampoline that failed, if one loaded. */
+    const struct ft_probe_def *trampoline_def;
+    struct ft_probe_status trampoline;
 };
 
 /* Whether the loaded object carries the program that tests return probes. */
@@ -92,12 +95,6 @@ const char *ft_linux_returns_row(const struct ft_linux_probes *p, char *buf, siz
 /* Returns 0 once an object is loaded, even if single probes failed (see status); else -errno. */
 int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out);
 void ft_linux_probes_unload(struct ft_linux_probes *p);
-
-/*
- * Attaches an empty program, by itself, as the first trampoline the network needs, named in
- * *tried: the errno with which the kernel refuses it, or 0 when it attaches or cannot be tried.
- */
-int ft_linux_trampoline_refusal(const struct ft_probe_def **tried);
 
 const char *ft_linux_last_libbpf_message(void);
 
