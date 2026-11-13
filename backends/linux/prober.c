@@ -287,7 +287,7 @@ static void consider_mapped(struct ft_linux_prober *p, const bool *wanted, uint3
         const char *name = base_name(file);
         bool matched = false;
         for (size_t i = 0; i < p->kind_count; i++)
-            matched = matched || (wanted[i] && p->kinds[i].def.mapped(name));
+            matched = matched || (wanted[i] && p->kinds[i].def.mapped(file, name));
         if (!matched)
             continue;
         ft_strlcpy(last, file, sizeof(last));
@@ -295,7 +295,7 @@ static void consider_mapped(struct ft_linux_prober *p, const bool *wanted, uint3
         char mapped[128];
         snprintf(mapped, sizeof(mapped), "/proc/%" PRIu32 "/map_files/%s", pid, range);
         for (size_t i = 0; i < p->kind_count; i++) {
-            if (wanted[i] && p->kinds[i].def.mapped(name))
+            if (wanted[i] && p->kinds[i].def.mapped(file, name))
                 consider(&p->kinds[i], mapped, file, pid);
         }
     }

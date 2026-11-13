@@ -40,9 +40,10 @@ static bool php_maps_of(const char *program)
     return strcmp(program, "apache2") == 0 || starts_with(program, "httpd");
 }
 
-static bool php_mapped(const char *file)
+static bool php_mapped(const char *path, const char *name)
 {
-    return starts_with(file, "libphp") || starts_with(file, "mod_php");
+    (void)path;
+    return starts_with(name, "libphp") || starts_with(name, "mod_php");
 }
 
 /*

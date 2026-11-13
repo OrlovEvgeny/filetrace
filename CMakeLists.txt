@@ -149,6 +149,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     set(FT_BACKEND_SOURCES
         backends/linux/loader.c
+        backends/linux/lookups.c
         backends/linux/background.c
         backends/linux/php.c
         backends/linux/prober.c

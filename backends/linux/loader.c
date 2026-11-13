@@ -489,6 +489,8 @@ struct ft_backend {
     uint64_t aged_ns;            /* when the aging iterator last ran */
     struct ft_linux_prober *prober;
     struct ft_linux_php *php;
+    int lookup_kind; /* the prober's kind for C libraries, or -1 */
+    size_t lookup_capacity;
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
 
@@ -946,6 +948,10 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
         out->listed_files = ft_linux_background_count(b->background_fd, &out->listed_refused);
         out->listed_capacity = FT_BPF_BACKGROUND_MAX;
     }
+    if (b->lookup_kind >= 0) {
+        out->name_libraries = ft_linux_prober_count(b->prober, b->lookup_kind);
+        out->name_library_capacity = b->lookup_capacity;
+    }
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
@@ -992,6 +998,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     if (b->cfg.drain_batch == 0)
         b->cfg.drain_batch = 512;
     b->sink = *sink;
+    b->lookup_kind = -1;
 
     int rc = ft_linux_probes_load(cfg, &b->probes);
     if (rc) {
@@ -1050,9 +1057,14 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
             FT_LOG_WARN,
             "[correlation] background_paths and strict_paths name more than %d files; %zu are kept",
             FT_BPF_BACKGROUND_MAX, b->probes.listed_files);
-    if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
+    bool php = cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD;
+    if (php || b->probes.lookups)
         b->prober = ft_linux_prober_create();
-        b->php = b->prober ? ft_linux_php_open(obj, b->prober) : nullptr;
+    if (b->prober && php)
+        b->php = ft_linux_php_open(obj, b->prober);
+    if (b->prober && b->probes.lookups) {
+        b->lookup_capacity = cfg->name_libraries;
+        b->lookup_kind = ft_linux_lookups_open(obj, b->prober, b->lookup_capacity);
     }
     ft_linux_prober_rescan(b->prober);
     ft_linux_prober_work(b->prober, ft_clock_mono_ns());
