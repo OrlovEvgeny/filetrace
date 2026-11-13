@@ -4593,6 +4593,86 @@ static void scenario_dlopen_send(const char *, size_t, size_t, const char *, con
 }
 #endif
 
+/*
+ * tlsconnect <load after ms> <host> <port> <server name or -> <file or -> [<libssl>]: connects to
+ * host:port, then that many milliseconds later loads libssl (the given file, or libssl.so.3) with
+ * dlopen, takes its functions with dlsym, sets the server name unless it is "-", runs the
+ * handshake, and sends the file unless it is "-". The late load is how a program that loads its
+ * TLS library well after it starts is seen.
+ */
+#ifdef __GLIBC__
+static void scenario_tls_connect(size_t ms, const char *host, const char *service,
+                                 const char *server_name, const char *path, const char *libssl)
+{
+    struct addrinfo hints = {.ai_socktype = SOCK_STREAM};
+    struct addrinfo *res;
+    if (getaddrinfo(host, service, &hints, &res) != 0)
+        die("getaddrinfo");
+    int fd = socket(res->ai_family, SOCK_STREAM, 0);
+    if (fd < 0 || connect(fd, res->ai_addr, res->ai_addrlen) != 0)
+        die("connect");
+    freeaddrinfo(res);
+
+    struct timespec pause = {.tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000};
+    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {
+    }
+
+    void *h = dlopen(libssl, RTLD_NOW);
+    if (!h)
+        die(libssl);
+    void *(*ctx_new)(const void *) = (void *(*)(const void *))dlsym(h, "SSL_CTX_new");
+    const void *(*method)(void) = (const void *(*)(void))dlsym(h, "TLS_client_method");
+    void *(*ssl_new)(void *) = (void *(*)(void *))dlsym(h, "SSL_new");
+    int (*set_fd)(void *, int) = (int (*)(void *, int))dlsym(h, "SSL_set_fd");
+    long (*ctrl)(void *, int, long, void *) =
+        (long (*)(void *, int, long, void *))dlsym(h, "SSL_ctrl");
+    int (*do_connect)(void *) = (int (*)(void *))dlsym(h, "SSL_connect");
+    int (*do_write)(void *, const void *, int) =
+        (int (*)(void *, const void *, int))dlsym(h, "SSL_write");
+    void (*ssl_free)(void *) = (void (*)(void *))dlsym(h, "SSL_free");
+    void (*ctx_free)(void *) = (void (*)(void *))dlsym(h, "SSL_CTX_free");
+    if (!ctx_new || !method || !ssl_new || !set_fd || !ctrl || !do_connect || !do_write ||
+        !ssl_free || !ctx_free)
+        die("dlsym");
+
+    void *ctx = ctx_new(method());
+    void *ssl = ctx ? ssl_new(ctx) : nullptr;
+    if (!ssl)
+        die("SSL_new");
+    set_fd(ssl, fd);
+    if (strcmp(server_name, "-") != 0) {
+        char sni[256];
+        snprintf(sni, sizeof(sni), "%s", server_name);
+        ctrl(ssl, 55, 0, sni); /* SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name */
+    }
+    size_t bytes = 0;
+    if (do_connect(ssl) == 1 && strcmp(path, "-") != 0) {
+        bytes = LOOKUP_FILE_BYTES;
+        make_file(path, bytes);
+        char *buf = read_whole_file(path, bytes);
+        for (size_t off = 0; off < bytes;) {
+            int n = do_write(ssl, buf + off, (int)(bytes - off));
+            if (n <= 0)
+                break;
+            off += (size_t)n;
+        }
+        free(buf);
+    }
+    ssl_free(ssl);
+    ctx_free(ctx);
+    dlclose(h);
+    close(fd);
+    report("tlsconnect", strcmp(path, "-") == 0 ? "" : path, bytes, atoi(service));
+}
+#else
+/* dlopen of a TLS library is left to the dynamically linked build. */
+static void scenario_tls_connect(size_t, const char *, const char *, const char *, const char *,
+                                 const char *)
+{
+    printf("scenario=tlsconnect loaded=unsupported\n");
+}
+#endif
+
 /* lookupwait <name> <file> <go>: looks the name up, then sends the file once go exists. */
 static void scenario_lookup_wait(const char *name, const char *path, const char *go)
 {
@@ -4843,6 +4923,9 @@ int main(int argc, char **argv)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "dlopensend") == 0 && argc == 7)
         scenario_dlopen_send(argv[2], arg_size(argv[3]), arg_size(argv[4]), argv[5], argv[6]);
+    else if (strcmp(name, "tlsconnect") == 0 && (argc == 7 || argc == 8))
+        scenario_tls_connect(arg_size(argv[2]), argv[3], argv[4], argv[5], argv[6],
+                             argc == 8 ? argv[7] : "libssl.so.3");
     else if (strcmp(name, "sleepsend") == 0 && argc == 5)
         scenario_sleep_send(arg_size(argv[2]), argv[3], argv[4]);
     else if (strcmp(name, "lookupsend") == 0 && (argc == 5 || argc == 6))
