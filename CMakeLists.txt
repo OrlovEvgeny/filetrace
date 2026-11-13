@@ -180,6 +180,7 @@ target_link_libraries(ft_proto PUBLIC ft_protobuf_c)
 add_library(ft_core STATIC
     core/arena.c
     core/base.c
+    core/binding.c
     core/capabilities.c
     core/client.c
     core/clock.c

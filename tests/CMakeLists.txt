@@ -15,6 +15,7 @@ add_executable(ft_unit_tests
     unit/test_leaders.c
     unit/test_names.c
     unit/test_wire.c
+    unit/test_binding.c
     unit/test_top_model.c
     unit/test_top_filter.c
     unit/test_tui.c
