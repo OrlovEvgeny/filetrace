@@ -587,7 +587,7 @@ static void process_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e
     comm[sizeof(comm) - 1] = '\0';
     const char *slash = exe ? strrchr(exe, '/') : nullptr;
     const char *name = exe ? (slash ? slash + 1 : exe) : comm;
-    ft_linux_prober_started(b->prober, e->pid, name, e->hdr.ts_ns);
+    ft_linux_prober_started(b->prober, e->pid, name, !exe, e->hdr.ts_ns);
 }
 
 static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe,
