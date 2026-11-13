@@ -1,6 +1,7 @@
 #include "ui/ui.h"
 
 #include "filetrace/format.h"
+#include "filetrace/names.h"
 #include "filetrace/sysinfo.h"
 
 #include <errno.h>
@@ -163,6 +164,7 @@ struct transfer_table {
     size_t loaded;
     size_t path_width;
     bool resolve;
+    bool names;
 };
 
 /* A name appears on the refresh after its lookup finishes; until then the address shows. */
@@ -205,6 +207,11 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
         break;
     }
     case 2: {
+        struct ft_remote_names names;
+        ft_row_transfer_names(row, &names);
+        ft_remote_name_cell(&names, 0, buf, size);
+        if (t->names && buf[0])
+            break;
         const char *host = host_name(t->resolve, &row->remote);
         if (host)
             snprintf(buf, size, "%s", host);
@@ -233,7 +240,8 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
     return buf;
 }
 
-static void transfers_table(FILE *o, const struct ft_rows *rows, size_t width, bool resolve)
+static void transfers_table(FILE *o, const struct ft_rows *rows, size_t width, bool resolve,
+                            bool names)
 {
     static const struct ft_column_spec columns[] = {
         {"PROCESS", false}, {"FILE", false}, {"DESTINATION", false},
@@ -254,6 +262,7 @@ static void transfers_table(FILE *o, const struct ft_rows *rows, size_t width, b
         .loaded = SIZE_MAX,
         .path_width = width == SIZE_MAX ? PLAIN_PATH_WIDTH : SIZE_MAX,
         .resolve = resolve,
+        .names = names,
     };
 
     if (row && rows->count)
@@ -338,13 +347,18 @@ static void processes_table(FILE *o, const struct ft_rows *rows, enum ft_watch_d
                            FT_ARRAY_LEN(outbound), rows->count, process_cell, &table, false, width);
 }
 
+struct connection_table {
+    const struct ft_rows *rows;
+    bool names;
+};
+
 static const char *connection_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
 {
-    const struct ft_rows *rows = ctx;
+    const struct connection_table *t = ctx;
     struct ft_row_connection row;
     char scratch[8];
 
-    ft_rows_get(rows, r, &row, sizeof(row));
+    ft_rows_get(t->rows, r, &row, sizeof(row));
     switch (c) {
     case 0:
         if (row.pid)
@@ -365,6 +379,11 @@ static const char *connection_cell(void *ctx, size_t r, size_t c, char *buf, siz
     case 3:
     case 4: {
         const struct ft_endpoint *ep = c == 3 ? &row.local : &row.remote;
+        struct ft_remote_names names;
+        ft_row_connection_names(&row, &names);
+        ft_remote_name_cell(&names, row.remote.port, buf, size);
+        if (c == 4 && t->names && buf[0])
+            break;
         if (ep->family == 0 && ep->port == 0)
             snprintf(buf, size, "*");
         else
@@ -381,7 +400,7 @@ static const char *connection_cell(void *ctx, size_t r, size_t c, char *buf, siz
     return buf;
 }
 
-static void connections_table(FILE *o, const struct ft_rows *rows, size_t width)
+static void connections_table(FILE *o, const struct ft_rows *rows, size_t width, bool names)
 {
     static const struct ft_column_spec columns[] = {
         {"PID", false},    {"PROCESS", false}, {"PROTOCOL", false}, {"LOCAL", false},
@@ -393,9 +412,11 @@ static void connections_table(FILE *o, const struct ft_rows *rows, size_t width)
         {.leave = 2},
     };
 
+    struct connection_table table = {rows, names};
+
     if (rows->count)
         ft_table_print_fit(o, columns, fit, FT_ARRAY_LEN(columns), rows->count, connection_cell,
-                           (void *)(uintptr_t)rows, false, width);
+                           &table, false, width);
     else
         fputs("No open connections.\n", o);
 }
@@ -462,17 +483,18 @@ static void key(FILE *o, const struct key_hint *k)
 }
 
 /* Hints that do not fit are left out, the least needed first. */
-static void key_row(FILE *o, enum view view, bool paused, size_t width)
+static void key_row(FILE *o, enum view view, bool paused, bool names, size_t width)
 {
     const struct key_hint hints[] = {
         {"F", "Files", view == VIEW_FILES},
         {"P", "Processes", view == VIEW_PROCESSES},
         {"N", "Network", view == VIEW_NETWORK},
+        {"A", "Addresses", !names},
         {"Space", "Pause", paused},
         {"?", "Help", false},
         {"Q", "Quit", false},
     };
-    static const size_t leave[] = {3, 2, 1, 0};
+    static const size_t leave[] = {3, 4, 2, 1, 0};
     bool shown[FT_ARRAY_LEN(hints)];
     size_t total = 0;
 
@@ -502,6 +524,7 @@ static void help_screen(FILE *o)
             "f      File transfers in progress\n"
             "p      Processes, by the rate they send at\n"
             "n      Network: open connections\n"
+            "a      Show remote ends by name or by address\n"
             "space  Pause or resume refreshing\n"
             "?      Show or hide this help\n"
             "q      Quit\n"
@@ -521,7 +544,7 @@ static void help_screen(FILE *o)
 
 static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_options *opt,
                     const struct ft_host_info *host, enum view view, bool every_view, size_t width,
-                    bool paused, bool help)
+                    bool paused, bool help, bool names)
 {
     const struct ft_row_stats *st = &snap->stats;
     unsigned major = 0;
@@ -549,7 +572,7 @@ static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_
 
     if (every_view || view == VIEW_FILES) {
         fprintf(o, "\n%cACTIVE FILE TRANSFERS\n", HEADING);
-        transfers_table(o, &snap->transfers, width, opt->resolve);
+        transfers_table(o, &snap->transfers, width, opt->resolve, names);
     }
     if (every_view || view == VIEW_PROCESSES) {
         fprintf(o, "\n%cPROCESSES\n", HEADING);
@@ -557,13 +580,13 @@ static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_
     }
     if (!every_view && view == VIEW_NETWORK) {
         fprintf(o, "\n%cCONNECTIONS\n", HEADING);
-        connections_table(o, &snap->connections, width);
+        connections_table(o, &snap->connections, width, names);
     }
 
     confidence_line(o, st);
     if (every_view)
         return;
-    key_row(o, view, paused, width);
+    key_row(o, view, paused, names, width);
 }
 
 static void frame_free(struct frame *f)
@@ -679,6 +702,7 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *given)
     enum view view = VIEW_FILES;
     bool paused = false;
     bool help = false;
+    bool names = true;
     int code = FT_EXIT_OK;
 
     opt.plain = !dashboard;
@@ -722,7 +746,7 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *given)
             break;
         }
         compose(mem, &snap, &opt, &host, view, !dashboard, dashboard ? (size_t)cols : SIZE_MAX,
-                paused, help);
+                paused, help, names);
         fclose(mem);
 
         if (dashboard) {
@@ -773,6 +797,10 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *given)
                 case 'N':
                     view = VIEW_NETWORK;
                     help = false;
+                    break;
+                case 'a':
+                case 'A':
+                    names = !names;
                     break;
                 case ' ':
                     paused = !paused;
