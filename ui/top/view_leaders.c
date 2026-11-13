@@ -86,6 +86,12 @@ static void count_text(uint64_t n, const char *one, const char *many, char *buf,
     snprintf(buf, size, "%s %s", digits, n == 1 ? one : many);
 }
 
+/* An answer has come from an agent that keeps rankings. */
+static bool ranked(const struct ft_top_draw *d, const struct ft_top_leaders *l)
+{
+    return l->answered && !d->ui->leaders_unsupported && !(l->summary.flags & FT_LEADERS_OFF);
+}
+
 struct card_line {
     const struct seg *wide;
     size_t nwide;
@@ -205,7 +211,7 @@ static void concentration_card(struct ft_top_draw *d, struct ft_rect box,
 void ft_top_draw_leaders_cards(struct ft_top_draw *d, struct ft_rect r)
 {
     const struct ft_top_leaders *l = ft_top_leaders(d->model);
-    bool known = l->answered && !d->ui->leaders_unsupported;
+    bool known = ranked(d, l);
     int base = (r.w - 6) / 4;
     int extra = r.w - 6 - 4 * base;
     struct ft_rect boxes[4];
@@ -349,7 +355,7 @@ static void span_text_of(const struct ft_top_draw *d, struct span_text *t)
     const char *filter = ft_top_filter_of(d->model, FT_TOP_LEADERS);
     if (filter && filter[0])
         snprintf(t->filtered, sizeof(t->filtered), " FILTERED %zu/%zu ", v->shown, v->total);
-    if (!l->answered || d->ui->leaders_unsupported)
+    if (!ranked(d, l))
         return;
 
     char from[24];
@@ -696,12 +702,16 @@ void ft_top_draw_leaders_table(struct ft_top_draw *d, struct ft_rect header, str
         empty_line(d, rows,
                    "This agent does not keep rankings over time. Restart filetrace-agent to "
                    "bring it up to the version of this command.");
+    else if (l->answered && (l->summary.flags & FT_LEADERS_OFF))
+        empty_line(d, rows,
+                   "The agent keeps no rankings: its configuration sets [limits] "
+                   "file_rankings = 0.");
     else if (l->answered && count == 0)
         empty_line(d, rows,
                    filter && filter[0]
                        ? "No files in this window match the filter. F4 Esc clears it."
                        : "No files were sent in this window.");
-    for (int k = 0; l->answered && !d->ui->leaders_unsupported && k < rows.h; k++) {
+    for (int k = 0; ranked(d, l) && k < rows.h; k++) {
         size_t index = first + (size_t)k;
         const struct ft_top_row *row = ft_top_row_at(d->model, FT_TOP_LEADERS, index);
         if (!row)
@@ -897,7 +907,7 @@ void ft_top_draw_leaders_side(struct ft_top_draw *d, struct ft_rect r)
     const struct ft_top_leaders *l = ft_top_leaders(d->model);
     struct selected_block sel = {0};
 
-    if (r.w <= SIDE_LABEL || r.h <= 0 || d->ui->leaders_unsupported || !l->answered)
+    if (r.w <= SIDE_LABEL || r.h <= 0 || !ranked(d, l))
         return;
     size_t index = ft_top_selected(d->model, FT_TOP_LEADERS);
     const struct ft_top_row *row =
