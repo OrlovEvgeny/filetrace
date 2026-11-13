@@ -125,6 +125,21 @@ ok "a raw event without a name keeps the field" grep -Eq ' remote_port=[0-9]+ re
 ok "events are listed as JSON" query events.jsonl events --type socket_connect --remote 'mirror-*' --limit 1 --jsonl
 ok "a JSON event names its remote end" grep -Eq '"remote_port":873,"remote_name":"mirror-[12]\.internal","remote_name_source":"lookup"\}' events.jsonl
 
+socket=$("$cli" --socket sim.sock connections --remote 'registry.*' --format quiet 2>/dev/null | head -n 1)
+ok "a socket is inspected" query socket.txt inspect socket "$socket"
+ok "the socket has its name" grep -Eq '^Name: +registry\.ml\.example\.com via proxy\.corp\.internal$' socket.txt
+ok "the socket says where the name is from" grep -Eq '^Name from: +TLS server name$' socket.txt
+ok "the socket lists what was looked up" grep -Eq '^Resolved names: +proxy\.corp\.internal$' socket.txt
+ok "its flows have a column of names" grep -Eq '^FLOW +PID +PROCESS +REMOTE +NAME +SENT' socket.txt
+ok "its files have a column of names" grep -Eq '^FILE +PROCESS +REMOTE +NAME +BYTES' socket.txt
+flow=$("$cli" --socket sim.sock flows --remote clickhouse.internal --format quiet 2>/dev/null | head -n 1)
+ok "a flow is inspected" query flow.txt inspect flow "$flow"
+ok "the flow has its names" grep -Eq '^Name: +ch-replica-2\.internal \(\+1\)$' flow.txt
+ok "the flow lists them" grep -Eq '^Resolved names: +ch-replica-2\.internal, clickhouse\.internal$' flow.txt
+flow=$("$cli" --socket sim.sock flows --process nginx --format quiet 2>/dev/null | head -n 1)
+ok "a flow nobody named is inspected" query bare.txt inspect flow "$flow"
+ok "it has no line of names" exits 1 grep -Eq '^(Name|Name from|Resolved names):' bare.txt
+ok "its files have no column of names" exits 1 grep -q ' NAME ' bare.txt
 
 ok "top prints a snapshot" query top.txt top --once
 ok "the snapshot has its header" grep -q 'DESTINATION' top.txt
