@@ -358,6 +358,64 @@ static void transfer_names(void)
     fixture_free(&f);
 }
 
+/* The header of the Destinations table at a width, with the first row under it. */
+static struct ft_canvas *destinations_table(struct fixture *f, struct ft_top_ui *ui, int width)
+{
+    struct ft_canvas *c = ft_canvas_create(width, 2);
+    struct ft_top_draw d = drawer(c, f, ui);
+
+    ft_canvas_fill(c, (struct ft_rect){0, 0, width, 2}, ' ', (struct ft_style){0});
+    ft_top_draw_table(&d, FT_TOP_DESTINATIONS, (struct ft_rect){0, 0, width, 1},
+                      (struct ft_rect){0, 1, width, 1}, 0);
+    return c;
+}
+
+static void destination_columns(void)
+{
+    static const struct {
+        int width;
+        bool rdns;
+        const char *last;
+    } cases[] = {
+        {174, false, "TREND"}, {144, false, "TREND"},   {120, false, "TOP FILE"},
+        {174, true, "TREND"},  {144, true, "TOP FILE"}, {120, true, "TOP FILE"},
+    };
+    struct fixture f;
+    struct ft_top_ui ui = {.mode = FT_TOP_DESTINATIONS, .full_paths = true};
+
+    named_fixture(&f);
+    ft_top_set_mode(f.m, FT_TOP_DESTINATIONS);
+    for (size_t i = 0; i < FT_ARRAY_LEN(cases); i++) {
+        ft_top_set_resolve(f.m, cases[i].rdns);
+        struct ft_canvas *c = destinations_table(&f, &ui, cases[i].width);
+        const char *header = cells(c, 0, 0, cases[i].width);
+        const char *last = strstr(header, cases[i].last);
+        CHECK(shows(c, 29, 0, "NAME"));
+        CHECK(has_label(c, 0, "rDNS") == cases[i].rdns);
+        CHECK(last && ft_text_columns(last) >= ft_text_columns(cases[i].last));
+        CHECK(shows(c, 29, 1, "files.example."));
+        ft_canvas_destroy(c);
+    }
+    ft_top_set_resolve(f.m, false);
+
+    /* With addresses, or with no name on the screen, the table is laid out as without names. */
+    ui.addresses = true;
+    struct ft_canvas *c = destinations_table(&f, &ui, 174);
+    CHECK(shows(c, 29, 0, "rDNS"));
+    CHECK(!has_label(c, 0, "NAME"));
+    ft_canvas_destroy(c);
+    fixture_free(&f);
+
+    ui.addresses = false;
+    fixture_init(&f);
+    ft_top_set_mode(f.m, FT_TOP_DESTINATIONS);
+    c = destinations_table(&f, &ui, 174);
+    CHECK(shows(c, 29, 0, "rDNS"));
+    CHECK(!has_label(c, 0, "NAME"));
+    ft_canvas_destroy(c);
+    fixture_free(&f);
+}
+
 /* Every cell belongs to exactly one block, the gutters beside the panels to none. */
 static void covers(const struct ft_top_layout *l)
 {
@@ -692,6 +750,7 @@ void test_top_views(void)
     live_modes();
     transfer_columns();
     transfer_names();
+    destination_columns();
     layout();
     tree_guides();
     data_source();

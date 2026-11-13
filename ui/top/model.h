@@ -101,6 +101,10 @@ struct ft_top_destination {
     const struct ft_top_transfer *top;              /* by rate; its file is the top file */
     const struct ft_top_transfer *const *transfers; /* by rate */
     size_t ntransfers;
+    const char *name; /* what its NAME column shows; "" when no transfer has a name */
+    /* The distinct names its transfers used or looked up, by the bytes of those that used each. */
+    const char *const *names;
+    size_t nnames;
 };
 
 struct ft_top_sender {
