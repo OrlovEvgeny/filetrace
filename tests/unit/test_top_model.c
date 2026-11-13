@@ -808,6 +808,36 @@ static void groups(void)
     fixture_free(&f);
 }
 
+static void name_groups(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    transfer(&f, (struct xfer){.id = 1, .pid = 7, .rate = 300, .resolved = {"files.example.com"}});
+    transfer(&f, (struct xfer){.id = 2,
+                               .pid = 7,
+                               .rate = 200,
+                               .tls = "s3.example.com",
+                               .resolved = {"proxy.corp.example"}});
+    transfer(&f, (struct xfer){.id = 3, .pid = 7, .rate = 900});
+    transfer(&f, (struct xfer){.id = 4, .pid = 7, .rate = 100, .resolved = {"files.example.com"}});
+    sample(&f, 0);
+    ft_top_set_group(f.m, FT_TOP_TRANSFERS, FT_TOP_GROUP_NAME);
+
+    /* By the name the table shows; the transfers without one share a group. */
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 7);
+    const struct ft_top_row *r = row_at(&f, FT_TOP_TRANSFERS, 0);
+    CHECK_STR(r->section->title, "");
+    CHECK_U64(r->section->rows, 1);
+    r = row_at(&f, FT_TOP_TRANSFERS, 2);
+    CHECK_STR(r->section->title, "files.example.com");
+    CHECK_U64(r->section->rows, 2);
+    r = row_at(&f, FT_TOP_TRANSFERS, 5);
+    CHECK_STR(r->section->title, "s3.example.com via proxy.corp.example");
+    CHECK_U64(r->section->rows, 1);
+    fixture_free(&f);
+}
+
 static void search(void)
 {
     struct fixture f;
@@ -1001,6 +1031,7 @@ void test_top_model(void)
     tree();
     deep_tree();
     groups();
+    name_groups();
     search();
     churn();
     short_rows();

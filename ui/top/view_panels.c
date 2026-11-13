@@ -136,6 +136,7 @@ static const char *group_label(enum ft_top_group group)
         [FT_TOP_GROUP_NONE] = "none",           [FT_TOP_GROUP_PROCESS] = "process",
         [FT_TOP_GROUP_SCRIPT] = "script",       [FT_TOP_GROUP_DESTINATION] = "destination",
         [FT_TOP_GROUP_DIRECTORY] = "directory", [FT_TOP_GROUP_SUBNET] = "/24 subnet",
+        [FT_TOP_GROUP_NAME] = "name",
     };
     return group < FT_TOP_GROUP_COUNT ? labels[group] : "";
 }

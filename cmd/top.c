@@ -32,6 +32,7 @@ static const struct choice groups[] = {
     {"none", FT_TOP_GROUP_NONE},     {"process", FT_TOP_GROUP_PROCESS},
     {"script", FT_TOP_GROUP_SCRIPT}, {"dest", FT_TOP_GROUP_DESTINATION},
     {"dir", FT_TOP_GROUP_DIRECTORY}, {"subnet", FT_TOP_GROUP_SUBNET},
+    {"name", FT_TOP_GROUP_NAME},
 };
 
 static const struct choice windows[] = {

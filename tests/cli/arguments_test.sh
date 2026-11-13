@@ -55,7 +55,7 @@ says "top refuses an unknown sort key" 2 \
     "filetrace: invalid value 'speed' for --sort (expected rate, bytes, progress, age, pid, user, proc, script, file, size, dest, method or conf)" \
     top --sort speed
 says "top refuses an unknown group" 2 \
-    "filetrace: invalid value 'asn' for --group (expected none, process, script, dest, dir or subnet)" \
+    "filetrace: invalid value 'asn' for --group (expected none, process, script, dest, dir, subnet or name)" \
     top --group asn
 says "top refuses a delay below 500ms" 2 \
     "filetrace: invalid value '100ms' for --delay (expected a duration from 500ms to 10s)" \

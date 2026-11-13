@@ -481,6 +481,8 @@ static const char *group_word(enum ft_top_mode mode, enum ft_top_group group)
         return "directory";
     case FT_TOP_GROUP_SUBNET:
         return "/24 subnet";
+    case FT_TOP_GROUP_NAME:
+        return "name";
     default:
         return mode == FT_TOP_DESTINATIONS ? "remote IP" : "none";
     }
