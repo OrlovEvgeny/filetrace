@@ -4,8 +4,9 @@
 # Runs the scenarios of expected.txt, or those named, each in a privileged container of its
 # own on both probe sets, as many times as its row or -n asks, and compares the verdicts
 # with the expected ones; -w sets the agent's correlation window. --list prints each
-# selected scenario with its number of runs. Exits 77 when Docker is not available and 1 on
-# any deviation.
+# selected scenario with its number of runs. A scenario that does not apply on this machine
+# ends with RESULT: SKIP and is reported as skipped. Exits 77 when Docker is not available and
+# 1 on any deviation.
 set -eu
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -137,12 +138,13 @@ EOF
     else
         want=$auto release=$release_auto
     fi
-    runs=0 bugs=0 broken=0
+    runs=0 bugs=0 broken=0 skips=0
     for v in "$out/$name.$probes".*.verdict; do
         runs=$((runs + 1))
         case $(cat "$v") in
             OK) ;;
             BUG) bugs=$((bugs + 1)) ;;
+            SKIP) skips=$((skips + 1)) ;;
             *) broken=$((broken + 1)) ;;
         esac
     done
@@ -150,6 +152,8 @@ EOF
         verdict=ERROR
     elif [ "$bugs" -gt 0 ]; then
         verdict=BUG
+    elif [ "$skips" -gt 0 ]; then
+        verdict=SKIP
     else
         verdict=OK
     fi
@@ -161,6 +165,8 @@ EOF
     esac
     if [ "$broken" -gt 0 ]; then
         status=failed outcome="FAILED, $broken of $runs runs gave no verdict"
+    elif [ "$skips" -gt 0 ]; then
+        status=skipped outcome="skipped, the scenario does not apply on this machine"
     elif [ "$bugs" -eq 0 ]; then
         status=ok outcome=ok
         [ "$want" = LIMIT ] && outcome="ok, the limit was not met"

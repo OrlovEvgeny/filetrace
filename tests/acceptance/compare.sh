@@ -12,7 +12,7 @@ if [ "$(grep '^window ' "$1/settings")" != "$(grep '^window ' "$2/settings")" ];
     echo "the runs used different correlation windows: a difference can come from that"
 fi
 
-# Prints "<scenario>.<probes> <verdict>" for a run: OK, BUG or ERROR, with the failed runs
+# Prints "<scenario>.<probes> <verdict>" for a run: OK, BUG, SKIP or ERROR, with the failed runs
 # out of those made when there was more than one.
 summary() {
     for v in "$1"/*.verdict; do
@@ -23,10 +23,11 @@ summary() {
         sub(/\.[0-9]+$/, "", key)
         runs[key]++
         if ($2 == "BUG") bugs[key]++
+        else if ($2 == "SKIP") skipped[key]++
         else if ($2 != "OK") broken[key]++
     } END {
         for (key in runs) {
-            v = broken[key] ? "ERROR" : bugs[key] ? "BUG" : "OK"
+            v = broken[key] ? "ERROR" : bugs[key] ? "BUG" : skipped[key] ? "SKIP" : "OK"
             if (runs[key] > 1) v = v " " (bugs[key] + 0) "/" runs[key]
             print key, v
         }
