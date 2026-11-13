@@ -168,8 +168,67 @@ static void all_held_refuses(void)
     ft_names_destroy(n);
 }
 
+static void check_shown(const struct ft_remote_names *n, const char *shown, const char *name,
+                        enum ft_name_source source)
+{
+    char buf[3 * FT_NAME_MAX];
+
+    ft_remote_name_format(n, buf, sizeof(buf));
+    CHECK_STR(buf, shown);
+    CHECK_STR(ft_remote_name(n), name);
+    CHECK_U64(ft_remote_name_source(n), source);
+}
+
+static void shown_by_what_is_known(void)
+{
+    struct ft_remote_names n = {.tls = ""};
+    check_shown(&n, "", "", FT_NAME_SOURCE_NONE);
+
+    n = (struct ft_remote_names){
+        .tls = "", .resolved = {"files.example.com"}, .listed = 1, .count = 1};
+    check_shown(&n, "files.example.com", "files.example.com", FT_NAME_SOURCE_LOOKUP);
+
+    n = (struct ft_remote_names){
+        .tls = "", .resolved = {"cdn.example.com", "static.example.com"}, .listed = 2, .count = 2};
+    check_shown(&n, "cdn.example.com (+1)", "cdn.example.com", FT_NAME_SOURCE_LOOKUP);
+
+    /* More were looked up than a row lists. */
+    n.count = 7;
+    check_shown(&n, "cdn.example.com (+6)", "cdn.example.com", FT_NAME_SOURCE_LOOKUP);
+
+    n = (struct ft_remote_names){.tls = "files.example.com",
+                                 .resolved = {"cdn.example.com", "files.example.com"},
+                                 .listed = 2,
+                                 .count = 2};
+    check_shown(&n, "files.example.com", "files.example.com", FT_NAME_SOURCE_LOOKUP_TLS);
+
+    n = (struct ft_remote_names){.tls = "files.example.com"};
+    check_shown(&n, "files.example.com", "files.example.com", FT_NAME_SOURCE_TLS);
+
+    n = (struct ft_remote_names){
+        .tls = "s3.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+    check_shown(&n, "s3.example.com via proxy.corp.example", "s3.example.com", FT_NAME_SOURCE_TLS);
+
+    n = (struct ft_remote_names){.tls = "s3.example.com",
+                                 .resolved = {"proxy.corp.example", "gw.corp.example"},
+                                 .listed = 2,
+                                 .count = 3};
+    check_shown(&n, "s3.example.com via proxy.corp.example (+2)", "s3.example.com",
+                FT_NAME_SOURCE_TLS);
+
+    CHECK_STR(ft_name_source_name(FT_NAME_SOURCE_NONE), "");
+    CHECK_STR(ft_name_source_name(FT_NAME_SOURCE_LOOKUP), "lookup");
+    CHECK_STR(ft_name_source_name(FT_NAME_SOURCE_TLS), "tls");
+    CHECK_STR(ft_name_source_name(FT_NAME_SOURCE_LOOKUP_TLS), "lookup+tls");
+
+    char cut[12];
+    ft_remote_name_format(&n, cut, sizeof(cut));
+    CHECK_STR(cut, "s3.example.");
+}
+
 void test_names(void)
 {
+    shown_by_what_is_known();
     normalised();
     one_name_one_slot();
     unused_longest_goes_first();
