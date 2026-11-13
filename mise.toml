@@ -97,6 +97,13 @@ run = [
     "tools/dev/vm.sh 6.12 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'",
 ]
 
+[tasks."test:returns"]
+description = "Check the return probes against seccomp on the x86-64 6.12.13 and 6.12.15 kernels under QEMU"
+run = [
+    "tools/dev/vm.sh --arch x86_64 6.12.13 'sh /ft/tests/returns/run.sh /ft/bin unfixed'",
+    "tools/dev/vm.sh --arch x86_64 6.12.15 'sh /ft/tests/returns/run.sh /ft/bin fixed'",
+]
+
 [tasks."shots:top"]
 description = "Save every screen of filetrace top as text, HTML and PNG, from the simulated agent"
 run = "tools/dev/top-shots.sh"
