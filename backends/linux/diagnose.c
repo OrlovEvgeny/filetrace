@@ -269,11 +269,9 @@ static bool lockdown_blocks_reads(void)
     return strstr(buf, "[confidentiality]") != nullptr;
 }
 
-/* Adds one check per probe that was to be attached; returns how many are not. */
-static size_t report_probes(struct ft_diagnosis *out, const struct ft_linux_probes *p)
+/* Adds one check per probe that was to be attached. */
+static void report_probes(struct ft_diagnosis *out, const struct ft_linux_probes *p)
 {
-    size_t failed = 0;
-
     for (size_t i = 0; i < p->set->count; i++) {
         const struct ft_probe_def *def = &p->set->defs[i];
         const struct ft_probe_status *st = &p->status[i];
@@ -285,15 +283,29 @@ static size_t report_probes(struct ft_diagnosis *out, const struct ft_linux_prob
         if (st->state == FT_PROBE_NOT_NEEDED)
             continue;
         snprintf(name, sizeof(name), "%s %s", def->kind, def->target);
-        if (st->state == FT_PROBE_ATTACHED) {
+        if (st->state == FT_PROBE_ATTACHED)
             ft_diagnosis_add_probe(out, FT_CHECK_OK, !required, name, "%s", "");
-        } else {
+        else
             ft_diagnosis_add_probe(out, required ? FT_CHECK_FAIL : FT_CHECK_WARN, !required, name,
                                    "%s", probe_problem(st, why, sizeof(why)));
-            failed++;
-        }
     }
-    return failed;
+}
+
+/* The observations a failed probe removes outright; each is UNAVAILABLE only when a probe the agent
+   cannot work around did not attach. Features never offered on a kernel, and those a fallback keeps
+   PARTIAL (destination names on a late look, PHP without return probes), are not here, so the agent
+   covering a miss by itself does not degrade the status. A missing required probe leaves no network
+   at all and is caught earlier as unsupported. */
+static bool a_feature_is_lost(const struct ft_capabilities *caps)
+{
+    static const enum ft_feature core[] = {
+        FT_FEAT_TCP,       FT_FEAT_UDP,       FT_FEAT_IPV6,
+        FT_FEAT_FILE_READ, FT_FEAT_READ_SEND, FT_FEAT_SENDFILE,
+    };
+    for (size_t i = 0; i < FT_ARRAY_LEN(core); i++)
+        if (caps->items[core[i]].status == FT_CAP_UNAVAILABLE)
+            return true;
+    return false;
 }
 
 void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diagnosis *out)
@@ -419,16 +431,14 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
                          ft_linux_returns_row(&probes, why, sizeof(why)));
     }
 
-    size_t failed_groups = report_probes(out, &probes);
-    if (probes.aging) {
+    report_probes(out, &probes);
+    if (probes.aging)
         ft_diagnosis_add_probe(out, FT_CHECK_OK, true, "iter bpf_map_elem", "%s", "");
-    } else {
+    else
         ft_diagnosis_add_probe(out, FT_CHECK_WARN, true, "iter bpf_map_elem",
                                "%s; a held transfer is judged only when its connection or "
                                "thread acts again",
                                error_text(probes.aging_error));
-        failed_groups++;
-    }
     bool have_network = ft_linux_network_attached(&probes);
     bool kprobes = probes.set->kind == FT_PROBES_KPROBE;
 
@@ -443,7 +453,7 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
         snprintf(out->advice, sizeof(out->advice),
                  "Filetrace needs a Linux 6.1 or newer kernel with BTF, and either BPF\n"
                  "trampolines or kprobes on the functions listed above.");
-    } else if (failed_groups) {
+    } else if (a_feature_is_lost(&out->caps)) {
         out->exit_code = FT_EXIT_PARTIAL;
         snprintf(out->result, sizeof(out->result), "Partial monitoring available");
         snprintf(out->advice, sizeof(out->advice),

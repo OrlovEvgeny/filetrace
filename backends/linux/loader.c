@@ -393,6 +393,14 @@ static int load_lookups(const struct ft_probe_set *set, const struct ft_backend_
     return err;
 }
 
+/* A test takes the mapping-report hook as absent on a kernel that has it, to exercise the fallback.
+ */
+static bool mmap_report_forced_off(void)
+{
+    const char *hook = getenv("FILETRACE_TEST_MMAP_REPORT");
+    return hook && strcmp(hook, "off") == 0;
+}
+
 static int load_set(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
                     const struct btf *vmlinux, struct ft_linux_probes *out)
 {
@@ -410,6 +418,11 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
         enabled[i] = probe_wanted(def, cfg);
         if (!enabled[i]) {
             out->status[i].state = FT_PROBE_NOT_NEEDED;
+            continue;
+        }
+        if (def->group == FT_PG_MAPPED && mmap_report_forced_off()) {
+            enabled[i] = false;
+            out->status[i] = (struct ft_probe_status){FT_PROBE_LOAD_FAILED, ENOENT};
             continue;
         }
         if (vmlinux && def->nargs) {

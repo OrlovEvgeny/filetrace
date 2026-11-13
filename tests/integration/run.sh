@@ -148,6 +148,17 @@ expect "doctor exit code" "$doctor" 0
 expect_match "doctor lists the iterator that judges quiet windows" \
     "$(grep 'iter bpf_map_elem' "$work/doctor.txt")" '\[OK\] iter bpf_map_elem$'
 
+# With the kernel's mapping report forced absent, the agent falls back to looking at a process when
+# it starts; the probe is a warning, but doctor stays ready, since destination names only drop to a
+# late look, a limit the agent handles itself. FILETRACE_TEST_MMAP_REPORT=off forces it here.
+mmap_doctor=$(FILETRACE_TEST_MMAP_REPORT=off "$bin/filetrace" doctor --probes "$probes" 2>&1)
+expect "mmap report off: doctor exit code" \
+    "$(FILETRACE_TEST_MMAP_REPORT=off "$bin/filetrace" doctor --probes "$probes" >/dev/null 2>&1; echo $?)" \
+    0
+expect_match "mmap report off: doctor stays ready" "$mmap_doctor" 'STATUS: READY'
+expect_match "mmap report off: the mapping probe is only a warning" "$mmap_doctor" \
+    '\[WARN\] [a-z]+ security_mmap_file: rejected by the kernel'
+
 start_agent || { echo "FAIL: the agent did not start"; exit 1; }
 
 expect "agent status exit code" "$(ft agent status >/dev/null; echo $?)" 0
@@ -1889,6 +1900,46 @@ TMPL
         "$(ssl_resolved_of sharp.ft.test)" ""
     stop_agent
     expect "OpenSSL server names agent exit code" "$?" 0
+    # The same server, now with the mapping report forced off. A library mapped by the time a
+    # process starts is still probed, so libc's lookup still names a connection; destination names
+    # drop to a late look, a limit the agent handles itself. But a private copy of libssl that only
+    # the client maps, loaded two seconds in, is reached by nothing else, unlike the system libssl
+    # the server holds open: with the report off it is never probed and names no connection, where
+    # with the report on the GnuTLS check above reads the name from a later run.
+    mmap_log="$work/mmap-agent.log"
+    FILETRACE_TEST_MMAP_REPORT=off "$bin/filetrace-agent" --socket "$sock" \
+        --flush-interval 100ms --log-level info --probes "$probes" 2>"$mmap_log" &
+    agent_pid=$!
+    i=0
+    while [ ! -S "$sock" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    expect_match "mmap report off: names fall back to a late look" \
+        "$(ft capabilities | grep '^Destination names')" \
+        'PARTIAL.*the kernel does not report the libraries processes map'
+    i=0
+    while [ $i -lt 40 ]; do
+        ssl_client 0 files.ft.test "$ssl_port" - -
+        settle
+        case "$(ssl_source_of files.ft.test)" in *lookup*) break ;; esac
+        i=$((i + 1))
+    done
+    expect_match "mmap report off: a library mapped at start still names a connection" \
+        "$(ssl_source_of files.ft.test)" 'lookup'
+    libssl=$(ls /usr/lib/*/libssl.so.3 /lib/*/libssl.so.3 /usr/lib64/libssl.so.3 2>/dev/null |
+        head -1)
+    if [ -n "$libssl" ]; then
+        mkdir -p "$work/ssl-off-late"
+        cp "$libssl" "$work/ssl-off-late/libssl.so.3"
+        for n in 1 2 3; do
+            ssl_client 2000 127.0.0.1 "$ssl_port" off-late.ft.test - "$work/ssl-off-late/libssl.so.3"
+            settle
+        done
+        expect "mmap report off: a private library loaded after start names no connection" \
+            "$(ssl_source_of off-late.ft.test)" ""
+        expect "mmap report off: nothing probes the private copy" \
+            "$(grep -c 'ssl-off-late' "$mmap_log")" 0
+    fi
+    stop_agent
+    expect "mmap report off: agent exit code" "$?" 0
     kill "$sserv_pid" 2>/dev/null
     wait "$sserv_pid" 2>/dev/null
 else
