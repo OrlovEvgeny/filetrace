@@ -231,6 +231,38 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
     bpf_program__set_autoload(check, ft_linux_returns_tested(cfg));
     bpf_map__set_autocreate(checks, ft_linux_returns_tested(cfg));
 
+    /* The send probes read a handshake's name from thread storage, so the names map and its
+     * probes exist only where TLS server names are wanted. */
+    bool tls = cfg->tls_names && cfg->mode >= FT_MODE_STANDARD;
+    static const char *const tls_programs[] = {
+        "ft_ssl_ctrl",
+        "ft_ssl_connect",
+        "ft_ssl_connect_return",
+        "ft_ssl_do_handshake",
+        "ft_ssl_do_handshake_return",
+        "ft_ssl_free",
+        "ft_gnutls_server_name_set",
+        "ft_gnutls_handshake",
+        "ft_gnutls_handshake_return",
+        "ft_gnutls_deinit",
+    };
+    struct bpf_map *names = bpf_object__find_map_by_name(obj, "tls_names");
+    if (!names) {
+        bpf_object__close(obj);
+        errno = EINVAL;
+        return nullptr;
+    }
+    for (size_t i = 0; i < FT_ARRAY_LEN(tls_programs); i++) {
+        struct bpf_program *prog = bpf_object__find_program_by_name(obj, tls_programs[i]);
+        if (!prog) {
+            bpf_object__close(obj);
+            errno = EINVAL;
+            return nullptr;
+        }
+        bpf_program__set_autoload(prog, tls);
+    }
+    bpf_map__set_autocreate(names, tls);
+
     uint32_t queue = round_up_pow2(cfg->queue_bytes, (uint32_t)sysconf(_SC_PAGESIZE));
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
     bpf_cfg->wakeup_bytes = queue / 4;
