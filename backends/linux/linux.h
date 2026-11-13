@@ -175,7 +175,8 @@ struct ft_linux_probe_kind {
     size_t capacity;
     struct ft_linux_uprobe probes[FT_LINUX_KIND_PROBES]; /* unused ones have no program */
     bool every_process;                                  /* the maps of every process are read */
-    bool place_cookie; /* the probes' cookie is the file's place among the kind's, plus one */
+    bool every_program; /* every dynamically linked program maps one, once its loader is done */
+    bool place_cookie;  /* the probes' cookie is the file's place among the kind's, plus one */
     bool (*runs)(const char *program);    /* the program file is of the kind; may be nullptr */
     bool (*maps_of)(const char *program); /* the maps of a process running it are read */
     /* A file mapped at path, whose base name is name, may be of the kind. */
@@ -199,8 +200,9 @@ size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind);
 void ft_linux_prober_used(struct ft_linux_prober *p, int kind, uint64_t cookie, uint64_t ts_ns);
 
 /*
- * A process started the program named so, by an exec or a fork at ts_ns: it is looked at by
- * the work after that, once. A process that ended is forgotten.
+ * A process started the program named so, by an exec or a fork at ts_ns: the work looks at it
+ * shortly after, and again while it may still load files of a kind. A process that ended is
+ * forgotten.
  */
 void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char *program,
                              bool forked, uint64_t ts_ns);
@@ -217,6 +219,9 @@ void ft_linux_prober_rescan(struct ft_linux_prober *p);
 
 /* Looks at the processes that started and at those of a pass, for a bounded time. */
 void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns);
+
+/* When the work is next due for a process that started, or 0 when none waits. */
+uint64_t ft_linux_prober_due(const struct ft_linux_prober *p);
 
 /*
  * Reads which of names the 64-bit ELF file open at fd defines among its dynamic symbols, and

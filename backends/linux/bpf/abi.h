@@ -239,7 +239,8 @@ struct ft_bpf_cfg {
     __u64 corr_window_ns;
     __u64 wakeup_bytes; /* consumer is woken once this much data is queued */
     __u8 file_corr;
-    __u8 pad[7];
+    __u8 exec_wakeup; /* a program starting wakes the consumer, which looks at it promptly */
+    __u8 pad[6];
 };
 
 #endif

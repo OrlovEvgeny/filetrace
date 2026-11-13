@@ -13,9 +13,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/sysmacros.h>
+#include <sys/timerfd.h>
 #include <unistd.h>
 
 #include "backends/linux/bpf/abi.h"
@@ -269,6 +271,8 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
     bpf_cfg->wakeup_bytes = queue / 4;
     bpf_cfg->file_corr = cfg->mode >= FT_MODE_STANDARD && enabled_file_probes(set, enabled);
+    bpf_cfg->exec_wakeup = (cfg->lookup_names || cfg->php_scripts || cfg->tls_names) &&
+                           cfg->mode >= FT_MODE_STANDARD && ft_sysinfo_host_pid_namespace();
     bpf_map__set_max_entries(events, queue);
     bpf_map__set_max_entries(agg_a, cfg->agg_entries);
     bpf_map__set_max_entries(agg_b, cfg->agg_entries);
@@ -601,6 +605,9 @@ struct ft_backend {
     uint64_t background_scan_ns; /* when the background map was last brought up to date */
     uint64_t aged_ns;            /* when the aging iterator last ran */
     struct ft_linux_prober *prober;
+    int timer_fd;      /* due when the prober next looks at a process that started */
+    uint64_t armed_ns; /* when it is set to expire, or 0 */
+    int wake_fd;       /* the ring and the timer, polled together */
     struct ft_linux_php *php;
     int lookup_kind; /* the prober's kind for C libraries, or -1 */
     size_t lookup_capacity;
@@ -611,6 +618,9 @@ struct ft_backend {
 
 /* A bundle replaced by an update is a file with another inode; this long it goes unnoticed. */
 #define BACKGROUND_RESCAN_NS (30 * FT_NS_PER_SEC)
+#define MAPS_FLUSH_NS (50 * FT_NS_PER_MS)
+/* The prober's timer wakes the loop at most once in this long. */
+#define TIMER_GAP_NS (2 * FT_NS_PER_MS)
 
 static void background_scan(struct ft_backend *b, uint64_t now_ns)
 {
@@ -1041,15 +1051,34 @@ static void age_windows(struct ft_backend *b)
     close(fd);
 }
 
-static void backend_flush(struct ft_backend *b)
+/*
+ * Sets the timer to the prober's next due look, ahead of the next flush. Setting it also clears
+ * an expiry it had, whichever wake brought the flush.
+ */
+static void arm_prober(struct ft_backend *b)
 {
-    uint64_t now_ns = ft_clock_mono_ns();
-    uint64_t queued = ring__avail_data_size(ring_buffer__ring(b->ring, 0));
+    if (b->timer_fd < 0)
+        return;
+    uint64_t due = ft_linux_prober_due(b->prober);
+    uint64_t now = ft_clock_mono_ns();
+    if (due && due < now + TIMER_GAP_NS)
+        due = now + TIMER_GAP_NS;
+    /* The same time again, not passed yet, needs no call; a passed one must be cleared. */
+    if (due == b->armed_ns && (!due || due > now))
+        return;
+    b->armed_ns = due;
+    struct itimerspec at = {
+        .it_value = {.tv_sec = (time_t)(due / FT_NS_PER_SEC),
+                     .tv_nsec = (long)(due % FT_NS_PER_SEC)},
+    };
+    timerfd_settime(b->timer_fd, TFD_TIMER_ABSTIME, &at, nullptr);
+}
+
+/* Reads the counters and the aggregates and keeps the maps up to date. */
+static void flush_maps(struct ft_backend *b, uint64_t now_ns)
+{
     uint64_t totals[FT_BPF_CNT_MAX];
 
-    if (queued > b->queue_peak_bytes)
-        b->queue_peak_bytes = queued;
-    ring_buffer__consume(b->ring);
     if (b->probes.aging && now_ns - b->aged_ns >= FT_NS_PER_SEC) {
         age_windows(b);
         b->aged_ns = now_ns;
@@ -1069,12 +1098,47 @@ static void backend_flush(struct ft_backend *b)
         ft_linux_prober_rescan(b->prober);
         b->background_scan_ns = now_ns;
     }
+}
+
+static void backend_flush(struct ft_backend *b)
+{
+    uint64_t now_ns = ft_clock_mono_ns();
+    uint64_t queued = ring__avail_data_size(ring_buffer__ring(b->ring, 0));
+
+    if (queued > b->queue_peak_bytes)
+        b->queue_peak_bytes = queued;
+    ring_buffer__consume(b->ring);
+    /* The wakes of processes that start come often; the maps need no more than a few a second. */
+    if (now_ns - b->last_flush_ns >= MAPS_FLUSH_NS)
+        flush_maps(b, now_ns);
     ft_linux_prober_work(b->prober, now_ns);
+    arm_prober(b);
 }
 
 static int backend_poll_fd(struct ft_backend *b)
 {
-    return ring_buffer__epoll_fd(b->ring);
+    return b->wake_fd >= 0 ? b->wake_fd : ring_buffer__epoll_fd(b->ring);
+}
+
+/* A set that wakes the loop for the ring and for the prober's timer; without it, the ring alone. */
+static void open_wake(struct ft_backend *b)
+{
+    if (!b->prober)
+        return;
+    b->timer_fd = timerfd_create(CLOCK_BOOTTIME, TFD_NONBLOCK | TFD_CLOEXEC);
+    b->wake_fd = epoll_create1(EPOLL_CLOEXEC);
+    struct epoll_event ring = {.events = EPOLLIN};
+    struct epoll_event timer = {.events = EPOLLIN};
+    if (b->timer_fd < 0 || b->wake_fd < 0 ||
+        epoll_ctl(b->wake_fd, EPOLL_CTL_ADD, ring_buffer__epoll_fd(b->ring), &ring) != 0 ||
+        epoll_ctl(b->wake_fd, EPOLL_CTL_ADD, b->timer_fd, &timer) != 0) {
+        if (b->timer_fd >= 0)
+            close(b->timer_fd);
+        if (b->wake_fd >= 0)
+            close(b->wake_fd);
+        b->timer_fd = -1;
+        b->wake_fd = -1;
+    }
 }
 
 static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
@@ -1105,6 +1169,10 @@ static void backend_close(struct ft_backend *b)
 {
     if (!b)
         return;
+    if (b->wake_fd >= 0)
+        close(b->wake_fd);
+    if (b->timer_fd >= 0)
+        close(b->timer_fd);
     ring_buffer__free(b->ring);
     ft_linux_prober_destroy(b->prober);
     ft_linux_php_close(b->php);
@@ -1165,6 +1233,8 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         return nullptr;
     }
     b->cfg = *cfg;
+    b->timer_fd = -1;
+    b->wake_fd = -1;
     if (b->cfg.drain_batch == 0)
         b->cfg.drain_batch = 512;
     b->sink = *sink;
@@ -1281,6 +1351,8 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         backend_close(b);
         return nullptr;
     }
+    open_wake(b);
+    arm_prober(b);
     return b;
 }
 
