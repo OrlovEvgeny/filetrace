@@ -1594,6 +1594,7 @@ struct pool_worker {
     char path[4096];
     size_t size;
     size_t reply;
+    size_t head; /* what goes before the file, when the reply is the file */
 };
 
 static void *pool_worker_main(void *arg)
@@ -1606,7 +1607,7 @@ static void *pool_worker_main(void *arg)
     char *out = calloc(1, w->reply);
     if (!out)
         die("malloc");
-    memcpy(out, contents, w->size < w->reply ? w->size : w->reply);
+    memcpy(out + w->head, contents, w->size < w->reply - w->head ? w->size : w->reply - w->head);
     send_all(w->sock, out, w->reply);
     free(out);
     free(contents);
@@ -1614,12 +1615,13 @@ static void *pool_worker_main(void *arg)
 }
 
 /*
- * poolreply <dir> <threads>: serves one kept-alive connection from a pool of threads in turn, each
- * hearing one request, reading a small file and answering with a reply far from its size, a
- * fifth of a second apart.
+ * poolreply <dir> <threads> [whole]: serves one kept-alive connection from a pool of threads in
+ * turn, each hearing one request, reading a small file and answering with a reply far from its
+ * size, a fifth of a second apart; with whole, the reply is the file after a head of 300 bytes.
  */
-static void scenario_pool_reply(const char *dir, size_t threads)
+static void scenario_pool_reply(const char *dir, size_t threads, bool whole)
 {
+    size_t head = whole ? 300 : 0;
     struct sockaddr_storage addr;
     socklen_t len = loopback(false, &addr);
     int listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -1635,7 +1637,7 @@ static void scenario_pool_reply(const char *dir, size_t threads)
             _exit(1);
         char *reply = malloc(65536);
         for (size_t i = 0; i < threads && reply; i++) {
-            size_t want = pool_shapes[i % 3].reply;
+            size_t want = whole ? pool_shapes[i % 3].size + head : pool_shapes[i % 3].reply;
             if (send(sock, "R\n", 2, 0) != 2 ||
                 recv(sock, reply, want, MSG_WAITALL) != (ssize_t)want)
                 _exit(1);
@@ -1647,8 +1649,9 @@ static void scenario_pool_reply(const char *dir, size_t threads)
     if (sock < 0)
         die("accept");
     for (size_t i = 0; i < threads; i++) {
-        struct pool_worker w = {
-            .sock = sock, .size = pool_shapes[i % 3].size, .reply = pool_shapes[i % 3].reply};
+        struct pool_worker w = {.sock = sock, .size = pool_shapes[i % 3].size};
+        w.head = head;
+        w.reply = whole ? w.size + head : pool_shapes[i % 3].reply;
         snprintf(w.path, sizeof(w.path), "%s/%zu-%s", dir, i, pool_shapes[i % 3].name);
         pthread_t thread;
         if (pthread_create(&thread, nullptr, pool_worker_main, &w) != 0)
@@ -1659,6 +1662,113 @@ static void scenario_pool_reply(const char *dir, size_t threads)
     close(sock);
     close(listener);
     report("poolreply", dir, threads, 0);
+}
+
+/* Keeps the process on one CPU, where a socket closed is the likeliest memory for the next. */
+static void one_cpu(void)
+{
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(0, &set);
+    if (sched_setaffinity(0, sizeof(set), &set) != 0)
+        die("sched_setaffinity");
+}
+
+static char *read_file(const char *path, size_t size)
+{
+    char *contents = malloc(size);
+    if (!contents)
+        die("malloc");
+    int file = open_file(path);
+    if (read(file, contents, size) != (ssize_t)size)
+        die("read");
+    close(file);
+    return contents;
+}
+
+struct close_other {
+    const char *path;
+    size_t size;
+    const struct sink *sink;
+    int sock;
+    bool again;
+    pthread_barrier_t step;
+};
+
+static void *close_other_main(void *arg)
+{
+    struct close_other *o = arg;
+    char *contents = read_file(o->path, o->size);
+    send_all(o->sock, contents, o->size);
+    free(contents);
+    pthread_barrier_wait(&o->step);
+    pthread_barrier_wait(&o->step);
+    if (o->again) {
+        contents = read_file(o->path, o->size);
+        int sock = connect_sink(o->sink);
+        send_all(sock, contents, o->size);
+        close(sock);
+        free(contents);
+    }
+    return nullptr;
+}
+
+/*
+ * closeother <path> <bytes> [again]: a worker thread uploads the file over a connection nobody
+ * answers and the main thread closes it; with again, the worker then uploads the file over a new
+ * connection.
+ */
+static void scenario_close_other(const char *path, size_t size, bool again)
+{
+    one_cpu();
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    make_file(path, size);
+    struct close_other o = {
+        .path = path, .size = size, .sink = &sink, .sock = connect_sink(&sink), .again = again};
+    if (pthread_barrier_init(&o.step, nullptr, 2) != 0)
+        die("pthread_barrier_init");
+    pthread_t worker;
+    if (pthread_create(&worker, nullptr, close_other_main, &o) != 0)
+        die("pthread_create");
+    pthread_barrier_wait(&o.step);
+    close(o.sock);
+    usleep(100 * 1000);
+    pthread_barrier_wait(&o.step);
+    pthread_join(worker, nullptr);
+    pthread_barrier_destroy(&o.step);
+    report("closeother", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * resetretry <path> <bytes>: uploads the file over a connection whose peer resets it unanswered,
+ * then at once over a new connection, likely made where the reset one was, whose peer answers.
+ */
+static void scenario_reset_retry(const char *path, size_t size)
+{
+    one_cpu();
+    struct sink reset = start_sink(SOCK_STREAM, false, SINK_RESET);
+    struct sink answer = start_sink(SOCK_STREAM, false, SINK_ANSWER);
+    make_file(path, size);
+    char line[6];
+    char *contents = read_file(path, size);
+    int sock = connect_sink(&reset);
+    send_all(sock, contents, size);
+    if (recv(sock, line, sizeof(line), 0) > 0)
+        die("the peer answered");
+    close(sock);
+    free(contents);
+
+    contents = read_file(path, size);
+    sock = connect_sink(&answer);
+    send_all(sock, contents, size);
+    if (recv(sock, line, sizeof(line), MSG_WAITALL) != (ssize_t)sizeof(line))
+        die("recv");
+    close(sock);
+    free(contents);
+    report("resetretry", path, size, answer.port);
+    stop_sink(&reset);
+    stop_sink(&answer);
 }
 
 struct side_send {
@@ -3608,8 +3718,13 @@ int main(int argc, char **argv)
         scenario_cut_reply(argv[2], arg_size(argv[3]), arg_size(argv[4]));
     else if (strcmp(name, "holdopen") == 0 && argc == 6)
         scenario_hold_open(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
-    else if (strcmp(name, "poolreply") == 0 && argc == 4)
-        scenario_pool_reply(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "poolreply") == 0 && (argc == 4 || argc == 5))
+        scenario_pool_reply(argv[2], arg_size(argv[3]), argc == 5 && strcmp(argv[4], "whole") == 0);
+    else if (strcmp(name, "closeother") == 0 && (argc == 4 || argc == 5))
+        scenario_close_other(argv[2], arg_size(argv[3]),
+                             argc == 5 && strcmp(argv[4], "again") == 0);
+    else if (strcmp(name, "resetretry") == 0 && argc == 4)
+        scenario_reset_retry(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "twosenders") == 0 && argc == 6)
         scenario_two_senders(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "latebody") == 0 && argc == 7)

@@ -728,6 +728,39 @@ settle
 expect "page whose rest the peer left untaken: template not reported" \
     "$(ft files --path "$data/page-stall.tpl" --format csv | rows)" 0
 
+# Pool threads that answer one kept-alive connection in turn with their whole files are each
+# reported, also once a thread made room among the socket's owners. A connection that another
+# thread closes ends the sender's window there, and the sender's next connection starts its own.
+# A retry made right after the peer reset the connection, which the kernel builds where the reset
+# one was, is not taken for it.
+mkdir -p "$data/pool-whole"
+"$workload" poolreply "$data/pool-whole" 10 whole >/dev/null
+"$workload" closeother "$data/close-other.json" 2000 >/dev/null
+"$workload" closeother "$data/close-again.json" 2000 again >/dev/null
+"$workload" resetretry "$data/reset-retry.json" 2000 >/dev/null
+sleep 2
+for i in 0 1 2 3 4 5 6 7 8 9; do
+    case $((i % 3)) in
+    0) name=layout.tpl size=5000 ;;
+    1) name=app.env size=1500 ;;
+    *) name=health.yml size=5000 ;;
+    esac
+    expect "pool thread $i answering with its file: bytes" \
+        "$(ft files --path "$data/pool-whole/$i-$name" --format csv | column transfer.bytes_sent)" \
+        "$size"
+done
+csv=$(ft transfers --path "$data/close-other.json" --format csv)
+expect "connection another thread closed: rows" "$(printf '%s\n' "$csv" | rows)" 1
+expect "connection another thread closed: bytes" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 2000
+csv=$(ft transfers --path "$data/close-again.json" --format csv)
+expect "connection another thread closed, then a new one: rows" "$(printf '%s\n' "$csv" | rows)" 2
+expect "connection another thread closed, then a new one: bytes of each" \
+    "$(printf '%s\n' "$csv" | column transfer.bytes_sent | sort -u)" 2000
+csv=$(ft transfers --path "$data/reset-retry.json" --format csv)
+expect "retry after a reset: rows" "$(printf '%s\n' "$csv" | rows)" 1
+expect "retry after a reset: bytes" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 2000
+
 # A thread that reads its file again leaves its first flights to their own connections: a hello
 # sent after each read is not the file, and a small file put to one connection after another,
 # each answered and kept open, is reported for each once they close.
