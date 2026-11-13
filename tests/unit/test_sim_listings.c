@@ -1,6 +1,9 @@
 #include "unit/test.h"
 
+#include "agent/telemetry.h"
 #include "cmd/cli.h"
+#include "exporters/exporters.h"
+#include "exporters/otlp.h"
 #include "filetrace/state.h"
 #include "sim/engine.h"
 
@@ -186,7 +189,102 @@ static void listings_without_names(void)
     free(named.text);
 }
 
+static void no_stats(void *agent, uint64_t now_ns, struct ft_row_stats *row)
+{
+    (void)agent;
+    (void)now_ns;
+    (void)row;
+}
+
+/* Adds the names of the rows' remote ends that the list does not hold yet. */
+static void add_names(const struct ft_rows *rows, char (*names)[FT_NAME_MAX], size_t *count,
+                      size_t capacity)
+{
+    for (size_t r = 0; r < rows->count; r++) {
+        const void *row = rows->data + rows->offsets[r];
+        struct ft_remote_names n;
+        if (rows->type == FT_MSG_ROW_CONNECTION)
+            ft_row_connection_names(row, &n);
+        else
+            ft_row_flow_names(row, &n);
+        for (uint32_t i = 0; i <= n.listed; i++) {
+            const char *name = i == 0 ? n.tls : n.resolved[i - 1];
+            size_t at = 0;
+            while (at < *count && strcmp(names[at], name) != 0)
+                at++;
+            if (name[0] && at == *count && *count < capacity)
+                ft_strlcpy(names[(*count)++], name, FT_NAME_MAX);
+        }
+    }
+}
+
+/* Neither the Prometheus page nor the OTLP metrics carry a name of a remote end. */
+static void metrics_carry_no_names(void)
+{
+    static char names[256][FT_NAME_MAX];
+    static const uint16_t types[] = {FT_MSG_ROW_CONNECTION, FT_MSG_ROW_FLOW};
+    static const enum ft_query_kind kinds[] = {FT_Q_CONNECTIONS, FT_Q_FLOWS};
+    constexpr uint64_t START_NS = 1000 * FT_NS_PER_SEC;
+    constexpr uint64_t FLUSH_NS = 250 * FT_NS_PER_MS;
+    struct ft_state_config cfg;
+    struct ft_msg_end end;
+    struct ft_error err;
+    struct ft_rows rows;
+    struct ft_query q;
+    size_t count = 0;
+
+    ft_state_config_defaults(&cfg);
+    cfg.lookup_process = sim_process;
+    cfg.read_process_text = sim_process_text;
+    struct ft_state *st = ft_state_create(&cfg);
+    struct ft_sim_scenario *scenario = ft_sim_scenario_create("edge", 0);
+    struct ft_sink sink = {.ctx = st, .emit = ingest};
+    running = ft_sim_engine_create(scenario, 1, START_NS, &sink);
+    ft_sim_engine_lose_nothing(running);
+    ft_sim_engine_names(running, true, true);
+    for (uint64_t t = START_NS + FLUSH_NS; t <= START_NS + 60 * FT_NS_PER_SEC; t += FLUSH_NS)
+        ft_sim_engine_run(running, t, 50 * FT_NS_PER_MS);
+    uint64_t now = ft_sim_engine_now(running);
+    for (size_t i = 0; i < FT_ARRAY_LEN(kinds); i++) {
+        ft_query_init(&q, kinds[i]);
+        ft_rows_init(&rows, types[i]);
+        CHECK(ft_state_query(st, &q, now, keep_row, &rows, &end, &err));
+        add_names(&rows, names, &count, FT_ARRAY_LEN(names));
+        ft_rows_free(&rows);
+    }
+    CHECK(count >= 8);
+
+    struct ft_telemetry_source src = {.state = st, .stats = no_stats, .host = "edge-01"};
+    struct ft_prometheus writer;
+    char *page = nullptr;
+    size_t page_size = 0;
+    FILE *mem = open_memstream(&page, &page_size);
+    ft_prometheus_begin(&writer, mem, nullptr, 0);
+    ft_telemetry_collect(&src, now, ft_prometheus_point, &writer);
+    fclose(mem);
+    CHECK(strstr(page, "filetrace_network_io_bytes_total{process_executable_name=\"rclone\"") !=
+          nullptr);
+
+    struct ft_otlp_metrics *m = ft_otlp_metrics_new(START_NS, now);
+    ft_telemetry_collect(&src, now, ft_otlp_metrics_point, m);
+    size_t request_size = 0;
+    uint8_t *request = ft_otlp_metrics_encode(m, nullptr, 0, &request_size);
+    CHECK(request != nullptr && request_size > 1000);
+
+    for (size_t i = 0; i < count; i++) {
+        CHECK(strstr(page, names[i]) == nullptr);
+        CHECK(!request || memmem(request, request_size, names[i], strlen(names[i])) == nullptr);
+    }
+    free(page);
+    free(request);
+    ft_sim_engine_destroy(running);
+    running = nullptr;
+    ft_sim_scenario_free(scenario);
+    ft_state_destroy(st);
+}
+
 void test_sim_listings(void)
 {
     listings_without_names();
+    metrics_carry_no_names();
 }
