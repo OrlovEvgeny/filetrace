@@ -18,6 +18,48 @@ static __always_inline __u64 sock_cookie(__u64 sk)
     return (__u64)BPF_CORE_READ((struct sock *)sk, __sk_common.skc_cookie.counter);
 }
 
+/* What a TCP socket had received when the thread's send on it began. */
+struct send_start {
+    __u64 sk;
+    __u64 received;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, int);
+    __type(value, struct send_start);
+} send_starts SEC(".maps");
+
+/* A send is seen as it returns, when an answer to it may already have come in. */
+static __always_inline bool sock_heard_at_send(__u64 sk)
+{
+    struct send_start *s = bpf_task_storage_get(&send_starts, bpf_get_current_task_btf(), 0, 0);
+    if (s && s->sk == sk)
+        return s->received != 0;
+    return sock_heard(sk);
+}
+
+static __always_inline void send_begins(struct socket *sock)
+{
+    struct sock *sk = sock->sk;
+    if (!cfg.file_corr || !sk || sk->sk_protocol != IPPROTO_TCP)
+        return;
+    struct send_start *s = bpf_task_storage_get(&send_starts, bpf_get_current_task_btf(), 0,
+                                                BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!s)
+        return;
+    s->sk = (__u64)sk;
+    s->received = BPF_CORE_READ((struct tcp_sock *)sk, bytes_received);
+}
+
+static __always_inline void send_ends(void)
+{
+    struct send_start *s = bpf_task_storage_get(&send_starts, bpf_get_current_task_btf(), 0, 0);
+    if (s)
+        s->sk = 0;
+}
+
 SEC("tp_btf/inet_sock_set_state")
 int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
 {
@@ -175,16 +217,34 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
     return 0;
 }
 
+SEC("fentry/inet_sendmsg")
+int BPF_PROG(ft_inet_send_begin, struct socket *sock, struct msghdr *msg, size_t size)
+{
+    send_begins(sock);
+    return 0;
+}
+
 SEC("fexit/inet_sendmsg")
 int BPF_PROG(ft_inet_sendmsg, struct socket *sock, struct msghdr *msg, size_t size, int ret)
 {
-    return account(sock, msg, ret, AF_INET, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES, size);
+    account(sock, msg, ret, AF_INET, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES, size);
+    send_ends();
+    return 0;
+}
+
+SEC("fentry/inet6_sendmsg")
+int BPF_PROG(ft_inet6_send_begin, struct socket *sock, struct msghdr *msg, size_t size)
+{
+    send_begins(sock);
+    return 0;
 }
 
 SEC("fexit/inet6_sendmsg")
 int BPF_PROG(ft_inet6_sendmsg, struct socket *sock, struct msghdr *msg, size_t size, int ret)
 {
-    return account(sock, msg, ret, AF_INET6, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES, size);
+    account(sock, msg, ret, AF_INET6, FT_BPF_TX, msg->msg_flags & MSG_SPLICE_PAGES, size);
+    send_ends();
+    return 0;
 }
 
 SEC("fexit/inet_recvmsg")
