@@ -518,6 +518,38 @@ static void set_script(struct ft_top_transfer *t, struct ft_top_pool *pool,
     t->script_name = base_name(t->script);
 }
 
+static const struct ft_remote_names *keep_names(struct ft_top_pool *pool,
+                                                const struct ft_remote_names *n)
+{
+    if (!ft_remote_name(n)[0])
+        return nullptr;
+    struct ft_remote_names *kept = ft_top_pool_alloc(pool, sizeof(*kept));
+    if (!kept)
+        return nullptr;
+    *kept = (struct ft_remote_names){
+        .tls = ft_top_pool_text(pool, n->tls, strlen(n->tls)),
+        .count = n->count,
+    };
+    for (uint32_t i = 0; i < n->listed; i++)
+        kept->resolved[kept->listed++] =
+            ft_top_pool_text(pool, n->resolved[i], strlen(n->resolved[i]));
+    return kept;
+}
+
+/* Overwrites the model's row buffer, which then holds the whole row. */
+static const struct ft_remote_names *take_names(struct ft_top_model *m, const struct ft_rows *rows,
+                                                size_t i, struct ft_top_pool *pool)
+{
+    struct ft_row_transfer *row = (struct ft_row_transfer *)(void *)m->row_buf;
+    struct ft_remote_names names;
+
+    if (!row->names.tls && !row->names.listed)
+        return nullptr;
+    ft_rows_get(rows, i, row, sizeof(*row));
+    ft_row_transfer_names(row, &names);
+    return keep_names(pool, &names);
+}
+
 /* Returns how many of the rows are transfers the model had not seen before. */
 static size_t take_transfers(struct ft_top_model *m, const struct ft_rows *rows,
                              struct ft_top_pool *pool, double decay)
@@ -590,6 +622,7 @@ static size_t take_transfers(struct ft_top_model *m, const struct ft_rows *rows,
         set_script(t, pool, p, text[2], len[2]);
         t->remote = row->remote;
         ft_endpoint_format(&row->remote, t->remote_text, sizeof(t->remote_text));
+        t->names = take_names(m, rows, i, pool);
         t->is_public = row->remote.family != 0 && !ft_addr_is_private(&row->remote);
         t->rate = to_u64(e->smoothed + 0.5);
         t->bytes = row->bytes;
@@ -633,6 +666,7 @@ static void finish_transfers(struct ft_top_model *m, uint64_t mono_ns, struct ft
         struct ft_top_transfer *t = &e->pub;
         const char *script = t->script;
         t->path = ft_top_pool_text(pool, t->path, strlen(t->path));
+        t->names = t->names ? keep_names(pool, t->names) : nullptr;
         set_script(t, pool, &m->processes[m->now][e->process].pub, script, strlen(script));
     }
 }
