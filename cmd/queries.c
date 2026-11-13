@@ -780,6 +780,8 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
         if (s->leaders_bytes) {
             ft_format_bytes(s->leaders_bytes, a, sizeof(a));
             fprintf(o, "%-18s%s\n", "File rankings:", a);
+        } else {
+            fprintf(o, "%-18s%s\n", "File rankings:", "off");
         }
         if (s->names.capacity) {
             usage_line(o, "Names:", &s->names);
