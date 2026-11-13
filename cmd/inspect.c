@@ -1109,34 +1109,35 @@ static void talkers_table(FILE *o, const struct talkers *t, size_t shown)
     ft_table_print(o, specs, n, shown, talker_cell, &table, ft_term_styled(o));
 }
 
-static int inspect_ip(struct inspect *in, const char *arg)
+/* What a report on remote ends covers, as the report names it. */
+struct remote_subject {
+    const char *kind; /* of the JSON document */
+    const char *key;  /* the JSON member that holds text */
+    const char *text;
+    const char *title; /* of the first section */
+};
+
+/* Who exchanged traffic with the remote ends the filter selects, and which files went to them. */
+static int inspect_remote(struct inspect *in, const struct ft_query *filter,
+                          const struct remote_subject *s)
 {
     struct ft_rows flows;
     struct ft_rows transfers = {0};
     struct talkers talkers = {0};
     struct ft_address_names behind;
-    struct ft_endpoint net;
-    struct ft_query q;
+    struct ft_query q = *filter;
     FILE *o = in->out.stream;
     uint64_t tx = 0;
     uint64_t rx = 0;
     uint64_t rate = 0;
-    uint8_t bits;
     char a[64];
     char b[64];
 
-    if (!ft_prefix_parse(arg, &net, &bits))
-        return ft_usage_error("inspect", "'%s' is not an IP address or CIDR network", arg);
-    uint8_t host_bits = (uint8_t)((net.family == 6 ? 128 : 32) - bits);
-
-    ft_query_init(&q, FT_Q_FLOWS);
-    q.remote = net;
-    q.remote_host_bits = host_bits;
+    q.kind = FT_Q_FLOWS;
     int code = fetch(in, &q, FT_MSG_ROW_FLOW, &flows);
     if (code == FT_EXIT_OK) {
-        ft_query_init(&q, FT_Q_TRANSFERS);
-        q.remote = net;
-        q.remote_host_bits = host_bits;
+        q = *filter;
+        q.kind = FT_Q_TRANSFERS;
         q.sort = FT_SORT_TIME;
         code = fetch(in, &q, FT_MSG_ROW_TRANSFER, &transfers);
     }
@@ -1153,8 +1154,8 @@ static int inspect_ip(struct inspect *in, const char *arg)
     talkers_names(&talkers, &behind);
 
     if (in->out.format == FT_FMT_JSON) {
-        fputs("{\"kind\":\"ip\",\"network\":", o);
-        ft_json_string(o, arg);
+        fprintf(o, "{\"kind\":\"%s\",\"%s\":", s->kind, s->key);
+        ft_json_string(o, s->text);
         fprintf(o,
                 ",\"totals\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
                 ",\"bytes_sent_per_second\":%" PRIu64 ",\"flows\":%zu,\"processes\":%zu,"
@@ -1185,12 +1186,12 @@ static int inspect_ip(struct inspect *in, const char *arg)
         fprintf(o,
                 "No traffic with %s has been observed since %s.\n"
                 "Nothing earlier is kept.\n",
-                arg, a);
+                s->text, a);
         goto out;
     }
 
-    section(o, bits == (net.family == 6 ? 128 : 32) ? "ADDRESS" : "NETWORK");
-    field(o, "Remote:", "%s", arg);
+    section(o, s->title);
+    field(o, "Remote:", "%s", s->text);
     names_field(o, &behind);
     ft_format_bytes(tx, a, sizeof(a));
     ft_format_rate(rate, b, sizeof(b));
@@ -1216,6 +1217,27 @@ out:
     ft_rows_free(&flows);
     ft_rows_free(&transfers);
     return code;
+}
+
+static int inspect_ip(struct inspect *in, const char *arg)
+{
+    struct ft_query filter;
+    struct ft_endpoint net;
+    uint8_t bits;
+
+    if (!ft_prefix_parse(arg, &net, &bits))
+        return ft_usage_error("inspect", "'%s' is not an IP address or CIDR network", arg);
+    uint8_t width = net.family == 6 ? 128 : 32;
+
+    struct remote_subject subject = {.kind = "ip",
+                                     .key = "network",
+                                     .text = arg,
+                                     .title = bits == width ? "ADDRESS" : "NETWORK"};
+
+    ft_query_init(&filter, FT_Q_FLOWS);
+    filter.remote = net;
+    filter.remote_host_bits = (uint8_t)(width - bits);
+    return inspect_remote(in, &filter, &subject);
 }
 
 int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a)
