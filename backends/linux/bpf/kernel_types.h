@@ -107,6 +107,7 @@ struct pid_namespace {
 
 struct mnt_namespace {
     struct ns_common ns;
+    u64 seq;
 };
 
 struct net {

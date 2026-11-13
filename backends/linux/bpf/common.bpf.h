@@ -388,13 +388,21 @@ static __always_inline __u64 wake_flags(void)
     return queued >= cfg.wakeup_bytes ? BPF_RB_FORCE_WAKEUP : BPF_RB_NO_WAKEUP;
 }
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, FT_BPF_QUIET_MAX);
+    __type(key, struct ft_bpf_program_key);
+    __type(value, __u8);
+} quiet_programs SEC(".maps");
+
 /* An exec wakes the consumer once per gap; the look it arms reads the execs in between. */
 #define EXEC_WAKE_GAP_NS 2000000ULL
 static __u64 exec_woken_ns;
 
-static __always_inline __u64 exec_wake_flags(void)
+static __always_inline __u64 exec_wake_flags(const struct ft_bpf_ev_exec *e)
 {
-    if (!cfg.exec_wakeup)
+    struct ft_bpf_program_key key = {.ino = e->exe_ino, .size = e->exe_size, .mntns = e->mntns_seq};
+    if (!cfg.exec_wakeup || bpf_map_lookup_elem(&quiet_programs, &key))
         return wake_flags();
     __u64 now = bpf_ktime_get_boot_ns();
     if (now - exec_woken_ns < EXEC_WAKE_GAP_NS)
@@ -1805,6 +1813,9 @@ static __always_inline void fill_exec(struct ft_bpf_ev_exec *e, struct task_stru
     struct inode *inode = BPF_CORE_READ(bprm, file, f_inode);
     e->exe_ino = BPF_CORE_READ(inode, i_ino);
     e->exe_size = (__u64)BPF_CORE_READ(inode, i_size);
+    struct mnt_namespace *mnt_ns = BPF_CORE_READ(task, nsproxy, mnt_ns);
+    e->mntns_seq = bpf_core_field_exists(mnt_ns->seq) ? BPF_CORE_READ(mnt_ns, seq)
+                                                      : BPF_CORE_READ(mnt_ns, ns.inum);
     e->cwd_len = 0;
     e->cwd_depth = 0;
     e->cwd_flags = 0;
@@ -1833,7 +1844,7 @@ int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct li
             return 0;
         }
         fill_exec(plain, task, bprm);
-        bpf_ringbuf_submit(plain, exec_wake_flags());
+        bpf_ringbuf_submit(plain, exec_wake_flags(plain));
         return 0;
     }
 
@@ -1868,7 +1879,7 @@ int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct li
 
     __u64 size = sizeof(*e) + cwd + args;
     if (size <= sizeof(*e) + sizeof(s->tail) &&
-        bpf_ringbuf_output(&events, e, size, exec_wake_flags()) != 0)
+        bpf_ringbuf_output(&events, e, size, exec_wake_flags(e)) != 0)
         count(FT_BPF_CNT_RING_FULL);
     s->busy = 0;
     return 0;
