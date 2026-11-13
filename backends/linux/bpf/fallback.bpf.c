@@ -251,7 +251,7 @@ static __always_inline void tcp_settle_tx(void *map, struct sock *sk, struct soc
     if (spliced && (__u32)bpf_get_current_pid_tgid() == t->claim_tid)
         sendfile_read(thread_now(false), t->claim_file.ino, t->claim_file.dev);
     if (t->carrying)
-        carry_wire((__u64)sk, delta - spliced, t->tx_tid, spliced ? 0 : t->tx_asked, seq);
+        carry_wire((__u64)sk, delta - spliced, t->tx_tid, spliced ? 0 : t->tx_asked);
     claim_settle(map, sk, t, delta, now);
 }
 
@@ -261,8 +261,7 @@ static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
     if (!t)
         return false;
     tcp_settle_tx(map, (struct sock *)sk, t, now);
-    /* A send that returned leaves its claim; one still waiting for room is being taken. */
-    return t->claim_kind && FT_READ((struct sock *)sk, sk_write_pending) > 0;
+    return FT_READ((struct sock *)sk, sk_write_pending) > 0;
 }
 
 /* Returns whether the receiver has consumed anything since the socket was last looked at. */

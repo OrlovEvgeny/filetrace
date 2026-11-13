@@ -196,7 +196,7 @@ struct carry {
     __u64 read_seen; /* of the file, as the thread counted it, whoever charged it before */
     __u8 held;       /* a strict file read whole, judged by what went at any size */
     __u64 asked;     /* the most one send of the window's thread was given */
-    __u32 seq_seen;  /* the socket's write_seq when the window was last seen active */
+    __u32 seq_seen;  /* the socket's write_seq at the iterator's last visit */
     __u32 judged;    /* the iterator reported it, and removes it on its next visit */
 };
 
@@ -624,8 +624,8 @@ static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
 }
 
 /*
- * Brings what the socket took up to date before its window is judged. Returns whether a send has
- * claimed bytes of a file that the socket has not taken yet.
+ * Brings what the socket took up to date before its window is judged. Returns whether a send on
+ * the socket is waiting for room.
  */
 static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now);
 
@@ -842,13 +842,13 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
         return 0;
     }
     __u64 now = bpf_ktime_get_boot_ns();
+    __u32 seq = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
+    bool moved = seq != c->seq_seen;
+    c->seq_seen = seq;
     if (!c->last_ns || now - c->last_ns <= cfg.corr_window_ns)
         return 0;
-    /* A send the socket is still taking keeps the window open. */
-    bool claimed = carry_settle(map, sk, now);
-    __u32 seq = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
-    if (claimed || seq != c->seq_seen) {
-        c->seq_seen = seq;
+    /* A send the socket took since the last visit, or one waiting for room, keeps it open. */
+    if (carry_settle(map, sk, now) || moved) {
         c->last_ns = now;
         return 0;
     }
@@ -984,21 +984,19 @@ static __always_inline void carry_send_counted(__u64 sk, __u64 bytes, __u64 aske
     if (asked > c->asked)
         c->asked = asked;
     c->last_ns = now;
-    c->seq_seen = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
 }
 
 /*
  * Counts what the socket took into its windows, as the socket is settled: tid sent it in sends
- * given up to asked, and write_seq stands at seq.
+ * given up to asked.
  */
-static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid, __u64 asked, __u32 seq)
+static __always_inline void carry_wire(__u64 sk, __u64 bytes, __u32 tid, __u64 asked)
 {
     struct carry *c = carry_get(sk);
     if (c && c->tid == tid) {
         __sync_fetch_and_add(&c->wire, bytes);
         if (asked > c->asked)
             c->asked = asked;
-        c->seq_seen = seq;
     }
     struct dial *d = bpf_map_lookup_elem(&dials, &sk);
     if (d) {

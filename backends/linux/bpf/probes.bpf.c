@@ -7,7 +7,7 @@
 /* Sends are counted as they return, so a window is always up to date. */
 static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
 {
-    return false;
+    return BPF_CORE_READ((struct sock *)sk, sk_write_pending) > 0;
 }
 
 SEC("tp_btf/inet_sock_set_state")
