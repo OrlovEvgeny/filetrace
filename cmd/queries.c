@@ -84,7 +84,7 @@ static int unknown_argument(const char *command, const struct ft_args *a)
 }
 
 struct group {
-    char *label;
+    char *label; /* "" for flows without one, as those nobody named */
     uint64_t tx;
     uint64_t rx;
     uint64_t count;
@@ -252,7 +252,7 @@ static const char *group_cell(void *ctx, size_t r, size_t c, char *buf, size_t s
         snprintf(buf, size, "%zu", r + 1);
         return buf;
     case GC_LABEL:
-        return g->label;
+        return g->label[0] ? g->label : "-";
     case GC_NAME:
         ft_kept_names_format(&g->names, buf, size);
         return buf[0] ? buf : "-";
@@ -315,8 +315,10 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
     }
 
     if (out->format == FT_FMT_QUIET) {
-        for (size_t i = 0; i < g->count; i++)
-            fprintf(o, "%s\n", g->items[i].label);
+        for (size_t i = 0; i < g->count; i++) {
+            if (g->items[i].label[0])
+                fprintf(o, "%s\n", g->items[i].label);
+        }
         return;
     }
 
@@ -360,9 +362,13 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
         const struct group *it = &g->items[i];
         if (array)
             fputs(i ? ",\n " : "\n ", o);
-        fprintf(o, "{\"%s\":", layout->label_key);
-        ft_json_string(o, it->label);
-        fprintf(o, ",\"bytes_sent\":%" PRIu64, it->tx);
+        fputc('{', o);
+        if (it->label[0]) {
+            fprintf(o, "\"%s\":", layout->label_key);
+            ft_json_string(o, it->label);
+            fputc(',', o);
+        }
+        fprintf(o, "\"bytes_sent\":%" PRIu64, it->tx);
         if (layout->received)
             fprintf(o, ",\"bytes_received\":%" PRIu64, it->rx);
         if (layout->count_key)
@@ -463,9 +469,7 @@ static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
             break;
         }
         case GROUP_NAME:
-            ft_remote_name_format(&names, label, sizeof(label));
-            if (!label[0])
-                snprintf(label, sizeof(label), "-");
+            ft_strlcpy(label, ft_remote_name(&names), sizeof(label));
             break;
         case GROUP_PORT:
             snprintf(label, sizeof(label), "%u", flow.remote.port);
