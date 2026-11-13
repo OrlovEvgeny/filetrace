@@ -87,6 +87,9 @@ says "top takes half an address for no name either" 2 \
 says "flows refuses an unknown grouping" 2 \
     "filetrace: invalid value 'asn' for --group-by (expected process, remote, name, port or protocol)" \
     flows --group-by asn
+says "inspect names its subjects" 2 \
+    "filetrace: cannot inspect 'host' (expected file, process, socket, flow, ip or name)" \
+    inspect host example.org
 says "top asks for leaders with --window" 2 \
     "filetrace: --window does not apply to the transfers mode (use --leaders)" top --window 5m
 says "top asks for processes with --tree" 2 \

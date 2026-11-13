@@ -401,6 +401,8 @@ static int inspect_file(struct inspect *in, const char *path)
 
 struct destination {
     struct ft_endpoint addr;
+    uint32_t pid; /* of the last flow merged into it */
+    size_t processes;
     uint64_t tx;
     uint64_t rx;
     uint64_t rate;
@@ -412,6 +414,23 @@ struct destinations {
     size_t count;
     bool resolve;
 };
+
+static int by_addr_then_pid(const void *a, const void *b)
+{
+    const struct destination *x = a;
+    const struct destination *y = b;
+    int by_addr = compare_addr(&x->addr, &y->addr);
+    return by_addr ? by_addr : compare_u32(&x->pid, &y->pid);
+}
+
+static int by_bytes(const void *a, const void *b)
+{
+    const struct destination *x = a;
+    const struct destination *y = b;
+    if (x->tx != y->tx)
+        return x->tx < y->tx ? 1 : -1;
+    return compare_addr(&x->addr, &y->addr);
+}
 
 static int by_rate_then_bytes(const void *a, const void *b)
 {
@@ -431,8 +450,9 @@ static void destinations_free(struct destinations *d)
     free(d->items);
 }
 
-/* On failure, d holds what destinations_free needs. */
-static bool group_destinations(const struct ft_rows *flows, struct destinations *d)
+/* Merges the flows by address, then sorts them in order; on failure, d holds what to free. */
+static bool group_destinations(const struct ft_rows *flows, struct destinations *d,
+                               int (*order)(const void *, const void *))
 {
     d->items = calloc(flows->count + 1, sizeof(*d->items));
     d->count = 0;
@@ -446,6 +466,8 @@ static bool group_destinations(const struct ft_rows *flows, struct destinations 
         ft_row_flow_names(&flow, &names);
         d->items[i].addr = flow.remote;
         d->items[i].addr.port = 0;
+        d->items[i].pid = flow.pid;
+        d->items[i].processes = 1;
         d->items[i].tx = flow.tx_bytes;
         d->items[i].rx = flow.rx_bytes;
         d->items[i].rate = flow.tx_rate;
@@ -454,8 +476,7 @@ static bool group_destinations(const struct ft_rows *flows, struct destinations 
             return false;
         }
     }
-    /* The address is the first member, so the address order applies to the items. */
-    qsort(d->items, flows->count, sizeof(*d->items), compare_addr);
+    qsort(d->items, flows->count, sizeof(*d->items), by_addr_then_pid);
     for (size_t i = 0; i < flows->count; i++) {
         struct destination *last = d->count ? &d->items[d->count - 1] : nullptr;
         if (last && compare_addr(&last->addr, &d->items[i].addr) == 0) {
@@ -463,17 +484,32 @@ static bool group_destinations(const struct ft_rows *flows, struct destinations 
             last->rx += d->items[i].rx;
             last->rate += d->items[i].rate;
             ft_kept_names_join(&last->names, &d->items[i].names);
+            if (last->pid != d->items[i].pid)
+                last->processes++;
+            last->pid = d->items[i].pid;
         } else {
             d->items[d->count++] = d->items[i];
         }
     }
-    qsort(d->items, d->count, sizeof(*d->items), by_rate_then_bytes);
+    qsort(d->items, d->count, sizeof(*d->items), order);
     return true;
+}
+
+static const char *destination_address(const struct destinations *d, const struct destination *it,
+                                       char *buf, size_t size)
+{
+    const char *host = d->resolve ? ft_resolver_name(&it->addr) : nullptr;
+    if (host)
+        snprintf(buf, size, "%s", host);
+    else
+        ft_addr_format(&it->addr, buf, size);
+    return buf;
 }
 
 enum destination_field : uint8_t {
     DEST_ADDRESS,
     DEST_NAME,
+    DEST_PROCESSES,
     DEST_RATE,
     DEST_TX,
     DEST_RX,
@@ -496,14 +532,11 @@ static const char *destination_cell(void *ctx, size_t r, size_t c, char *buf, si
     const struct destination *it = &d->items[r];
 
     switch (t->fields[c]) {
-    case DEST_ADDRESS: {
-        const char *host = d->resolve ? ft_resolver_name(&it->addr) : nullptr;
-        if (host)
-            snprintf(buf, size, "%s", host);
-        else
-            ft_addr_format(&it->addr, buf, size);
+    case DEST_ADDRESS:
+        return destination_address(d, it, buf, size);
+    case DEST_PROCESSES:
+        snprintf(buf, size, "%zu", it->processes);
         break;
-    }
     case DEST_NAME:
         ft_kept_names_format(&it->names, buf, size);
         return buf[0] ? buf : "-";
@@ -560,19 +593,50 @@ static void destinations_table(const struct inspect *in, const struct destinatio
     more_note(o, d->count, shown, "destination", "destinations");
 }
 
-static void destinations_json(FILE *o, const struct destinations *d)
+static void addresses_table(const struct inspect *in, const struct destinations *d)
+{
+    static const struct destination_column columns[] = {
+        {{"ADDRESS", false}, DEST_ADDRESS},
+        {{"PROCESSES", true}, DEST_PROCESSES},
+        {{"SENT", true}, DEST_TX},
+        {{"RECEIVED", true}, DEST_RX},
+    };
+    FILE *o = in->out.stream;
+    size_t shown = in->limit < d->count ? in->limit : d->count;
+
+    fputc('\n', o);
+    section(o, "ADDRESSES");
+    destinations_print(o, d, shown, columns, FT_ARRAY_LEN(columns));
+    more_note(o, d->count, shown, "address", "addresses");
+}
+
+static void addresses_field(FILE *o, const struct destinations *d)
+{
+    char text[LISTED][64];
+    const char *addresses[LISTED];
+
+    for (size_t i = 0; i < d->count && i < LISTED; i++)
+        addresses[i] = destination_address(d, &d->items[i], text[i], sizeof(text[i]));
+    list_field(o, "Addresses:", addresses, d->count, 0);
+}
+
+static void destinations_json(FILE *o, const char *key, const struct destinations *d,
+                              bool with_processes)
 {
     char addr[64];
 
-    fputs("\"destinations\":[", o);
+    fprintf(o, "\"%s\":[", key);
     for (size_t i = 0; i < d->count; i++) {
         const struct destination *it = &d->items[i];
         struct ft_address_names behind;
         ft_addr_format(&it->addr, addr, sizeof(addr));
+        fprintf(o, "%s{\"remote_ip\":\"%s\"", i ? "," : "", addr);
+        if (with_processes)
+            fprintf(o, ",\"processes\":%zu", it->processes);
         fprintf(o,
-                "%s{\"remote_ip\":\"%s\",\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
+                ",\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
                 ",\"bytes_sent_per_second\":%" PRIu64,
-                i ? "," : "", addr, it->tx, it->rx, it->rate);
+                it->tx, it->rx, it->rate);
         ft_kept_names_behind(&it->names, &behind);
         ft_json_names(o, "remote_names", &behind);
         fputc('}', o);
@@ -611,7 +675,7 @@ static int inspect_process(struct inspect *in, const char *arg)
         code = fetch(in, &q, FT_MSG_ROW_TRANSFER, &transfers);
     }
     dest.resolve = in->resolve;
-    if (code == FT_EXIT_OK && !group_destinations(&flows, &dest))
+    if (code == FT_EXIT_OK && !group_destinations(&flows, &dest, by_rate_then_bytes))
         code = FT_EXIT_ERROR;
     if (code != FT_EXIT_OK)
         goto out;
@@ -645,7 +709,7 @@ static int inspect_process(struct inspect *in, const char *arg)
         if (have_open_files)
             fprintf(o, ",\"open_files\":%" PRIu32, open_files);
         fputc(',', o);
-        destinations_json(o, &dest);
+        destinations_json(o, "destinations", &dest, false);
         fputs(",\"transfers\":", o);
         ft_view_json_array(FT_VIEW_FILES, &transfers, o);
         json_tail(in, o);
@@ -1115,6 +1179,7 @@ struct remote_subject {
     const char *key;  /* the JSON member that holds text */
     const char *text;
     const char *title; /* of the first section */
+    bool by_name;      /* the ends are those a name matches, so their addresses are listed */
 };
 
 /* Who exchanged traffic with the remote ends the filter selects, and which files went to them. */
@@ -1124,6 +1189,7 @@ static int inspect_remote(struct inspect *in, const struct ft_query *filter,
     struct ft_rows flows;
     struct ft_rows transfers = {0};
     struct talkers talkers = {0};
+    struct destinations addresses = {.resolve = in->resolve};
     struct ft_address_names behind;
     struct ft_query q = *filter;
     FILE *o = in->out.stream;
@@ -1142,6 +1208,8 @@ static int inspect_remote(struct inspect *in, const struct ft_query *filter,
         code = fetch(in, &q, FT_MSG_ROW_TRANSFER, &transfers);
     }
     if (code == FT_EXIT_OK && !group_talkers(&flows, &talkers))
+        code = FT_EXIT_ERROR;
+    if (code == FT_EXIT_OK && s->by_name && !group_destinations(&flows, &addresses, by_bytes))
         code = FT_EXIT_ERROR;
     if (code != FT_EXIT_OK)
         goto out;
@@ -1162,7 +1230,12 @@ static int inspect_remote(struct inspect *in, const struct ft_query *filter,
                 "\"transfers\":%zu",
                 tx, rx, rate, flows.count, talkers.count, transfers.count);
         ft_json_names(o, "names", &behind);
-        fputs("},\"processes\":[", o);
+        fputc('}', o);
+        if (s->by_name) {
+            fputc(',', o);
+            destinations_json(o, "addresses", &addresses, true);
+        }
+        fputs(",\"processes\":[", o);
         for (size_t i = 0; i < talkers.count; i++) {
             const struct talker *t = &talkers.items[i];
             struct ft_address_names used;
@@ -1191,8 +1264,13 @@ static int inspect_remote(struct inspect *in, const struct ft_query *filter,
     }
 
     section(o, s->title);
-    field(o, "Remote:", "%s", s->text);
-    names_field(o, &behind);
+    if (s->by_name) {
+        field(o, "Name:", "%s", s->text);
+        addresses_field(o, &addresses);
+    } else {
+        field(o, "Remote:", "%s", s->text);
+        names_field(o, &behind);
+    }
     ft_format_bytes(tx, a, sizeof(a));
     ft_format_rate(rate, b, sizeof(b));
     field(o, "Sent to it:", "%s (%s)", a, b);
@@ -1201,6 +1279,8 @@ static int inspect_remote(struct inspect *in, const struct ft_query *filter,
     field(o, "Flows:", "%zu", flows.count);
     field(o, "Processes:", "%zu", talkers.count);
     field(o, "File transfers:", "%zu", transfers.count);
+    if (s->by_name)
+        addresses_table(in, &addresses);
 
     size_t shown = in->limit < talkers.count ? in->limit : talkers.count;
     fputc('\n', o);
@@ -1214,6 +1294,7 @@ static int inspect_remote(struct inspect *in, const struct ft_query *filter,
 
 out:
     talkers_free(&talkers);
+    destinations_free(&addresses);
     ft_rows_free(&flows);
     ft_rows_free(&transfers);
     return code;
@@ -1223,10 +1304,17 @@ static int inspect_ip(struct inspect *in, const char *arg)
 {
     struct ft_query filter;
     struct ft_endpoint net;
+    char name[FT_NAME_MAX];
     uint8_t bits;
 
-    if (!ft_prefix_parse(arg, &net, &bits))
+    if (!ft_prefix_parse(arg, &net, &bits)) {
+        if (ft_name_pattern(arg, name))
+            return ft_usage_error("inspect",
+                                  "'%s' is not an IP address or CIDR network (use 'inspect name "
+                                  "%s' for a name)",
+                                  arg, arg);
         return ft_usage_error("inspect", "'%s' is not an IP address or CIDR network", arg);
+    }
     uint8_t width = net.family == 6 ? 128 : 32;
 
     struct remote_subject subject = {.kind = "ip",
@@ -1240,6 +1328,29 @@ static int inspect_ip(struct inspect *in, const char *arg)
     return inspect_remote(in, &filter, &subject);
 }
 
+static int inspect_name(struct inspect *in, const char *arg)
+{
+    struct ft_query filter;
+    struct ft_endpoint net;
+    uint8_t bits;
+
+    ft_query_init(&filter, FT_Q_FLOWS);
+    if (!ft_name_pattern(arg, filter.remote_name)) {
+        if (ft_prefix_parse(arg, &net, &bits))
+            return ft_usage_error(
+                "inspect", "'%s' is not a name (use 'inspect ip %s' for an address)", arg, arg);
+        return ft_usage_error("inspect",
+                              "'%s' is not a host name or a pattern such as '*.example.com'", arg);
+    }
+
+    struct remote_subject subject = {.kind = "name",
+                                     .key = "name",
+                                     .text = filter.remote_name,
+                                     .title = "NAME",
+                                     .by_name = true};
+    return inspect_remote(in, &filter, &subject);
+}
+
 int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a)
 {
     static const struct {
@@ -1247,7 +1358,7 @@ int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a)
         int (*run)(struct inspect *in, const char *arg);
     } kinds[] = {
         {"file", inspect_file}, {"process", inspect_process}, {"socket", inspect_socket},
-        {"flow", inspect_flow}, {"ip", inspect_ip},
+        {"flow", inspect_flow}, {"ip", inspect_ip},           {"name", inspect_name},
     };
     struct inspect in = {.limit = 20};
     int (*run)(struct inspect *in, const char *arg) = nullptr;
@@ -1302,11 +1413,12 @@ int ft_cmd_inspect(const struct ft_cli *cli, struct ft_args *a)
             run = kinds[i].run;
     }
     if (!kind)
-        return ft_usage_error("inspect", "missing what to inspect (file, process, socket, flow "
-                                         "or ip)");
+        return ft_usage_error("inspect", "missing what to inspect (file, process, socket, flow, "
+                                         "ip or name)");
     if (!run)
         return ft_usage_error(
-            "inspect", "cannot inspect '%s' (expected file, process, socket, flow or ip)", kind);
+            "inspect", "cannot inspect '%s' (expected file, process, socket, flow, ip or name)",
+            kind);
     if (!subject)
         return ft_usage_error("inspect", "missing the %s to inspect", kind);
 
