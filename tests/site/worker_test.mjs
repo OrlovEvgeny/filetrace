@@ -10,12 +10,12 @@ const worker = (await import(`data:text/javascript;base64,${source.toString("bas
 
 const SITE = "https://filetrace.eorlov.org";
 
-function object(key, data, contentType) {
+function object(key, data, contentType, uploaded = new Date(Date.UTC(2026, 10, 11))) {
   return {
     key,
     size: data.length,
     httpEtag: `"etag-${key}"`,
-    uploaded: new Date(Date.UTC(2026, 10, 11)),
+    uploaded,
     writeHttpMetadata(headers) {
       headers.set("content-type", contentType);
     },
@@ -26,9 +26,17 @@ function object(key, data, contentType) {
 // The parts of the R2 binding the Worker uses, with R2's handling of Range and
 // If-None-Match.
 function bucket(entries, { undefinedBody = false } = {}) {
-  const objects = new Map(entries.map(([key, text, type]) => [key, object(key, Buffer.from(text), type)]));
+  const objects = new Map(
+    entries.map(([key, text, type, uploaded]) => [key, object(key, Buffer.from(text), type, uploaded)]),
+  );
   return {
     keys: [],
+    puts: [],
+    async put(key, bytes, options) {
+      const type = options.httpMetadata.contentType;
+      this.puts.push({ key, text: Buffer.from(bytes).toString(), type });
+      objects.set(key, object(key, Buffer.from(bytes), type, new Date()));
+    },
     async head(key) {
       this.keys.push(key);
       const o = objects.get(key);
@@ -75,7 +83,10 @@ function mintlify(answer) {
 
 async function call(path, init = {}, entries = [], options = {}) {
   const env = { SITE: bucket(entries, options) };
-  const response = await worker.fetch(new Request(`${SITE}${path}`, init), env);
+  const background = [];
+  const ctx = { waitUntil: (promise) => background.push(promise) };
+  const response = await worker.fetch(new Request(`${SITE}${path}`, init), env, ctx);
+  await Promise.all(background);
   return { response, env };
 }
 
@@ -220,4 +231,68 @@ test("lists of pages name the public host, HTML is left as it is", async () => {
       assert.equal(response.headers.get("etag"), null, path);
     }
   }
+});
+
+const HOUR_MS = 60 * 60 * 1000;
+const LLMS = "- [x](https://filetrace.mintlify.site/x.md)";
+
+function llmsCopy(ageMs) {
+  return ["llms.txt", "the copy", "text/plain; charset=utf-8", new Date(Date.now() - ageMs)];
+}
+
+test("a generated file is served from its copy while the copy is fresh", async () => {
+  const calls = mintlify(() => assert.fail("the docs were asked"));
+  const { response, env } = await call("/llms.txt", {}, [llmsCopy(HOUR_MS)]);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(response.headers.get("cache-control"), "public, max-age=300");
+  assert.equal(await response.text(), "the copy");
+  assert.equal(calls.length, 0);
+  assert.equal(env.SITE.puts.length, 0);
+
+  const head = await call("/llms.txt", { method: "HEAD" }, [llmsCopy(HOUR_MS)]);
+  assert.equal(head.response.headers.get("content-length"), String("the copy".length));
+  assert.equal(await head.response.text(), "");
+});
+
+test("a stale or missing copy of a generated file is replaced from the docs", async () => {
+  mintlify(() => new Response(LLMS, { headers: { "content-type": "text/plain; charset=utf-8" } }));
+  for (const entries of [[llmsCopy(7 * HOUR_MS)], []]) {
+    const { response, env } = await call("/llms.txt", {}, entries);
+    const text = "- [x](https://filetrace.eorlov.org/x.md)";
+    assert.equal(await response.text(), text);
+    assert.deepEqual(env.SITE.puts, [{ key: "llms.txt", text, type: "text/plain; charset=utf-8" }]);
+  }
+});
+
+test("an answer that is not the generated file is not kept as its copy", async () => {
+  const answers = [
+    new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } }),
+    new Response("<html>", { headers: { "content-type": "text/html" } }),
+  ];
+  for (const answer of answers) {
+    mintlify(() => answer);
+    const { response, env } = await call("/robots.txt");
+    assert.equal(response.status, answer.status);
+    assert.equal(env.SITE.puts.length, 0);
+  }
+  mintlify(() => new Response(null, { headers: { "content-type": "text/plain" } }));
+  const { env } = await call("/robots.txt", { method: "HEAD" });
+  assert.equal(env.SITE.puts.length, 0);
+});
+
+test("the site's own files come from the bucket and nowhere else", async () => {
+  const calls = mintlify(() => assert.fail("the docs were asked"));
+  const files = [
+    ["ai.txt", "User-Agent: *\n", "text/plain; charset=utf-8"],
+    [".well-known/security.txt", "Contact: x\n", "text/plain; charset=utf-8"],
+  ];
+  for (const [key, text] of files) {
+    const { response } = await call(`/${key}`, {}, files);
+    assert.equal(response.status, 200, key);
+    assert.equal(await response.text(), text, key);
+  }
+  const { response } = await call("/humans.txt");
+  assert.equal(response.status, 404);
+  assert.equal(calls.length, 0);
 });
