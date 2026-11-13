@@ -34,6 +34,8 @@ struct watcher {
     struct ft_grpc_call *call;
     struct ft_query *query; /* an events query that selects the transfers asked for */
     uint64_t missed;        /* events it was not sent because it read too slowly */
+    /* Matched here, against the looked-up names too, which a record does not carry. */
+    char remote_name[FT_NAME_MAX];
 };
 
 struct ft_api {
@@ -206,6 +208,9 @@ static struct ft_query *query_for(const Filter *f, enum ft_query_kind kind, cons
         *why = "port is not a port number.";
     else if (f->remote[0] && !ft_prefix_parse(f->remote, &q->remote, &bits))
         *why = "remote is neither an IP address nor a CIDR network.";
+    else if (f->remote_name[0] && !ft_name_pattern(f->remote_name, q->remote_name))
+        *why =
+            "remote_name is neither a host name nor a pattern of one; an address goes in remote.";
     else if (f->method > FILETRACE__V1__METHOD__METHOD_READ_WRITE)
         *why = "method is not a known transfer method.";
     else if (f->confidence > FILETRACE__V1__CONFIDENCE__CONFIDENCE_EXACT)
@@ -359,15 +364,36 @@ static void watch_transfers(struct ft_api *a, struct ft_grpc_call *call,
         return;
     }
     q->event_types = 1u << FT_REC_FILE_TRANSFER;
-    a->watchers[a->watcher_count++] = (struct watcher){.call = call, .query = q};
+    struct watcher *w = &a->watchers[a->watcher_count++];
+    *w = (struct watcher){.call = call, .query = q};
+    ft_strlcpy(w->remote_name, q->remote_name, sizeof(w->remote_name));
+    q->remote_name[0] = '\0';
     ft_grpc_start(call);
 }
 
-static bool wanted(const struct watcher *w, const struct ft_row_event *row)
+/* A remote end matches by any name it has; one without a name matches no pattern. */
+static bool name_matches(const char *pattern, const struct ft_row_event *row,
+                         const struct ft_remote_names *names)
+{
+    const char *name = ft_row_event_name(row);
+
+    if (name[0] && ft_name_matches(pattern, name))
+        return true;
+    for (uint32_t i = 0; i < names->listed; i++) {
+        if (ft_name_matches(pattern, names->resolved[i]))
+            return true;
+    }
+    return false;
+}
+
+static bool wanted(const struct watcher *w, const struct ft_row_event *row,
+                   const struct ft_remote_names *names)
 {
     const struct ft_query *q = w->query;
 
     if (!ft_state_record_matches(q, 0, UINT64_MAX, row))
+        return false;
+    if (w->remote_name[0] && !name_matches(w->remote_name, row, names))
         return false;
     if (q->method != FT_METHOD_ANY && q->method != row->method)
         return false;
@@ -397,7 +423,7 @@ void ft_api_record(struct ft_api *a, const struct ft_row_event *row)
     for (size_t i = 0; i < a->watcher_count; i++) {
         struct watcher *w = &a->watchers[i];
 
-        if (!wanted(w, row))
+        if (!wanted(w, row, &names))
             continue;
         if (!described) {
             described = true;

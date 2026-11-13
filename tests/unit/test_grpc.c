@@ -539,6 +539,76 @@ static void lists_the_names_of_each_connection(void)
     api_close(&a);
 }
 
+/* The sockets of the transfers a filter lists, lowest first, such as "41,43"; the error if any. */
+static const char *listed_by(struct api *a, const char *remote, const char *remote_name)
+{
+    static char out[160];
+    TransferFilter filter = FILETRACE__V1__TRANSFER_FILTER__INIT;
+    struct answer r = {0};
+
+    filter.remote = (char *)(uintptr_t)remote;
+    filter.remote_name = (char *)(uintptr_t)remote_name;
+    ListResponse *l = list(a, &filter, &r);
+    out[0] = '\0';
+    if (!l)
+        snprintf(out, sizeof(out), "%d: %s", (int)r.status, r.message);
+    for (uint64_t sock = BY_LOOKUP; l && sock <= NAMELESS; sock++) {
+        if (on_socket(l, sock))
+            snprintf(out + strlen(out), sizeof(out) - strlen(out), "%s%llu", out[0] ? "," : "",
+                     (unsigned long long)sock);
+    }
+    if (l)
+        filetrace__v1__list_transfers_response__free_unpacked(l, nullptr);
+    answer_free(&r);
+    return out;
+}
+
+static void filters_by_any_name_of_the_remote_end(void)
+{
+    static const char refused[] = "3: remote_name is neither a host name nor a pattern of one; "
+                                  "an address goes in remote.";
+    struct api a;
+    struct answer r = {0};
+
+    api_open(&a, true);
+    CHECK_STR(listed_by(&a, "", ""), "41,42,43,44");
+    CHECK_STR(listed_by(&a, "", "files.example.com"), "42");
+    CHECK_STR(listed_by(&a, "", "FILES.Example.COM."), "42");
+    /* A looked-up name that is not the one shown, and the proxy a TLS name went through. */
+    CHECK_STR(listed_by(&a, "", "static.example.com"), "41");
+    CHECK_STR(listed_by(&a, "", "proxy.*"), "42");
+    CHECK_STR(listed_by(&a, "", "*.example.com"), "41,42,43");
+    CHECK_STR(listed_by(&a, "", "*"), "41,42,43");
+    CHECK_STR(listed_by(&a, "", "none.example.com"), "");
+    CHECK_STR(listed_by(&a, "203.0.113.0/24", "*.example.com"), "41");
+    CHECK_STR(listed_by(&a, "198.51.100.7", "*"), "");
+    CHECK_STR(listed_by(&a, "", "bad name"), refused);
+    CHECK_STR(listed_by(&a, "", "203.0.113.25"), refused);
+    CHECK_STR(listed_by(&a, "files.example.com", ""),
+              "3: remote is neither an IP address nor a CIDR network.");
+
+    /* A watcher's filter sees the names a record leaves out. */
+    TransferFilter filter = FILETRACE__V1__TRANSFER_FILTER__INIT;
+    filter.remote_name = "Static.*";
+    watch(&a, &filter, &r);
+    file_sent(&a, NAMELESS);
+    file_sent(&a, BY_TLS);
+    file_sent(&a, BY_LOOKUP);
+    api_run(&a, &r, 1);
+    CHECK_U64(r.event_count, 1);
+    const Connection *c = event_connection(&r, 0);
+    CHECK(c && c->socket_id == BY_LOOKUP);
+    answer_free(&r);
+
+    filter.remote_name = "bad name";
+    watch(&a, &filter, &r);
+    api_run(&a, &r, 1);
+    CHECK(r.done);
+    CHECK_U64(r.status, FT_GRPC_INVALID_ARGUMENT);
+    answer_free(&r);
+    api_close(&a);
+}
+
 /* What two runs see apart: times and rates, read off a clock that moves between them. */
 static void forget_times(ListResponse *l)
 {
@@ -623,5 +693,6 @@ void test_grpc(void)
     addresses();
     calls_reach_the_service_and_come_back();
     lists_the_names_of_each_connection();
+    filters_by_any_name_of_the_remote_end();
     answers_without_names_as_before();
 }
