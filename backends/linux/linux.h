@@ -114,16 +114,62 @@ size_t ft_linux_background_count(int map_fd, uint64_t *refused);
 size_t ft_linux_background_names(int names_fd, int suffixes_fd,
                                  const struct ft_backend_config *cfg);
 
+/*
+ * Files that processes run or have mapped, probed with uprobes once per file, by kind: PHP
+ * binaries, C libraries. A file is found through /proc and attached through a descriptor.
+ */
+struct ft_linux_prober;
+struct bpf_program;
+
+#define FT_LINUX_KIND_PROBES 2
+
+/* A program attached to a function of each file of a kind. */
+struct ft_linux_uprobe {
+    struct bpf_program *prog;
+    const char *func;
+    bool retprobe;
+};
+
+struct ft_linux_probe_kind {
+    const char *one;  /* a file of the kind, as messages name it: "the PHP binary" */
+    const char *many; /* "PHP binaries" */
+    size_t capacity;
+    struct ft_linux_uprobe probes[FT_LINUX_KIND_PROBES]; /* unused ones have no program */
+    bool (*runs)(const char *program);    /* the program file is of the kind; may be nullptr */
+    bool (*maps_of)(const char *program); /* the maps of a process running it are read */
+    bool (*mapped)(const char *file);     /* a mapped file of this base name may be of the kind */
+    /* The cookie of the probes, from the ELF file open at fd; 0 when it is not of the kind. */
+    uint64_t (*cookie)(int fd);
+    /* Reports a file probed, by the name the process pid knows it by. */
+    void (*probed)(const char *name, uint32_t pid, uint64_t cookie);
+};
+
+struct ft_linux_prober *ft_linux_prober_create(void);
+void ft_linux_prober_destroy(struct ft_linux_prober *p);
+
+/* Returns the kind's index, or -1. */
+int ft_linux_prober_add(struct ft_linux_prober *p, const struct ft_linux_probe_kind *kind);
+size_t ft_linux_prober_count(const struct ft_linux_prober *p, int kind);
+
+/* Whether a process running the program named so is looked at. */
+bool ft_linux_prober_wants(const struct ft_linux_prober *p, const char *program);
+
+/* Probes the files that running processes execute or have mapped. */
+void ft_linux_prober_scan(struct ft_linux_prober *p);
+void ft_linux_prober_attach_pid(struct ft_linux_prober *p, uint32_t pid);
+
+/*
+ * Reads which of names the 64-bit ELF file open at fd defines among its dynamic symbols, and
+ * its machine; false when it has no dynamic symbols to read.
+ */
+bool ft_linux_elf_exports(int fd, const char *const *names, size_t count, bool *found,
+                          uint16_t *machine);
+
 /* PHP binaries probed for the script each request runs. */
 struct ft_linux_php;
 
-struct ft_linux_php *ft_linux_php_open(struct bpf_object *obj);
+struct ft_linux_php *ft_linux_php_open(struct bpf_object *obj, struct ft_linux_prober *prober);
 void ft_linux_php_close(struct ft_linux_php *php);
-
-/* Probes the PHP binaries that running processes execute or have mapped, once per inode. */
-void ft_linux_php_scan(struct ft_linux_php *php);
-void ft_linux_php_attach_pid(struct ft_linux_php *php, uint32_t pid);
-size_t ft_linux_php_binaries(const struct ft_linux_php *php);
 
 /* Remembers the path the probes reported for a script id; nullptr for an unknown id. */
 void ft_linux_php_script_seen(struct ft_linux_php *php, uint32_t id, uint32_t tgid, uint64_t hash,
