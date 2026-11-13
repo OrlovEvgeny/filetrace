@@ -353,6 +353,50 @@ static void leaders_narrow(void)
     fixture_free(&f);
 }
 
+/* An agent with its rankings off says so, with no figures, times or side lists in their place. */
+static void leaders_off(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+    f.ui.mode = FT_TOP_LEADERS;
+    ft_rows_clear(&f.ranking);
+    ft_rows_clear(&f.directories);
+    ft_rows_clear(&f.destinations);
+    f.summary = (struct ft_row_leader_summary){.flags = FT_LEADERS_OFF};
+    struct ft_top_leaders_sample ls = {
+        .window = FT_WINDOW_1H,
+        .key = FT_LEADER_FILE,
+        .by = FT_TOP_SORT_BYTES,
+        .summary = &f.summary,
+        .ranking = &f.ranking,
+        .directories = &f.directories,
+        .destinations = &f.destinations,
+    };
+    CHECK(ft_top_model_leaders(f.m, &ls));
+    CHECK_U64(ft_top_row_count(f.m, FT_TOP_LEADERS), 0);
+
+    struct leaders_frame l = leaders_frame(174, 44);
+    struct ft_canvas *c = canvas(174, 44);
+    draw_leaders(&f, c, &l);
+    CHECK_U64(find_text(c, l.rows.y,
+                        "The agent keeps no rankings: its configuration sets [limits] "
+                        "file_rankings = 0."),
+              1);
+    CHECK(find_text(c, l.cards.y + 1, "SENT · 1h") > 0);
+    CHECK_U64(ft_canvas_at(c, 2, l.cards.y + 2)->rune, UNTOUCHED);
+    for (int y = l.side.y; y < l.side.y + l.side.h; y++)
+        CHECK_U64(count_runes(c, l.side.x, y, l.side.w, UNTOUCHED), (uint64_t)l.side.w);
+    ft_canvas_destroy(c);
+
+    c = canvas(174, 1);
+    struct ft_top_draw d = drawing(&f, c);
+    ft_top_draw_leaders_bar(&d, (struct ft_rect){0, 0, 174, 1}, 0);
+    CHECK(find_text(c, 0, "bytes") > 0);
+    CHECK(find_text(c, 0, "-") < 0);
+    ft_canvas_destroy(c);
+    fixture_free(&f);
+}
+
 /* Selects the first row of the mode that is of the kind. */
 static bool select_kind(struct fixture *f, enum ft_top_mode mode, enum ft_top_row_kind kind)
 {
@@ -555,6 +599,7 @@ void test_top_panels(void)
 {
     leaders_wide();
     leaders_narrow();
+    leaders_off();
     inspect();
     panel();
     help();

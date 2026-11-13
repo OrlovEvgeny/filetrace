@@ -389,6 +389,11 @@ static int first_sample(struct ft_top_source *src, struct ft_top_model *m,
                         "restart filetrace-agent\n");
         return FT_EXIT_UNSUPPORTED;
     }
+    if (opt->mode == FT_TOP_LEADERS && (frame->leader_summary.flags & FT_LEADERS_OFF)) {
+        fprintf(stderr, "filetrace: the agent keeps no rankings; its configuration sets "
+                        "[limits] file_rankings = 0\n");
+        return FT_EXIT_UNSUPPORTED;
+    }
     if (!feed(m, opt, frame)) {
         fprintf(stderr, "filetrace: out of memory\n");
         return FT_EXIT_ERROR;
