@@ -1051,8 +1051,9 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
     c->seq_seen = seq;
     if (!c->last_ns)
         return 0;
-    /* A window whose socket is gone, or whose address another socket took, ends now. */
-    bool gone = c->cookie && c->cookie != sock_cookie(sk);
+    /* A window whose socket closed, or whose address another socket took, ends now. */
+    bool gone = c->cookie && (c->cookie != sock_cookie(sk) ||
+                              BPF_CORE_READ((struct sock *)sk, __sk_common.skc_state) == TCP_CLOSE);
     if (!gone && now - c->last_ns <= cfg.corr_window_ns)
         return 0;
     enum carry_end end = CARRY_AGED;
