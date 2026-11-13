@@ -4498,6 +4498,18 @@ static void scenario_wait_send(const char *go, const char *name, const char *pat
     send_to(&addr, path);
 }
 
+/* sleepsend <ms> <name> <file>: after that many milliseconds, looks the name up and sends the file.
+ */
+static void scenario_sleep_send(size_t ms, const char *name, const char *path)
+{
+    struct sockaddr_storage addr;
+    struct timespec pause = {.tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000};
+    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {
+    }
+    lookup(name, AF_UNSPEC, 0, &addr);
+    send_to(&addr, path);
+}
+
 /* lookupwait <name> <file> <go>: looks the name up, then sends the file once go exists. */
 static void scenario_lookup_wait(const char *name, const char *path, const char *go)
 {
@@ -4746,6 +4758,8 @@ int main(int argc, char **argv)
         scenario_partial_send(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "partialsendfile") == 0 && argc == 4)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "sleepsend") == 0 && argc == 5)
+        scenario_sleep_send(arg_size(argv[2]), argv[3], argv[4]);
     else if (strcmp(name, "lookupsend") == 0 && (argc == 5 || argc == 6))
         scenario_lookup_send(argv[2], argv[3], argv[4], argc == 6 ? argv[5] : nullptr);
     else if (strcmp(name, "lookupmany") == 0 && argc == 5)
