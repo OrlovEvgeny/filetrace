@@ -896,6 +896,37 @@ static int talker_by_bytes(const void *a, const void *b)
     return talker_by_pid(a, b);
 }
 
+static bool group_talkers(const struct ft_rows *flows, struct talkers *t)
+{
+    size_t n = flows->count;
+
+    t->items = calloc(n + 1, sizeof(*t->items));
+    t->count = 0;
+    if (!t->items)
+        return false;
+
+    for (size_t i = 0; i < n; i++) {
+        struct ft_row_flow flow;
+        ft_rows_get(flows, i, &flow, sizeof(flow));
+        t->items[i] = (struct talker){
+            .pid = flow.pid, .tx = flow.tx_bytes, .rx = flow.rx_bytes, .rate = flow.tx_rate};
+        ft_strlcpy(t->items[i].comm, flow.comm, sizeof(t->items[i].comm));
+    }
+    qsort(t->items, n, sizeof(*t->items), talker_by_pid);
+    for (size_t i = 0; i < n; i++) {
+        struct talker *last = t->count ? &t->items[t->count - 1] : nullptr;
+        if (last && last->pid == t->items[i].pid) {
+            last->tx += t->items[i].tx;
+            last->rx += t->items[i].rx;
+            last->rate += t->items[i].rate;
+        } else {
+            t->items[t->count++] = t->items[i];
+        }
+    }
+    qsort(t->items, t->count, sizeof(*t->items), talker_by_bytes);
+    return true;
+}
+
 static const char *talker_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
 {
     const struct talkers *t = ctx;
@@ -953,36 +984,16 @@ static int inspect_ip(struct inspect *in, const char *arg)
         q.sort = FT_SORT_TIME;
         code = fetch(in, &q, FT_MSG_ROW_TRANSFER, &transfers);
     }
-    if (code == FT_EXIT_OK) {
-        talkers.items = calloc(flows.count + 1, sizeof(*talkers.items));
-        if (!talkers.items)
-            code = FT_EXIT_ERROR;
-    }
+    if (code == FT_EXIT_OK && !group_talkers(&flows, &talkers))
+        code = FT_EXIT_ERROR;
     if (code != FT_EXIT_OK)
         goto out;
 
-    for (size_t i = 0; i < flows.count; i++) {
-        struct ft_row_flow flow;
-        ft_rows_get(&flows, i, &flow, sizeof(flow));
-        talkers.items[i] = (struct talker){
-            .pid = flow.pid, .tx = flow.tx_bytes, .rx = flow.rx_bytes, .rate = flow.tx_rate};
-        ft_strlcpy(talkers.items[i].comm, flow.comm, sizeof(talkers.items[i].comm));
-        tx += flow.tx_bytes;
-        rx += flow.rx_bytes;
-        rate += flow.tx_rate;
+    for (size_t i = 0; i < talkers.count; i++) {
+        tx += talkers.items[i].tx;
+        rx += talkers.items[i].rx;
+        rate += talkers.items[i].rate;
     }
-    qsort(talkers.items, flows.count, sizeof(*talkers.items), talker_by_pid);
-    for (size_t i = 0; i < flows.count; i++) {
-        struct talker *last = talkers.count ? &talkers.items[talkers.count - 1] : nullptr;
-        if (last && last->pid == talkers.items[i].pid) {
-            last->tx += talkers.items[i].tx;
-            last->rx += talkers.items[i].rx;
-            last->rate += talkers.items[i].rate;
-        } else {
-            talkers.items[talkers.count++] = talkers.items[i];
-        }
-    }
-    qsort(talkers.items, talkers.count, sizeof(*talkers.items), talker_by_bytes);
 
     if (in->out.format == FT_FMT_JSON) {
         fputs("{\"kind\":\"ip\",\"network\":", o);
