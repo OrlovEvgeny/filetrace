@@ -268,6 +268,32 @@ void ft_view_json_object(enum ft_view_id view, const struct ft_rows *rows, size_
 
 void ft_transfer_id_format(const struct ft_row_transfer *row, char *buf, size_t size);
 
+/* Names of remote ends copied out of their rows, so that they outlive them, in a list. */
+struct ft_kept_names {
+    struct ft_kept_name *first;
+    struct ft_kept_name *last;
+};
+
+/* Keeps the names, if any, with the bytes sent to the remote end; false when out of memory. */
+bool ft_kept_names_add(struct ft_kept_names *list, const struct ft_remote_names *n, uint64_t bytes);
+
+/* Moves the names of from to the end of into. */
+void ft_kept_names_join(struct ft_kept_names *into, struct ft_kept_names *from);
+
+/* Adds every entry of the list to a, which then points into the list. */
+void ft_kept_names_gather(const struct ft_kept_names *list, struct ft_address_names *a);
+
+/* The names in the list, sorted: the one that carried the most bytes first. */
+void ft_kept_names_behind(const struct ft_kept_names *list, struct ft_address_names *out);
+
+/* What a NAME column shows of the names in the list; "" for none. */
+void ft_kept_names_format(const struct ft_kept_names *list, char *buf, size_t size);
+
+void ft_kept_names_free(struct ft_kept_names *list);
+
+/* Writes ,"key":[...] with the names, sorted as they are; nothing when there is none. */
+void ft_json_names(FILE *o, const char *key, const struct ft_address_names *a);
+
 int ft_cmd_watch(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_top(const struct ft_cli *cli, struct ft_args *a);
 int ft_cmd_files(const struct ft_cli *cli, struct ft_args *a);

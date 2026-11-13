@@ -246,6 +246,7 @@ add_library(ft_cli STATIC
     cmd/diagnostics.c
     cmd/events.c
     cmd/inspect.c
+    cmd/names.c
     cmd/queries.c
     cmd/resolve.c
     cmd/service.c

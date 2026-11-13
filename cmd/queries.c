@@ -88,6 +88,7 @@ struct group {
     uint64_t tx;
     uint64_t rx;
     uint64_t count;
+    struct ft_kept_names names; /* of the remote ends of its flows */
     uint8_t confidence;
 };
 
@@ -105,10 +106,11 @@ struct group_layout {
     bool received;
     bool confidence;
     bool rank;
+    bool names; /* the names behind each group's remote ends */
 };
 
 static bool groups_add(struct groups *g, const char *label, uint64_t tx, uint64_t rx,
-                       uint8_t confidence)
+                       uint8_t confidence, const struct ft_remote_names *names)
 {
     if (g->count == g->capacity) {
         size_t cap = g->capacity ? g->capacity * 2 : 64;
@@ -121,8 +123,15 @@ static bool groups_add(struct groups *g, const char *label, uint64_t tx, uint64_
     char *copy = strdup(label);
     if (!copy)
         return false;
-    g->items[g->count++] = (struct group){copy, tx, rx, 1, confidence};
-    return true;
+    struct group *it = &g->items[g->count++];
+    *it = (struct group){.label = copy, .tx = tx, .rx = rx, .count = 1, .confidence = confidence};
+    return !names || ft_kept_names_add(&it->names, names, tx);
+}
+
+static void group_free(struct group *g)
+{
+    free(g->label);
+    ft_kept_names_free(&g->names);
 }
 
 static int group_by_label(const void *a, const void *b)
@@ -165,6 +174,7 @@ static void groups_merge_and_rank(struct groups *g, bool by_received, uint32_t l
             /* A group is only as certain as its least certain member. */
             if (cur->confidence < last->confidence)
                 last->confidence = cur->confidence;
+            ft_kept_names_join(&last->names, &cur->names);
             free(cur->label);
         } else {
             g->items[++out] = *cur;
@@ -174,7 +184,7 @@ static void groups_merge_and_rank(struct groups *g, bool by_received, uint32_t l
     qsort(g->items, g->count, sizeof(*g->items), by_received ? group_by_rx : group_by_tx);
     if (limit && limit < g->count) {
         for (size_t i = limit; i < g->count; i++)
-            free(g->items[i].label);
+            group_free(&g->items[i]);
         g->count = limit;
     }
 }
@@ -182,19 +192,50 @@ static void groups_merge_and_rank(struct groups *g, bool by_received, uint32_t l
 static void groups_free(struct groups *g)
 {
     for (size_t i = 0; i < g->count; i++)
-        free(g->items[i].label);
+        group_free(&g->items[i]);
     free(g->items);
+}
+
+static bool any_group_named(const struct groups *g)
+{
+    for (size_t i = 0; i < g->count; i++) {
+        if (g->items[i].names.first)
+            return true;
+    }
+    return false;
+}
+
+/* Every name behind the group, most bytes first, joined by sep. */
+static void group_names_text(const struct group *g, const char *sep, char *buf, size_t size)
+{
+    struct ft_address_names behind;
+    size_t used = 0;
+
+    ft_kept_names_behind(&g->names, &behind);
+    buf[0] = '\0';
+    for (size_t i = 0; i < behind.count && used < size; i++)
+        used +=
+            (size_t)snprintf(buf + used, size - used, "%s%s", i ? sep : "", behind.names[i].name);
+}
+
+static void group_names_json(FILE *o, const struct group *g)
+{
+    struct ft_address_names behind;
+
+    ft_kept_names_behind(&g->names, &behind);
+    ft_json_names(o, "remote_names", &behind);
 }
 
 struct group_table {
     const struct groups *groups;
     const struct group_layout *layout;
-    uint8_t kinds[6];
+    uint8_t kinds[7];
 };
 
 enum : uint8_t {
     GC_RANK,
     GC_LABEL,
+    GC_NAME,
     GC_TX,
     GC_RX,
     GC_COUNT,
@@ -212,6 +253,9 @@ static const char *group_cell(void *ctx, size_t r, size_t c, char *buf, size_t s
         return buf;
     case GC_LABEL:
         return g->label;
+    case GC_NAME:
+        ft_kept_names_format(&g->names, buf, size);
+        return buf[0] ? buf : "-";
     case GC_TX:
         ft_format_bytes(g->tx, buf, size);
         return buf;
@@ -238,7 +282,7 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
     FILE *o = out->stream;
 
     if (out->format == FT_FMT_TABLE) {
-        struct ft_column_spec specs[6];
+        struct ft_column_spec specs[7];
         struct group_table table = {.groups = g, .layout = layout};
         size_t n = 0;
 
@@ -248,6 +292,10 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
         }
         table.kinds[n] = GC_LABEL;
         specs[n++] = (struct ft_column_spec){layout->label_title, false};
+        if (layout->names && any_group_named(g)) {
+            table.kinds[n] = GC_NAME;
+            specs[n++] = (struct ft_column_spec){"NAME", false};
+        }
         table.kinds[n] = GC_TX;
         specs[n++] = (struct ft_column_spec){"SENT", true};
         if (layout->received) {
@@ -273,6 +321,8 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
     }
 
     if (out->format == FT_FMT_CSV) {
+        char names[FT_ADDRESS_NAMES * FT_NAME_MAX];
+
         fprintf(o, "%s,bytes_sent", layout->label_key);
         if (layout->received)
             fputs(",bytes_received", o);
@@ -280,6 +330,8 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
             fprintf(o, ",%s", layout->count_key);
         if (layout->confidence)
             fputs(",confidence", o);
+        if (layout->names)
+            fputs(",remote_names", o);
         fputc('\n', o);
         for (size_t i = 0; i < g->count; i++) {
             const struct group *it = &g->items[i];
@@ -291,6 +343,11 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
                 fprintf(o, ",%" PRIu64, it->count);
             if (layout->confidence)
                 fprintf(o, ",%s", ft_confidence_name((enum ft_confidence)it->confidence));
+            if (layout->names) {
+                group_names_text(it, ";", names, sizeof(names));
+                fputc(',', o);
+                ft_csv_field(o, names);
+            }
             fputc('\n', o);
         }
         return;
@@ -313,6 +370,8 @@ static void groups_render(const struct groups *g, const struct group_layout *lay
         if (layout->confidence)
             fprintf(o, ",\"confidence\":\"%s\"",
                     ft_confidence_name((enum ft_confidence)it->confidence));
+        if (layout->names)
+            group_names_json(o, it);
         fputc('}', o);
         if (!array)
             fputc('\n', o);
@@ -331,11 +390,11 @@ enum flow_grouping : uint8_t {
 };
 
 static const struct group_layout flow_layouts[] = {
-    [GROUP_PROCESS] = {"PROCESS", "process", "FLOWS", "flows", true, false, false},
-    [GROUP_REMOTE] = {"REMOTE", "remote_ip", "FLOWS", "flows", true, false, false},
-    [GROUP_PORT] = {"REMOTE PORT", "remote_port", "FLOWS", "flows", true, false, false},
-    [GROUP_PROTOCOL] = {"PROTO", "protocol", "FLOWS", "flows", true, false, false},
-    [GROUP_FILE] = {"FILE", "file", "TRANSFERS", "transfers", false, true, false},
+    [GROUP_PROCESS] = {"PROCESS", "process", "FLOWS", "flows", true, false, false, false},
+    [GROUP_REMOTE] = {"REMOTE", "remote_ip", "FLOWS", "flows", true, false, false, true},
+    [GROUP_PORT] = {"REMOTE PORT", "remote_port", "FLOWS", "flows", true, false, false, false},
+    [GROUP_PROTOCOL] = {"PROTO", "protocol", "FLOWS", "flows", true, false, false, false},
+    [GROUP_FILE] = {"FILE", "file", "TRANSFERS", "transfers", false, true, false, false},
 };
 
 static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
@@ -380,13 +439,15 @@ static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
             else
                 snprintf(label, sizeof(label), "(device %" PRIu64 " inode %" PRIu64 ")",
                          transfer->dev, transfer->ino);
-            groups_add(&groups, label, transfer->bytes, 0, transfer->confidence);
+            groups_add(&groups, label, transfer->bytes, 0, transfer->confidence, nullptr);
             continue;
         }
 
         struct ft_row_flow flow;
+        struct ft_remote_names names;
         char proto[8];
         ft_rows_get(&rows, i, &flow, sizeof(flow));
+        ft_row_flow_names(&flow, &names);
         switch (grouping) {
         case GROUP_PROCESS:
             snprintf(label, sizeof(label), "%s", flow.comm[0] ? flow.comm : "-");
@@ -406,7 +467,8 @@ static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
             snprintf(label, sizeof(label), "%s", ft_proto_name(flow.proto, proto));
             break;
         }
-        groups_add(&groups, label, flow.tx_bytes, flow.rx_bytes, FT_CONF_UNKNOWN);
+        groups_add(&groups, label, flow.tx_bytes, flow.rx_bytes, FT_CONF_UNKNOWN,
+                   layout.names ? &names : nullptr);
     }
     free(transfer);
 

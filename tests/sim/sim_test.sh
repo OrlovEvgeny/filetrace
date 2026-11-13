@@ -156,6 +156,25 @@ ok "a flow nobody named is inspected" query bare.txt inspect flow "$flow"
 ok "it has no line of names" exits 1 grep -Eq '^(Name|Name from|Resolved names):' bare.txt
 ok "its files have no column of names" exits 1 grep -q ' NAME ' bare.txt
 
+ok "flows are grouped by remote" query by-remote.txt flows --group-by remote
+ok "the groups have a column of names" grep -Eq '^REMOTE +NAME +SENT +RECEIVED +FLOWS$' by-remote.txt
+ok "a group counts the other names" grep -Eq '^10\.0\.6\.14 +ch-replica-2\.internal \(\+1\) ' by-remote.txt
+ok "a group says a name through a proxy" grep -Eq '^10\.0\.8\.40 +registry\.ml\.example\.com via proxy\.corp\.internal ' by-remote.txt
+ok "a group nobody named has none" grep -Eq '^10\.0\.5\.22 +- ' by-remote.txt
+ok "flows are grouped by remote as JSON" query by-remote.json flows --group-by remote --json
+ok "a group lists its names" grep -q '"remote_ip":"10.0.6.14",.*,"remote_names":\["ch-replica-2.internal","clickhouse.internal"\]}' by-remote.json
+ok "a group nobody named lists none" grep -q '"remote_ip":"10.0.5.22",[^}]*"flows":1}' by-remote.json
+ok "flows are grouped by remote as CSV" query by-remote.csv flows --group-by remote --format csv
+ok "the CSV joins the names" grep -Eq '^10\.0\.6\.14,[0-9]+,[0-9]+,1,ch-replica-2\.internal;clickhouse\.internal$' by-remote.csv
+ok "unnamed groups are grouped by remote" query bare-remote.txt flows --group-by remote --process nginx
+ok "they have no column of names" grep -Eq '^REMOTE +SENT +RECEIVED +FLOWS$' bare-remote.txt
+ok "unnamed groups are grouped by remote as CSV" query bare-remote.csv flows --group-by remote --process nginx --format csv
+ok "their CSV header still ends in the names" test "$(head -n 1 bare-remote.csv)" = remote_ip,bytes_sent,bytes_received,flows,remote_names
+ok "top ranks the destinations" query destinations.txt top destinations --limit 100
+ok "the destinations have a column of names" grep -Eq '^RANK +REMOTE +NAME +SENT +RECEIVED +FLOWS$' destinations.txt
+ok "a destination counts the other names" grep -Eq '^[0-9]+ +10\.0\.6\.14 +ch-replica-2\.internal \(\+1\) ' destinations.txt
+ok "a destination says a name through a proxy" grep -Eq '^[0-9]+ +10\.0\.8\.40 +registry\.ml\.example\.com via proxy\.corp\.internal ' destinations.txt
+
 ok "top prints a snapshot" query top.txt top --once
 ok "the snapshot has its header" grep -q 'DESTINATION' top.txt
 ok "the snapshot has rows" grep -q 'nginx' top.txt
