@@ -350,6 +350,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     /* What the send takes, and what it was given, count as the socket is settled. */
     t->tx_asked = size;
     if (t->carrying) {
+        carry_left_behind(map, (__u64)sk, t->id);
         carry_send_starts(map, (__u64)sk, 0, now);
         carry_send_counted((__u64)sk, 0, 0, now);
     }
@@ -418,8 +419,10 @@ int BPF_KPROBE(ft_tcp_cleanup_rbuf, struct sock *sk, int copied)
     t->rx_tgid = tgid;
 
     if (cfg.file_corr) {
-        if (t->carrying)
+        if (t->carrying) {
+            carry_left_behind(map, (__u64)sk, t->id);
             carry_received(map, (__u64)sk, now);
+        }
         struct thread_state *ts = thread_now(false);
         if (ts) {
             read_sync(ts);
