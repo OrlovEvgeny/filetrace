@@ -883,6 +883,22 @@ static __always_inline void carry_close(void *map, __u64 sk, __u32 tid, enum car
 }
 
 /*
+ * Judges the thread's window at the address when another socket had the address before, as that
+ * socket's close ended it, before the socket there now reaches the window. Nothing the socket
+ * there now took is the window's, so nothing is settled.
+ */
+static __always_inline void carry_left_behind(void *map, __u64 sk, __u64 cookie)
+{
+    struct carry_key key = {.sk = sk, .tid = current_tid()};
+    struct carry *c = bpf_map_lookup_elem(&carries, &key);
+    if (!c || c->cookie == cookie ||
+        __sync_val_compare_and_swap(&c->judged, CARRY_OPEN, CARRY_BUSY) != CARRY_OPEN)
+        return;
+    carry_judge(map, sk, c, carry_end_of(c, CARRY_NEXT));
+    bpf_map_delete_elem(&carries, &key);
+}
+
+/*
  * Leaves another thread's window for the iterator to judge on its next visit, as it ended; not
  * when its element went to another socket meanwhile.
  */
