@@ -74,6 +74,12 @@
 # kernel_files = 16384
 # Label sets of the exported counters.
 # metric_series = 2048
+# Distinct names of remote ends kept, each up to 253 bytes.
+# names = 4096
+# Lookups kept: one per process and address.
+# name_lookups = 16384
+# Library files probed for names; each container image can bring its own.
+# name_libraries = 256
 
 [output]
 # Default format of the listing commands.
@@ -94,6 +100,19 @@
 # of each request: a PHP-FPM or mod_php worker's transfers name the request's
 # script instead of the pool. About a microsecond per request.
 # php_scripts = true
+
+# Names of the remote ends of the connections processes open, as the processes
+# used them: a name a process looked up and got the address for, and the server
+# name a TLS client asks for. Reads no packet. Standard mode only.
+[names]
+# enabled = true
+# Names that processes look up.
+# lookups = true
+# Server names that TLS clients ask for.
+# tls = true
+# How long after a lookup a new connection to one of its addresses still takes
+# its name; "0" for as long as the process runs the program that looked it up.
+# max_age = "0"
 
 # A page of metrics for Prometheus to scrape, served without authentication.
 [prometheus]

@@ -126,6 +126,9 @@ struct ft_config *ft_config_new(void)
     cfg->track_read = true;
     cfg->track_sendfile = true;
     cfg->track_process_lifecycle = true;
+    cfg->names_enabled = true;
+    cfg->names_lookups = true;
+    cfg->names_tls = true;
     cfg->timestamps = true;
     ft_strlcpy(cfg->format, "table", sizeof(cfg->format));
     ft_strlcpy(cfg->storage_path, "/var/lib/filetrace", sizeof(cfg->storage_path));
@@ -152,6 +155,9 @@ void ft_config_free(struct ft_config *cfg)
     free(cfg);
 }
 
+[[gnu::format(printf, 2, 3)]]
+static void warn(struct ft_config *cfg, const char *fmt, ...);
+
 void ft_config_finish(struct ft_config *cfg)
 {
     struct ft_backend_config *backend = &cfg->agent.backend_cfg;
@@ -164,6 +170,12 @@ void ft_config_finish(struct ft_config *cfg)
     state->no_minimum_path_count = cfg->no_minimum_path_count;
     backend->background_path_count = cfg->background_path_count;
     backend->strict_path_count = cfg->strict_path_count;
+    state->names = cfg->names_enabled;
+    backend->lookup_names = cfg->names_enabled && cfg->names_lookups;
+    backend->tls_names = cfg->names_enabled && cfg->names_tls;
+    if (backend->mode == FT_MODE_MINIMAL && cfg->names_set && cfg->names_enabled)
+        warn(cfg, "[names] has no effect in minimal mode: names come from probes that only "
+                  "standard mode attaches");
 
     /* Minimal mode queues only process and socket events, far fewer than standard mode. */
     if (backend->mode == FT_MODE_MINIMAL) {
@@ -668,13 +680,26 @@ static bool apply_limits(struct ft_config *cfg, const char *key, struct value *v
     uint32_t *map = strcmp(key, "kernel_counters") == 0 ? &backend->agg_entries
                     : strcmp(key, "kernel_files") == 0  ? &backend->known_files
                                                         : nullptr;
+    uint64_t min = 64;
+    uint64_t max = 4 * 1024 * 1024;
     uint64_t n;
 
+    if (strcmp(key, "names") == 0) {
+        table = &state->max_names;
+        min = 1;
+    } else if (strcmp(key, "name_lookups") == 0) {
+        table = &state->max_name_lookups;
+        min = 1;
+    } else if (strcmp(key, "name_libraries") == 0) {
+        map = &backend->name_libraries;
+        min = 1;
+        max = 4096;
+    }
     if (!table && !map) {
         *known = false;
         return false;
     }
-    if (!want_count(v, 64, 4 * 1024 * 1024, &n, why, size))
+    if (!want_count(v, min, max, &n, why, size))
         return false;
     if (table)
         *table = (size_t)n;
@@ -724,6 +749,38 @@ static bool apply_process(struct ft_config *cfg, const char *key, struct value *
         return want_bool(v, &cfg->agent.state_cfg.command_line_arguments, why, size);
     if (strcmp(key, "php_scripts") == 0)
         return want_bool(v, &cfg->agent.backend_cfg.php_scripts, why, size);
+    *known = false;
+    return false;
+}
+
+static bool apply_names(struct ft_config *cfg, const char *key, struct value *v, char *why,
+                        size_t size, bool *known)
+{
+    uint64_t *max_age = &cfg->agent.state_cfg.name_max_age_ns;
+
+    cfg->names_set = true;
+    if (strcmp(key, "enabled") == 0)
+        return want_bool(v, &cfg->names_enabled, why, size);
+    if (strcmp(key, "lookups") == 0)
+        return want_bool(v, &cfg->names_lookups, why, size);
+    if (strcmp(key, "tls") == 0)
+        return want_bool(v, &cfg->names_tls, why, size);
+    if (strcmp(key, "max_age") == 0) {
+        constexpr uint64_t LONGEST_NS = 3650 * 24 * 3600 * FT_NS_PER_SEC;
+
+        /* Zero keeps a lookup for as long as its process runs the program that made it. */
+        if (v->type == VALUE_INTEGER ? v->integer == 0
+                                     : v->type == VALUE_STRING && strcmp(v->string, "0") == 0) {
+            *max_age = 0;
+            return true;
+        }
+        if (want_duration(v, FT_NS_PER_SEC, LONGEST_NS, max_age, why, size))
+            return true;
+        snprintf(why, size,
+                 "expected a quoted duration from 1s to 3650d, such as \"10m\", or \"0\" for no "
+                 "limit");
+        return false;
+    }
     *known = false;
     return false;
 }
@@ -814,12 +871,19 @@ static const struct {
     bool (*apply)(struct ft_config *cfg, const char *key, struct value *v, char *why, size_t size,
                   bool *known);
 } sections[] = {
-    {"agent", apply_agent},     {"network", apply_network},
-    {"file", apply_file},       {"correlation", apply_correlation},
-    {"storage", apply_storage}, {"limits", apply_limits},
-    {"output", apply_output},   {"filters", apply_filters},
-    {"process", apply_process}, {"prometheus", apply_prometheus},
-    {"otlp", apply_otlp},       {"grpc", apply_grpc},
+    {"agent", apply_agent},
+    {"network", apply_network},
+    {"file", apply_file},
+    {"correlation", apply_correlation},
+    {"storage", apply_storage},
+    {"limits", apply_limits},
+    {"output", apply_output},
+    {"filters", apply_filters},
+    {"process", apply_process},
+    {"names", apply_names},
+    {"prometheus", apply_prometheus},
+    {"otlp", apply_otlp},
+    {"grpc", apply_grpc},
 };
 
 static bool parse(struct parser *ps, struct ft_config *cfg)
@@ -1118,6 +1182,9 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fprintf(o, "kernel_counters = %u\n", backend->agg_entries);
     fprintf(o, "kernel_files = %u\n", backend->known_files);
     fprintf(o, "metric_series = %zu\n", state->max_metric_series);
+    fprintf(o, "names = %zu\n", state->max_names);
+    fprintf(o, "name_lookups = %zu\n", state->max_name_lookups);
+    fprintf(o, "name_libraries = %u\n", backend->name_libraries);
 
     fputs("\n[output]\n", o);
     print_string(o, "format", cfg->format);
@@ -1130,6 +1197,16 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fputs("\n[process]\n", o);
     fprintf(o, "arguments = %s\n", yes_no(state->command_line_arguments));
     fprintf(o, "php_scripts = %s\n", yes_no(backend->php_scripts));
+
+    fputs("\n[names]\n", o);
+    fputs("# Standard mode only.\n", o);
+    fprintf(o, "enabled = %s\n", yes_no(cfg->names_enabled));
+    fprintf(o, "lookups = %s\n", yes_no(cfg->names_lookups));
+    fprintf(o, "tls = %s\n", yes_no(cfg->names_tls));
+    if (state->name_max_age_ns)
+        print_duration(o, "max_age", state->name_max_age_ns);
+    else
+        fputs("max_age = \"0\"\n", o);
 
     fputs("\n[prometheus]\n", o);
     fprintf(o, "enabled = %s\n", yes_no(cfg->agent.prometheus.enabled));
