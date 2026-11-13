@@ -662,6 +662,9 @@ static __always_inline void charge_send(void *map, __u64 cookie, __u32 tgid,
  */
 static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now);
 
+/* The id the probes give the socket that has the address now, or 0. */
+static __always_inline __u64 sock_cookie(__u64 sk);
+
 static __always_inline bool sock_heard(__u64 sk)
 {
     return BPF_CORE_READ((struct tcp_sock *)sk, bytes_received) != 0;
@@ -852,16 +855,30 @@ static __always_inline enum carry_end carry_closing(__u64 sk, int oldstate, int 
     return hung && heard <= (fin ? 1 : 0) ? CARRY_HUNG : CARRY_QUIET;
 }
 
-/* Closes a thread's window on a socket and judges it, unless the iterator got there first. */
+/* A window that a newcomer among its socket's owners ended. */
+static __always_inline bool carry_evicted(const struct carry *c)
+{
+    return c->closed == CARRY_NEXT + 1;
+}
+
+/* How a window ends: as its socket's close ended it, if that came first. */
+static __always_inline enum carry_end carry_end_of(const struct carry *c, enum carry_end end)
+{
+    return c->closed && !carry_evicted(c) ? (enum carry_end)(c->closed - 1) : end;
+}
+
+/* Closes a thread's window at the address and judges it, unless the iterator got there first. */
 static __always_inline void carry_close(void *map, __u64 sk, __u32 tid, enum carry_end end,
                                         __u64 now)
 {
+    struct carry_key key = {.sk = sk, .tid = tid};
+    struct carry *c = bpf_map_lookup_elem(&carries, &key);
+    if (!c || c->judged != CARRY_OPEN)
+        return;
     carry_settle(map, sk, now);
-    struct carry *c = carry_get(sk, tid);
-    if (!c || __sync_val_compare_and_swap(&c->judged, CARRY_OPEN, CARRY_BUSY) != CARRY_OPEN)
+    if (__sync_val_compare_and_swap(&c->judged, CARRY_OPEN, CARRY_BUSY) != CARRY_OPEN)
         return;
     carry_judge(map, sk, c, end);
-    struct carry_key key = {.sk = sk, .tid = tid};
     bpf_map_delete_elem(&carries, &key);
 }
 
@@ -1003,25 +1020,26 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
     __u32 seq = BPF_CORE_READ((struct tcp_sock *)sk, write_seq);
     bool moved = seq != c->seq_seen;
     c->seq_seen = seq;
-    if (!c->last_ns || now - c->last_ns <= cfg.corr_window_ns)
+    if (!c->last_ns)
         return 0;
-    if (c->closed) {
-        if (__sync_val_compare_and_swap(&c->judged, CARRY_OPEN, CARRY_BUSY) == CARRY_OPEN) {
-            carry_judge(map, sk, c, (enum carry_end)(c->closed - 1));
-            c->judged = CARRY_JUDGED;
-        }
+    /* A window whose socket is gone, or whose address another socket took, ends now. */
+    bool gone = c->cookie && c->cookie != sock_cookie(sk);
+    if (!gone && now - c->last_ns <= cfg.corr_window_ns)
         return 0;
-    }
-    /* A send the socket took since the last visit, or one waiting for room, keeps it open. */
-    if (carry_settle(map, sk, now) || moved) {
+    enum carry_end end = CARRY_AGED;
+    if (gone || c->closed) {
+        if (c->closed)
+            end = (enum carry_end)(c->closed - 1);
+    } else if (carry_settle(map, sk, now) || moved) {
+        /* A send the socket took since the last visit, or one waiting for room, keeps it open. */
         c->last_ns = now;
         return 0;
-    }
-    if (c->kind != CARRY_EPISODE && c->wire < CARRY_FLIGHT_MAX)
+    } else if (c->kind != CARRY_EPISODE && c->wire < CARRY_FLIGHT_MAX) {
         return 0;
+    }
     if (__sync_val_compare_and_swap(&c->judged, CARRY_OPEN, CARRY_BUSY) != CARRY_OPEN)
         return 0;
-    carry_judge(map, sk, c, CARRY_AGED);
+    carry_judge(map, sk, c, end);
     c->judged = CARRY_JUDGED;
     return 0;
 }
@@ -1399,7 +1417,9 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
             return NULL;
         }
     }
-    if (c && !reuse && (!foreground || !c->sends || same_file(&c->file, &ts->file))) {
+    /* A window ended with its socket, or left by one that had the address before, is judged. */
+    bool stale = c && !reuse && (c->closed || c->cookie != cookie);
+    if (c && !reuse && !stale && (!foreground || !c->sends || same_file(&c->file, &ts->file))) {
         if (foreground && !c->sends) {
             c->file = ts->file;
             c->size = ts->file_size;
@@ -1415,7 +1435,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         return c;
     }
     if (c && !reuse)
-        carry_close(map, sk, tid, CARRY_NEXT, now);
+        carry_close(map, sk, tid, carry_end_of(c, CARRY_NEXT), now);
     __u8 kind = 0;
     if (!sock_heard(sk) && !sock_flown(sk, sending))
         kind = CARRY_FLIGHT;
