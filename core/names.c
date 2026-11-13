@@ -183,6 +183,24 @@ void ft_remote_name_format(const struct ft_remote_names *n, char *buf, size_t si
     }
 }
 
+void ft_remote_name_cell(const struct ft_remote_names *n, uint16_t port, char *buf, size_t size)
+{
+    enum ft_name_source source = ft_remote_name_source(n);
+    uint32_t others = n->count > 1 ? n->count - 1 : 0;
+    char suffix[24] = "";
+
+    if (source == FT_NAME_SOURCE_NONE || source == FT_NAME_SOURCE_TLS) {
+        ft_remote_name_format(n, buf, size);
+        return;
+    }
+    if (source == FT_NAME_SOURCE_LOOKUP && others)
+        snprintf(suffix, sizeof(suffix), " (+%u)", others);
+    if (port)
+        snprintf(buf, size, "%s:%u%s", ft_remote_name(n), port, suffix);
+    else
+        snprintf(buf, size, "%s%s", ft_remote_name(n), suffix);
+}
+
 /* Ids count from 1, so that 0 can stand for no name and for the end of a list. */
 struct entry {
     uint64_t hash;

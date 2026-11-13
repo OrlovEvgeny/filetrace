@@ -51,6 +51,13 @@ enum ft_name_source ft_remote_name_source(const struct ft_remote_names *n);
 void ft_remote_name_format(const struct ft_remote_names *n, char *buf, size_t size);
 
 /*
+ * What a cell with no room for both shows in place of the address: the name, followed by the
+ * port only where the process looked that name up to the address, so that "name:port" is true
+ * of it. A port of 0 is left out. "" when the remote end has no name.
+ */
+void ft_remote_name_cell(const struct ft_remote_names *n, uint16_t port, char *buf, size_t size);
+
+/*
  * Host names in a fixed number of slots. A held name keeps its slot. A name nobody holds stays
  * until a new name needs the slot of the one unused the longest; a reference to it then no
  * longer resolves.
