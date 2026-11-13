@@ -526,10 +526,11 @@ static void key_row(FILE *o, enum view view, bool paused, bool names, size_t wid
     fputc('\n', o);
 }
 
+/* Whole on the least terminal: no line wider than LEAST_COLUMNS, 23 lines for 24 rows. */
 static void help_screen(FILE *o)
 {
     fprintf(o,
-            "\n%cKEYS\n"
+            "%cKEYS\n"
             "f      File transfers in progress\n"
             "p      Processes, by the rate they send at\n"
             "n      Network: open connections\n"
@@ -539,15 +540,18 @@ static void help_screen(FILE *o)
             "q      Quit\n"
             "\n%cCOLUMNS\n"
             "RATE, OUTBOUND, INBOUND\n"
-            "            Bytes per second over the last one to two seconds, counted\n"
-            "            where the local socket accepts or delivers them.\n"
-            "METHOD      sendfile: the kernel moved the file to the socket itself.\n"
-            "            read-write: a thread read the file, then sent.\n"
-            "CONFIDENCE  EXACT for sendfile. INFERRED for read-write: the payload\n"
-            "            cannot be proven to come only from that file.\n"
-            "            A '*' marks a transfer during which events were lost.\n"
-            "LOST        Events the collector could not record since it started.\n"
-            "\nPress ? to return\n",
+            "            Bytes per second over the last one to two\n"
+            "            seconds, counted where the local socket\n"
+            "            accepts or delivers them.\n"
+            "METHOD      sendfile: the kernel moved the file to the\n"
+            "            socket itself.\n"
+            "            read-write: a thread read the file then sent.\n"
+            "CONFIDENCE  EXACT for sendfile. INFERRED for read-write:\n"
+            "            the payload cannot be proven to come only\n"
+            "            from that file.\n"
+            "            A '*' marks a transfer with lost events.\n"
+            "LOST        Events the collector could not record since\n"
+            "            it started.\n",
             HEADING, HEADING);
 }
 
@@ -563,6 +567,10 @@ static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_
         fprintf(o, "Terminal too narrow: needs %zu columns\n", LEAST_COLUMNS);
         return;
     }
+    if (help) {
+        help_screen(o);
+        return;
+    }
     sscanf(host->release, "%u.%u", &major, &minor);
     fprintf(o, "%cFILETRACE%c  %s · %s %u.%u  ", BOLD, PLAIN, host->hostname,
             strcmp(host->system, "Darwin") == 0 ? "macOS" : host->system, major, minor);
@@ -574,10 +582,6 @@ static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_
         fprintf(o, "%cLIVE%c\n", GREEN, PLAIN);
 
     counters(o, st, opt->direction);
-    if (help) {
-        help_screen(o);
-        return;
-    }
 
     if (every_view || view == VIEW_FILES) {
         fprintf(o, "\n%cACTIVE FILE TRANSFERS\n", HEADING);
