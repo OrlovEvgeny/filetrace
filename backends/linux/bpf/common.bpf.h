@@ -882,16 +882,26 @@ static __always_inline void carry_close(void *map, __u64 sk, __u32 tid, enum car
     bpf_map_delete_elem(&carries, &key);
 }
 
-/* Leaves a window for the iterator to judge on its next visit, as it ended. */
-static __always_inline void carry_end_later(struct carry *c, enum carry_end end)
+/*
+ * Leaves another thread's window for the iterator to judge on its next visit, as it ended; not
+ * when its element went to another socket meanwhile.
+ */
+static __always_inline void carry_end_later(struct carry *c, __u64 cookie, enum carry_end end)
 {
-    c->closed = end + 1;
+    __u32 mark = (__u32)end + 1;
+    if (c->cookie != cookie || __sync_val_compare_and_swap(&c->closed, 0, mark) != 0)
+        return;
+    if (c->cookie != cookie) {
+        __sync_val_compare_and_swap(&c->closed, mark, 0);
+        return;
+    }
     c->last_ns = 1;
 }
 
 /* The socket's owners as a walk over them sees them, and what the walk found. */
 struct owners_walk {
     __u64 sk;
+    __u64 cookie; /* the socket's, which a window the walk ends has */
     __u64 oldest_ns;
     __u32 tid[CARRY_OWNERS];
     __u32 self;   /* the thread left out of the walk, or looking for room */
@@ -906,7 +916,7 @@ static long end_later_step(__u32 i, void *arg)
     __u32 tid = w->tid[i & (CARRY_OWNERS - 1)];
     struct carry *c = tid && tid != w->self ? carry_get(w->sk, tid) : NULL;
     if (c)
-        carry_end_later(c, (enum carry_end)w->end);
+        carry_end_later(c, w->cookie, (enum carry_end)w->end);
     return 0;
 }
 
@@ -948,6 +958,7 @@ static __always_inline void carry_close_all(void *map, __u64 sk, enum carry_end 
     struct carry_owners *o = bpf_map_lookup_elem(&carry_owners, &sk);
     if (o) {
         carry_settle(map, sk, now);
+        w.cookie = sock_cookie(sk);
         __builtin_memcpy(w.tid, o->tid, sizeof(w.tid));
         bpf_map_delete_elem(&carry_owners, &sk);
         bpf_loop(CARRY_OWNERS, end_later_step, &w, 0);
@@ -973,7 +984,7 @@ static __always_inline void carry_forget(__u64 sk)
  * Counts the thread among the socket's owners, making room by ending the window of the owner that
  * acted longest ago. Returns whether a close of the socket will find the thread's window.
  */
-static __always_inline bool carry_own(__u64 sk, __u32 tid)
+static __always_inline bool carry_own(__u64 sk, __u32 tid, __u64 cookie)
 {
     struct carry_owners none = {};
     bpf_map_update_elem(&carry_owners, &sk, &none, BPF_NOEXIST);
@@ -990,7 +1001,7 @@ static __always_inline bool carry_own(__u64 sk, __u32 tid)
         at = w.oldest & (CARRY_OWNERS - 1);
         struct carry *c = carry_get(sk, w.tid[at]);
         if (c)
-            carry_end_later(c, CARRY_NEXT);
+            carry_end_later(c, cookie, CARRY_NEXT);
     }
     return __sync_val_compare_and_swap(&o->tid[at], w.tid[at], tid) == w.tid[at];
 }
@@ -1443,7 +1454,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         kind = CARRY_FLIGHT;
     else if (!foreground || (ts->file_size && ts->file_size < CARRY_FLOOR) || thread_held(ts))
         kind = CARRY_EPISODE;
-    if (!kind || !carry_own(sk, tid)) {
+    if (!kind || !carry_own(sk, tid, cookie)) {
         /* What the iterator judged is left for it to remove. */
         if (reuse)
             c->judged = CARRY_JUDGED;
