@@ -157,6 +157,7 @@ static int take_snapshot(struct ft_session *s, const struct ft_watch_options *op
 
 constexpr size_t PROCESS_LEAST = 10;
 constexpr size_t PATH_LEAST = 16;
+constexpr size_t NAME_LEAST = 24; /* a name cut to this still reads */
 constexpr size_t ADDRESS_LEAST = sizeof("255.255.255.255") - 1;
 constexpr size_t ADDRESS_PORT_LEAST = sizeof("255.255.255.255:65535") - 1;
 constexpr size_t RATE_WIDEST = sizeof("100.0 MB/s") - 1;
@@ -182,15 +183,52 @@ static const char *host_name(bool resolve, const struct ft_endpoint *ep)
     return resolve ? ft_resolver_name(ep) : nullptr;
 }
 
-static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
+static const struct ft_row_transfer *transfer_row(struct transfer_table *t, size_t r)
 {
-    struct transfer_table *t = ctx;
-    const struct ft_row_transfer *row = t->row;
-
     if (t->loaded != r) {
         ft_rows_get(t->rows, r, t->row, sizeof(*t->row));
         t->loaded = r;
     }
+    return t->row;
+}
+
+/* The name the process used, else a host name, else the address; true for the address. */
+static bool destination_cell(const struct transfer_table *t, const struct ft_row_transfer *row,
+                             char *buf, size_t size)
+{
+    struct ft_remote_names names;
+
+    ft_row_transfer_names(row, &names);
+    ft_remote_name_cell(&names, 0, buf, size);
+    if (t->names && buf[0])
+        return false;
+    const char *host = host_name(t->resolve, &row->remote);
+    if (host) {
+        snprintf(buf, size, "%s", host);
+        return false;
+    }
+    ft_addr_format(&row->remote, buf, size);
+    return true;
+}
+
+static size_t widest_address(struct transfer_table *t)
+{
+    char cell[FT_NAMES_TEXT_MAX];
+    size_t widest = 0;
+
+    for (size_t r = 0; r < t->rows->count; r++) {
+        if (destination_cell(t, transfer_row(t, r), cell, sizeof(cell)) &&
+            ft_text_width(cell) > widest)
+            widest = ft_text_width(cell);
+    }
+    return widest;
+}
+
+static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
+{
+    struct transfer_table *t = ctx;
+    const struct ft_row_transfer *row = transfer_row(t, r);
+
     switch (c) {
     case 0:
         snprintf(buf, size, "%s %" PRIu32, row->comm[0] ? row->comm : "-", row->pid);
@@ -215,19 +253,9 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
         }
         break;
     }
-    case 2: {
-        struct ft_remote_names names;
-        ft_row_transfer_names(row, &names);
-        ft_remote_name_cell(&names, 0, buf, size);
-        if (t->names && buf[0])
-            break;
-        const char *host = host_name(t->resolve, &row->remote);
-        if (host)
-            snprintf(buf, size, "%s", host);
-        else
-            ft_addr_format(&row->remote, buf, size);
+    case 2:
+        destination_cell(t, row, buf, size);
         break;
-    }
     case 3:
         snprintf(buf, size, "%s",
                  row->method == FT_METHOD_NONE ? "-" : ft_method_name((enum ft_method)row->method));
@@ -249,20 +277,12 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
     return buf;
 }
 
-static void transfers_table(FILE *o, const struct ft_rows *rows, size_t width, bool resolve,
-                            bool names)
+void ft_watch_transfers_table(FILE *o, const struct ft_rows *rows, size_t width, bool resolve,
+                              bool names)
 {
     static const struct ft_column_spec columns[] = {
         {"PROCESS", false}, {"FILE", false}, {"DESTINATION", false},
         {"METHOD", false},  {"RATE", true},  {"CONFIDENCE", false},
-    };
-    static const struct ft_column_fit fit[] = {
-        {.cut = 3, .least = PROCESS_LEAST},
-        {.cut = 1, .least = PATH_LEAST, .keep_end = true},
-        {.cut = 2, .least = ADDRESS_LEAST},
-        {.leave = 2},
-        {0},
-        {.leave = 1},
     };
     struct ft_row_transfer *row = malloc(sizeof(*row));
     struct transfer_table table = {
@@ -274,11 +294,25 @@ static void transfers_table(FILE *o, const struct ft_rows *rows, size_t width, b
         .names = names,
     };
 
-    if (row && rows->count)
+    if (row && rows->count) {
+        /* A name gives way before a path, an address does not: a cut address is useless. */
+        size_t address = widest_address(&table);
+        const struct ft_column_fit fit[] = {
+            {.cut = 4, .least = PROCESS_LEAST},
+            {.cut = 2, .least = PATH_LEAST, .keep_end = true},
+            {.cut = 3,
+             .least = ADDRESS_LEAST,
+             .early_cut = 1,
+             .early_least = address > NAME_LEAST ? address : NAME_LEAST},
+            {.leave = 2},
+            {0},
+            {.leave = 1},
+        };
         ft_table_print_fit(o, columns, fit, FT_ARRAY_LEN(columns), rows->count, transfer_cell,
                            &table, false, width);
-    else
+    } else {
         fputs("No file transfers in progress.\n", o);
+    }
     free(row);
 }
 
@@ -585,7 +619,7 @@ static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_
 
     if (every_view || view == VIEW_FILES) {
         fprintf(o, "\n%cACTIVE FILE TRANSFERS\n", HEADING);
-        transfers_table(o, &snap->transfers, width, opt->resolve, names);
+        ft_watch_transfers_table(o, &snap->transfers, width, opt->resolve, names);
     }
     if (every_view || view == VIEW_PROCESSES) {
         fprintf(o, "\n%cPROCESSES\n", HEADING);

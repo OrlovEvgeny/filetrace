@@ -89,13 +89,13 @@ static size_t layout_width(const struct layout *l)
     return shown ? total + GAP * (shown - 1) : 0;
 }
 
-static size_t least_width(const struct ft_column_spec *col, const struct ft_column_fit *fit,
-                          size_t natural)
+static size_t least_width(const struct ft_column_spec *col, size_t least, size_t natural)
 {
     size_t title = ft_text_width(col->title);
-    size_t least = fit->least > title ? fit->least : title;
 
-    return fit->cut && least < natural ? least : natural;
+    if (least < title)
+        least = title;
+    return least < natural ? least : natural;
 }
 
 /* Cuts the shown columns in turn, each only as far as the table still needs. */
@@ -109,9 +109,11 @@ static void cut_columns(struct layout *l, const struct ft_column_spec *cols,
     for (int turn = 1; turn <= UINT8_MAX && total > width; turn++) {
         for (size_t c = 0; c < l->ncols && total > width; c++) {
             struct column *col = &l->columns[c];
-            if (!col->shown || fit[c].cut != turn)
+            if (!col->shown || (fit[c].cut != turn && fit[c].early_cut != turn))
                 continue;
-            size_t give = col->width - least_width(&cols[c], &fit[c], col->natural);
+            size_t least = fit[c].cut == turn ? fit[c].least : fit[c].early_least;
+            size_t narrowest = least_width(&cols[c], least, col->natural);
+            size_t give = col->width > narrowest ? col->width - narrowest : 0;
             if (give > total - width)
                 give = total - width;
             col->width -= give;
