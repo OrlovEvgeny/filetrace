@@ -168,6 +168,7 @@ struct ft_linux_probe_kind {
     size_t capacity;
     struct ft_linux_uprobe probes[FT_LINUX_KIND_PROBES]; /* unused ones have no program */
     bool every_process;                                  /* the maps of every process are read */
+    bool place_cookie; /* the probes' cookie is the file's place among the kind's, plus one */
     bool (*runs)(const char *program);    /* the program file is of the kind; may be nullptr */
     bool (*maps_of)(const char *program); /* the maps of a process running it are read */
     /* A file mapped at path, whose base name is name, may be of the kind. */
@@ -186,6 +187,9 @@ int ft_linux_prober_add(struct ft_linux_prober *p, const struct ft_linux_probe_k
 size_t ft_linux_prober_count(const struct ft_linux_prober *p, int kind);
 /* Files that gave their place to newer ones once the kind was full. */
 size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind);
+
+/* The file of a kind whose probes carry the cookie served a call at ts_ns. */
+void ft_linux_prober_used(struct ft_linux_prober *p, int kind, uint64_t cookie, uint64_t ts_ns);
 
 /*
  * A process started the program named so, by an exec or a fork at ts_ns: it is looked at by

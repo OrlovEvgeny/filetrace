@@ -122,7 +122,9 @@ struct ft_bpf_ev_lookup {
     __u32 pid;
     __u32 tid;
     __u32 count;
-    __u32 inet6; /* a bit per address that is IPv6 */
+    __u32 inet6;   /* a bit per address that is IPv6 */
+    __u32 library; /* the cookie of the probes of the C library file that answered */
+    __u32 pad;
     __u8 addrs[FT_BPF_LOOKUP_ADDRS][16];
     char name[FT_BPF_LOOKUP_NAME]; /* as the process passed it, NUL-terminated */
 };

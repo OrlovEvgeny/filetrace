@@ -50,7 +50,7 @@ struct identity {
 struct probed {
     struct identity id;
     struct bpf_link *links[FT_LINUX_KIND_PROBES];
-    uint64_t found_ns; /* when a look last found a process mapping or running it */
+    uint64_t found_ns; /* when a look last found it mapped, or a call through it last ran */
 };
 
 struct kind {
@@ -164,6 +164,16 @@ size_t ft_linux_prober_count(const struct ft_linux_prober *p, int kind)
 size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind)
 {
     return p && kind >= 0 && (size_t)kind < p->kind_count ? p->kinds[kind].forgotten : 0;
+}
+
+void ft_linux_prober_used(struct ft_linux_prober *p, int kind, uint64_t cookie, uint64_t ts_ns)
+{
+    if (!p || kind < 0 || (size_t)kind >= p->kind_count)
+        return;
+    struct kind *k = &p->kinds[kind];
+    if (k->def.place_cookie && cookie >= 1 && cookie <= k->count &&
+        k->files[cookie - 1].found_ns < ts_ns)
+        k->files[cookie - 1].found_ns = ts_ns;
 }
 
 static bool same(const struct identity *a, const struct identity *b)
@@ -323,8 +333,9 @@ static void consider(struct kind *k, const char *path, const char *mapped_as, ui
     snprintf(held, sizeof(held), "/proc/self/fd/%d", fd);
     struct probed fresh = {.id = id, .found_ns = now};
     int error = 0;
+    uint64_t attached = k->def.place_cookie ? (uint64_t)(slot - k->files) + 1 : cookie;
     for (size_t i = 0; i < FT_LINUX_KIND_PROBES && k->def.probes[i].prog && !error; i++)
-        fresh.links[i] = attach(&k->def.probes[i], held, cookie, &error);
+        fresh.links[i] = attach(&k->def.probes[i], held, attached, &error);
     close(fd);
     if (error) {
         if (first_warning(k, &id))
