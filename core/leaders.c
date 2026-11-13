@@ -1856,7 +1856,7 @@ bool ft_leaders_query(struct ft_leaders *l, const struct ft_query *q, uint64_t s
         return false;
     }
     if (!l) {
-        struct ft_row_leader_summary sum = {0};
+        struct ft_row_leader_summary sum = {.flags = FT_LEADERS_OFF};
         emit(ctx, FT_MSG_ROW_LEADER_SUMMARY, &sum, sizeof(sum));
         return true;
     }
