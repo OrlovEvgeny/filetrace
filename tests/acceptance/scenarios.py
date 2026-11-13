@@ -8,6 +8,7 @@ The last line printed is RESULT: OK, RESULT: BUG, RESULT: INVALID or RESULT: SKI
 import faulthandler
 import functools
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -1123,6 +1124,440 @@ def module_sized_bodies():
             problems += ["%s: %s reported but not sent" % (label, r["file"]["path"]) for r in mine]
         return problems
     return Case("Python, Node.js and Perl clients post a body from memory the size of a module they read at start", judge=none_listed)
+
+
+# Threads, re-reads and the ends of a connection ------------------------------------------------
+
+SCRIPT_PEER = "/acceptance/script_peer.py"
+PEER_PORT = BASE + 20
+
+
+def listening(port):
+    with open("/proc/net/tcp") as f:
+        return any(line.split()[1].endswith(":%04X" % port) and line.split()[3] == "0A" for line in f.readlines()[1:])
+
+
+def script_peer(port, mode, script, *extra):
+    """a peer process that follows a script; a listening one is up when this returns"""
+    procs.append(subprocess.Popen([sys.executable, SCRIPT_PEER, str(port), "--" + mode, "--script", script] + list(extra),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    if mode == "listen":
+        for _ in range(100):
+            if listening(port):
+                return
+            time.sleep(0.05)
+        raise SystemExit("the peer on port %d did not listen" % port)
+
+
+class Sockets:
+    """sockets closed as one"""
+
+    def __init__(self, *socks):
+        self.socks = socks
+
+    def close(self):
+        for s in self.socks:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def sendcount(s, data, label):
+    """one non-blocking send; returns how much the kernel took"""
+    s.setblocking(False)
+    try:
+        taken = s.send(data)
+    except BlockingIOError:
+        taken = 0
+    s.setblocking(True)
+    print("  %s: asked %d B, the kernel took %d B" % (label, len(data), taken))
+    return taken
+
+
+def pin_to_one_cpu():
+    """a socket freed by one thread goes back to the freelist of its CPU, where the next one allocated there takes it"""
+    os.sched_setaffinity(0, {0})
+
+
+def socket_address(sock):
+    """the kernel's address of a connected socket, as /proc/net/tcp prints it (hashed: equal values are one socket)"""
+    local, peer = sock.getsockname()[1], sock.getpeername()[1]
+    with open("/proc/net/tcp") as f:
+        for line in f.readlines()[1:]:
+            c = line.split()
+            if int(c[1].split(":")[1], 16) == local and int(c[2].split(":")[1], 16) == peer and c[3] != "0A":
+                return c[11]
+    return None
+
+
+def reused(first, second):
+    """None when the second socket sits at the first one's address, else why the case tested nothing"""
+    print("  first socket at %s, second at %s" % (first, second))
+    return None if first and first == second else "the second socket did not land at the first one's address"
+
+
+# Threads: pool threads in turn, a socket's address reused
+
+def pool_replies(threads, true_replies):
+    warm_up_peers(greeter=False)
+    sizes = [8000 + 700 * i for i in range(threads)]
+    names = ["data%02d.bin" % i for i in range(threads)]
+    for name, size in zip(names, sizes):
+        mk(name, size)
+    outs = [size + 300 if true_replies else 30000 for size in sizes]
+    lsock = listener(PEER_PORT)
+    script_peer(PEER_PORT, "connect", ",".join("send:200,recv:%d,sleep:0.2" % o for o in outs) + ",sleep:2,close")
+    c, _ = lsock.accept()
+
+    def worker(name, out):
+        c.recv(65536)
+        data = readall(D + "/" + name)
+        c.sendall(os.urandom(300) + data if true_replies else os.urandom(out))
+    for name, out in zip(names, outs):
+        t = threading.Thread(target=worker, args=(name, out))
+        t.start()
+        t.join()
+    time.sleep(0.5)
+    expect = {name: around(size, high=1.1) for name, size in zip(names, sizes)} if true_replies else {}
+    return Case("keep-alive connection, %d pool threads one after another; each: recv, read its own file (%d to %d B), send %s" % (
+        threads, sizes[0], sizes[-1], "the file and a 300 B head" if true_replies else "30000 B"), expect, close=c)
+
+
+for _threads in (4, 8, 10):
+    SCENARIOS["pool-false-replies-%d" % _threads] = functools.partial(pool_replies, _threads, False)
+    SCENARIOS["pool-true-replies-%d" % _threads] = functools.partial(pool_replies, _threads, True)
+
+
+@scenario("retry-after-reset-reuses-the-socket")
+def retry_after_reset():
+    warm_up_peers(greeter=False)
+    pin_to_one_cpu()
+    mk("token.json", 2000)
+    script_peer(PEER_PORT, "listen", "recv:2000,sleep:0.1,rst")
+    script_peer(PEER_PORT + 1, "listen", "recv:2000,send:100,sleep:1.5,close")
+    data = readall(D + "/token.json")
+    first = socket.create_connection(("127.0.0.1", PEER_PORT))
+    where = socket_address(first)
+    first.sendall(data)
+    time.sleep(0.5)
+    first.close()
+    second = socket.create_connection(("127.0.0.1", PEER_PORT + 1))
+    why = reused(where, socket_address(second))
+    data = readall(D + "/token.json")
+    second.sendall(data)
+    second.recv(100)
+    time.sleep(0.3)
+    second.close()
+    return Case("read token.json (2000 B); connect A; upload it; the peer resets A without answering; close A; connect B at once; read and upload again; "
+                "the peer answers; close", {"token.json": (1800, 2100)}, invalid=why)
+
+
+@scenario("server-reply-then-fin-close-reuses-the-socket")
+def server_reply_then_fin_close():
+    warm_up_peers(greeter=False)
+    pin_to_one_cpu()
+    mk("a.json", 3000)
+    lsock = listener(PEER_PORT)
+    go = "/tmp/second-client-%d" % os.getpid()
+    script_peer(PEER_PORT, "connect", "recv:5000,sleep:1.5,close", "--wait-file", go)
+    script_peer(PEER_PORT, "connect", "send:200,recv:3300,sleep:0.3,close")
+    first, _ = lsock.accept()
+    where = socket_address(first)
+    held = {}
+    replied, closed = threading.Event(), threading.Event()
+
+    def second_thread():
+        first.recv(65536)
+        data = readall(D + "/a.json")
+        first.sendall(os.urandom(300) + data)
+        replied.set()
+        closed.wait(5)
+        held["b"], _ = lsock.accept()
+        held["where"] = socket_address(held["b"])
+        held["b"].sendall(os.urandom(5000))
+        time.sleep(0.4)
+    t = threading.Thread(target=second_thread)
+    t.start()
+    replied.wait(5)
+    time.sleep(0.8)
+    first.close()
+    open(go, "w").close()
+    closed.set()
+    t.join()
+    return Case("server with two threads: T2 reads a.json (3000 B) and replies 3300 B on accepted A; the client closes A first; T1 closes A; "
+                "T2 accepts B and sends a 5000 B banner from memory before hearing anything", {"a.json": around(3000, high=1.1)},
+                close=held["b"], invalid=reused(where, held.get("where")))
+
+
+# Files read again
+
+def reread_then_request(name, size, out):
+    warm_up_peers(greeter=False)
+    mk(name, size)
+    readall(D + "/" + name)
+    readall(D + "/" + name)
+    s = socket.create_connection(("127.0.0.1", BASE + 3))
+    s.sendall(os.urandom(out))
+    return Case("read %s (%d B) twice; connect; one %d B request from memory" % (name, size, out), close=s)
+
+
+SCENARIOS["reread-file-then-one-request-of-both-copies"] = functools.partial(reread_then_request, "settings.json", 20000, 47000)
+SCENARIOS["reread-module-then-one-request-of-both-copies"] = functools.partial(reread_then_request, "lib.py", 14000, 27000)
+
+
+@scenario("reread-config-then-reply-of-both-copies")
+def reread_config_then_reply():
+    warm_up_peers(greeter=False)
+    mk("config.json", 2000)
+    script_peer(PEER_PORT, "listen", "send:100,recv:5000,sleep:0.3,send:50,sleep:30")
+    s = socket.create_connection(("127.0.0.1", PEER_PORT))
+    s.recv(100)
+    readall(D + "/config.json")
+    readall(D + "/config.json")
+    s.sendall(os.urandom(5000))
+    s.recv(64)
+    return Case("heard connection; read config.json (2000 B) twice; a 5000 B reply from memory; recv", close=s)
+
+
+@scenario("failed-send-then-another-file")
+def failed_send_then_another_file():
+    warm_up_peers(greeter=False)
+    mk("data.bin", 300000)
+    mk("app.cfg", 2000)
+    script_peer(PEER_PORT, "listen", "sleep:2.5,drain", "--rcvbuf", "2048")
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    s.connect(("127.0.0.1", PEER_PORT))
+    s.setblocking(False)
+    filled = 0
+    try:
+        while True:
+            filled += s.send(os.urandom(4096))
+    except BlockingIOError:
+        pass
+    data = readall(D + "/data.bin")
+    taken = sendcount(s, data, "data.bin")
+    readall(D + "/app.cfg")
+    s.setblocking(True)
+    s.sendall(os.urandom(30000))
+    return Case("fresh connection with a full send buffer (%d B); read data.bin (300000 B); its send fails; read app.cfg (2000 B); 30000 B from memory" % filled,
+                close=s, invalid="the send of data.bin took %d B" % taken if taken else None)
+
+
+# A first flight and the way its connection ends
+
+def refused_hello(ending):
+    warm_up_peers(greeter=False)
+    mk("private-ca.pem", 1200)
+    script_peer(PEER_PORT, "listen", "recv:1750,sleep:0.3," + ending)
+    s = socket.create_connection(("127.0.0.1", PEER_PORT))
+    readall(D + "/private-ca.pem")
+    s.sendall(os.urandom(1750))
+    try:
+        s.recv(64)
+    except OSError:
+        pass
+    time.sleep(0.5)
+    return Case("read private-ca.pem (1200 B); connect; send a 1750 B hello; the peer %s without answering; we close later" % (
+        "closes" if ending == "close" else "resets"), close=s)
+
+
+SCENARIOS["hello-refused-by-close"] = functools.partial(refused_hello, "close")
+SCENARIOS["hello-refused-by-reset"] = functools.partial(refused_hello, "rst")
+
+
+def unanswered_upload(ending):
+    warm_up_peers(greeter=False)
+    mk("u.bin", 2000)
+    script = {"sender-closes": "recv:2000,sleep:30", "peer-closes": "recv:2000,sleep:0.5,close",
+              "peer-resets": "recv:2000,sleep:0.5,rst", "sender-aborts": "recv:2000,sleep:30"}[ending]
+    script_peer(PEER_PORT, "listen", script)
+    s = socket.create_connection(("127.0.0.1", PEER_PORT))
+    s.sendall(readall(D + "/u.bin"))
+    time.sleep(3.0)
+    if ending == "sender-aborts":
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    notes = "connect; read u.bin (2000 B); send it; the peer never answers; the " + {
+        "sender-closes": "sender closes", "peer-closes": "peer closes first", "peer-resets": "peer resets after reading",
+        "sender-aborts": "sender aborts with a reset"}[ending]
+    if ending == "sender-closes":
+        return Case(notes, {"u.bin": around(2000, high=1.1)}, close=s, judged=("closed",))
+    return Case(notes, close=s)
+
+
+for _ending in ("sender-closes", "peer-closes", "peer-resets", "sender-aborts"):
+    SCENARIOS["unanswered-upload-" + _ending] = functools.partial(unanswered_upload, _ending)
+
+
+def reread_hello(ending):
+    warm_up_peers(greeter=False)
+    mk("private-ca.pem", 1200)
+    end = {"late": "sleep:8,close", "peer-closes": "sleep:1.0,close", "peer-resets": "sleep:1.0,rst"}[ending]
+    script_peer(PEER_PORT, "listen", "recv:1750,sleep:1.5,send:100,recv:400,sleep:1," + ("rst" if ending == "peer-resets" else "close"))
+    script_peer(PEER_PORT + 1, "listen", "recv:1750," + end)
+    s1 = socket.create_connection(("127.0.0.1", PEER_PORT))
+    readall(D + "/private-ca.pem")
+    s1.sendall(os.urandom(1750))
+    readall(D + "/private-ca.pem")
+    s2 = socket.create_connection(("127.0.0.1", PEER_PORT + 1))
+    s2.sendall(os.urandom(1750))
+    s1.recv(4096)
+    s1.sendall(os.urandom(400))
+    time.sleep(0.5)
+    return Case("read private-ca.pem (1200 B); connect S1; send a 1750 B hello; read the file again; connect S2; send 1750 B; the first peer answers; "
+                "send 400 B on S1; the peer of S2 %s" % {"late": "hangs up at 8 s, after our close", "peer-closes": "closes at 1 s",
+                                                          "peer-resets": "resets at 1 s"}[ending],
+                close=Sockets(s1, s2), judged=("open",) if ending == "late" else ("open", "closed"))
+
+
+def client_key_then_page_twice(ending):
+    warm_up_peers(greeter=False)
+    mk("client-key.pem", 1200)
+    mk("page.tpl", 3000)
+    lsock = listener(PEER_PORT + 2)
+    end = {"late": "sleep:9,close", "peer-closes": "sleep:1.0,close", "peer-resets": "sleep:1.0,rst"}[ending]
+    script_peer(PEER_PORT, "listen", "recv:1750," + end)
+    script_peer(PEER_PORT + 2, "connect", "send:200,recv:200,sleep:0.3,send:200,recv:200,sleep:3,close")
+    c2, _ = lsock.accept()
+    readall(D + "/client-key.pem")
+    s = socket.create_connection(("127.0.0.1", PEER_PORT))
+    s.sendall(os.urandom(1750))
+    c2.recv(65536)
+    readall(D + "/page.tpl")
+    c2.sendall(os.urandom(200))
+    c2.recv(65536)
+    readall(D + "/page.tpl")
+    c2.sendall(os.urandom(200))
+    time.sleep(0.5)
+    return Case("read client-key.pem (1200 B); connect S; send 1750 B; on S2 twice: recv, read page.tpl (3000 B), send 200 B; the peer of S %s" % {
+        "late": "hangs up at 9 s, after our close", "peer-closes": "closes at 1 s", "peer-resets": "resets at 1 s"}[ending],
+        close=Sockets(s, c2), judged=("open",) if ending == "late" else ("open", "closed"))
+
+
+for _ending in ("late", "peer-closes", "peer-resets"):
+    SCENARIOS["reread-after-hello-peer-" + _ending] = functools.partial(reread_hello, _ending)
+    SCENARIOS["client-key-then-page-twice-peer-" + _ending] = functools.partial(client_key_then_page_twice, _ending)
+
+
+# One file sent more than once
+
+@scenario("put-to-three-servers")
+def put_to_three_servers():
+    warm_up_peers(greeter=False)
+    mk("status.json", 3000)
+    socks = []
+    for i in range(3):
+        sink(PEER_PORT + i, "--mode", "http")
+    for i in range(3):
+        s = socket.create_connection(("127.0.0.1", PEER_PORT + i))
+        s.sendall(head(200, 3000) + readall(D + "/status.json"))
+        reply(s)
+        socks.append(s)
+
+    def three(agg):
+        n = len(agg.get("status.json", []))
+        return [] if n == 3 else ["status.json: %d of 3 connections reported" % n]
+    return Case("status.json (3000 B) PUT to three servers, each connection kept open: connect, read, send 3200 B, recv",
+                {"status.json": (3 * 0.9 * 3000, 3 * 1.1 * 3200 + 300)}, three, close=Sockets(*socks), judged=("closed",))
+
+
+@scenario("partial-send-then-whole-over-another-server")
+def partial_send_then_whole():
+    warm_up_peers(greeter=False)
+    mk("report.csv", 20000)
+    script_peer(PEER_PORT, "listen", "sleep:1.5,send:100,sleep:0.5,drain", "--rcvbuf", "2048")
+    sink(PEER_PORT + 1, "--mode", "http")
+    s1 = socket.socket()
+    s1.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    s1.connect(("127.0.0.1", PEER_PORT))
+    taken = sendcount(s1, head(200, 20000) + readall(D + "/report.csv"), "S1")
+    s1.recv(4096)
+    s2 = socket.create_connection(("127.0.0.1", PEER_PORT + 1))
+    s2.sendall(head(200, 20000) + readall(D + "/report.csv"))
+    reply(s2)
+
+    def two(agg):
+        n = len(agg.get("report.csv", []))
+        return [] if n == 2 else ["report.csv: %d of 2 connections reported" % n]
+    low = 0.9 * 20000 + 0.9 * taken if taken > 1500 else 0.9 * 20000
+    return Case("connect S1; read report.csv (20000 B); one non-blocking send takes part of 20200 B; recv S1; read it again; send 20200 B whole over S2",
+                {"report.csv": (low, 1.1 * (20200 + taken) + 300)}, two, close=Sockets(s1, s2))
+
+
+@scenario("file-read-twice-uploaded-twice")
+def file_read_twice_uploaded_twice():
+    warm_up_peers(greeter=False)
+    mk("report.csv", 20000)
+    sink(PEER_PORT, "--mode", "http")
+    s = socket.create_connection(("127.0.0.1", PEER_PORT))
+    for _ in range(2):
+        readall(D + "/report.csv")
+        s.sendall(head(200, 20000) + readall(D + "/report.csv"))
+        reply(s)
+    return Case("one connection; twice: read report.csv (a digest), read it again (the body), send 20200 B, recv",
+                {"report.csv": (0.9 * 40000, 1.1 * 40400 + 300)}, close=s)
+
+
+def partial_send_then_reads(second):
+    warm_up_peers(greeter=False)
+    mk("big.bin", 600000)
+    mk("page.tpl", 3000)
+    script_peer(PEER_PORT, "listen", "sleep:9,drain", "--rcvbuf", "32768")
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+    s.connect(("127.0.0.1", PEER_PORT))
+    taken = sendcount(s, readall(D + "/big.bin"), "S")
+    if second == "page":
+        lsock = listener(PEER_PORT + 2)
+        script_peer(PEER_PORT + 2, "connect", "send:200,recv:3000,sleep:0.3,send:200,recv:3000,sleep:3,close")
+        c2, _ = lsock.accept()
+        for _ in range(2):
+            c2.recv(65536)
+            readall(D + "/page.tpl")
+            c2.sendall(os.urandom(3000))
+        notes = "the thread serves page.tpl twice on S2 (recv, read, send 3000 B)"
+        close = Sockets(s, c2)
+    else:
+        readall(D + "/big.bin")
+        notes = "read big.bin again"
+        close = s
+    expect = {"big.bin": (0.9 * taken, 1.1 * taken + 300)} if taken else {}
+    return Case("connect S; read big.bin (600000 B); one non-blocking send takes part of it (%d B); %s" % (taken, notes), expect, close=close)
+
+
+SCENARIOS["partial-send-then-page-served-twice"] = functools.partial(partial_send_then_reads, "page")
+SCENARIOS["partial-send-then-file-read-again"] = functools.partial(partial_send_then_reads, "file")
+
+
+# A Java client
+
+@scenario("jvm-upload-20k")
+def jvm_upload():
+    if not shutil.which("java"):
+        return Case("a Java client posts a 20480 B file", skip="java is not installed")
+    warm_up_peers(greeter=False)
+    path = mk("upload.dat", 20480)
+    subprocess.run(["java", "/acceptance/Up.java", path, "http://127.0.0.1:%d/x" % BASE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+
+    def only_the_file(case, recs):
+        listed = {}
+        for r in recs:
+            f = (r.get("file") or {}).get("path")
+            if r["process"]["name"] == "java" and f:
+                listed[f] = listed.get(f, 0) + r["transfer"]["bytes_sent"]
+        for f, n in sorted(listed.items()):
+            print("  filetrace: %s %d B" % (f, n))
+        if not listed:
+            print("  filetrace: no file listed")
+        problems = ["%s reported (%d B) but not sent" % (f, n) for f, n in sorted(listed.items()) if f != path]
+        if path not in listed:
+            problems.append("upload.dat sent but not reported")
+        elif not 0.9 * 20480 <= listed[path] <= 1.05 * 20480:
+            problems.append("upload.dat reported with %d B, sent 20480 B" % listed[path])
+        return problems
+    return Case("a Java client (HttpURLConnection) reads upload.dat (20480 B) and posts it", judge=only_the_file)
+
 
 
 def main():
