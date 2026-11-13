@@ -1616,6 +1616,23 @@ else
         "[F] Files  [P] Processes  [N] Network  [?] Help  [Q] Quit"
 fi
 
+# The help of watch is whole on the least terminal, 57 columns and 24 rows: no line is cut at
+# the right edge, and the last one is on the screen.
+out=$("$workload" pty 57 24 "it started." 15 key:q "$work/watch-help.txt" "[Q] Quit" "key:?" -- \
+    "$bin/filetrace" --socket "$work/none.sock" watch)
+if [ "$(field "$out" pty)" = none ]; then
+    echo "SKIP: no pseudo-terminal could be opened; the watch help check did not run"
+else
+    expect "watch help: its last line on the screen" "$(field "$out" seen)" yes
+    expect "watch help: exit after q" "$(field "$out" status)" exit:0
+    expect "watch help: in place of the dashboard" "$(sed -n '1s/ *$//p' "$work/watch-help.txt")" KEYS
+    expect "watch help: a line as wide as the terminal" \
+        "$(grep -c -Fx '            read-write: a thread read the file then sent.' \
+            "$work/watch-help.txt")" 1
+    expect "watch help: 23 lines" \
+        "$(sed -n '23s/ *$//p' "$work/watch-help.txt")" "            it started."
+fi
+
 # A command that collects for itself shows files whatever mode the configuration file asks for.
 printf '[agent]\nmode = "minimal"\n' >"$work/minimal.toml"
 "$workload" steady "$data/session.bin" 8000000 6 >/dev/null &

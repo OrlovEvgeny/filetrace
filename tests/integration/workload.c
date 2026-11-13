@@ -3265,19 +3265,23 @@ static int open_terminal(size_t columns, size_t rows)
 }
 
 /*
- * pty <columns> <rows> <text> <seconds> <key:c|signal:NAME> [<screen file>] -- <command...>: runs
- * the command as the foreground job of a terminal of that size, waits up to the seconds for the
- * text on its screen, presses the key or sends the signal, and waits as long again for the command
- * to end. Then follows its children for up to 5 seconds. With a screen file, writes there what the
- * screen holds once the text has appeared and the output has paused, a line for each row.
+ * pty <columns> <rows> <text> <seconds> <key:c|signal:NAME> [<screen file> [<first text> <key:c>]]
+ * -- <command...>: runs the command as the foreground job of a terminal of that size, waits up to
+ * the seconds for the text on its screen, presses the key or sends the signal, and waits as long
+ * again for the command to end. Then follows its children for up to 5 seconds. With a screen file,
+ * writes there what the screen holds once the text has appeared and the output has paused, a line
+ * for each row. With a first text and its key, waits for that text and presses that key before
+ * anything else, and looks for the text in what the command draws after it.
  */
 static void scenario_pty(size_t columns, size_t rows, const char *text, size_t seconds,
-                         const char *action, const char *screen_file, char **command)
+                         const char *action, const char *screen_file, const char *first_text,
+                         const char *first_action, char **command)
 {
     constexpr uint64_t CHILDREN_WINDOW_MS = 5000;
     constexpr uint64_t PAUSE_MS = 200;
     constexpr size_t MAX_CHILDREN = 16;
     struct screen_text screen = {.text = text, .len = strlen(text)};
+    struct screen_text first = {.text = first_text, .len = first_text ? strlen(first_text) : 0};
     struct screen_cells cells = {.columns = columns, .rows = rows};
     struct screen_cells *grid = screen_file ? &cells : nullptr;
     struct descendant children[MAX_CHILDREN];
@@ -3291,6 +3295,11 @@ static void scenario_pty(size_t columns, size_t rows, const char *text, size_t s
         signo = signal_number(action + 7);
     if ((key < 0 && signo == 0) || screen.len == 0 || screen.len > sizeof(screen.tail)) {
         fprintf(stderr, "pty: invalid action '%s' or text '%s'\n", action, text);
+        exit(2);
+    }
+    if (first_text && (strncmp(first_action, "key:", 4) != 0 || strlen(first_action) != 5 ||
+                       first.len == 0 || first.len > sizeof(first.tail))) {
+        fprintf(stderr, "pty: invalid first key '%s' or text '%s'\n", first_action, first_text);
         exit(2);
     }
     if (grid) {
@@ -3322,6 +3331,12 @@ static void scenario_pty(size_t columns, size_t rows, const char *text, size_t s
 
     int status = 0;
     bool ended = false;
+    while (first_text && !first.seen && !ended && now_ms() - start < limit_ms) {
+        drain(master, &first, grid);
+        ended = reaped(pid, &status);
+    }
+    if (first.seen && !ended && write(master, &first_action[4], 1) != 1)
+        die("write");
     while (!screen.seen && !ended && now_ms() - start < limit_ms) {
         drain(master, &screen, grid);
         ended = reaped(pid, &status);
@@ -3637,10 +3652,13 @@ int main(int argc, char **argv)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "pty") == 0 && argc >= 9 && strcmp(argv[7], "--") == 0)
         scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
-                     nullptr, argv + 8);
+                     nullptr, nullptr, nullptr, argv + 8);
     else if (strcmp(name, "pty") == 0 && argc >= 10 && strcmp(argv[8], "--") == 0)
         scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
-                     argv[7], argv + 9);
+                     argv[7], nullptr, nullptr, argv + 9);
+    else if (strcmp(name, "pty") == 0 && argc >= 12 && strcmp(argv[10], "--") == 0)
+        scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
+                     argv[7], argv[8], argv[9], argv + 11);
     else {
         fprintf(stderr, "usage: %s <scenario> <arguments>\n", argv[0]);
         return 2;
