@@ -8,6 +8,7 @@
 /* Columns of the labels in the Inspect panel; the wide ones for the right half's facts. */
 constexpr int LABEL = 9;
 constexpr int WIDE_LABEL = 11;
+constexpr int NAME_LABEL = 16; /* "resolved names" */
 
 struct seg {
     const char *text;
@@ -394,6 +395,42 @@ static void process_transfers(struct inspect *in, const struct ft_top_transfer *
         more_line(d, x + 8, line_y(in, 4), in->right_w - 8, n - 2);
 }
 
+/* The remote end of a transfer and the names its process used for it, as inspect words them. */
+static void transfer_names(struct inspect *in, const struct ft_top_transfer *t)
+{
+    static const char *const from[] = {
+        [FT_NAME_SOURCE_LOOKUP] = "lookup",
+        [FT_NAME_SOURCE_TLS] = "TLS server name",
+        [FT_NAME_SOURCE_LOOKUP_TLS] = "lookup, TLS server name",
+    };
+    const struct ft_remote_names *n = t->names;
+    enum ft_name_source source = ft_remote_name_source(n);
+    struct ft_top_draw *d = in->d;
+    int x = in->right_x;
+    int w = in->right_w;
+    char text[FT_NAMES_TEXT_MAX + 64];
+    size_t used = 0;
+
+    const struct seg remote[] = {{t->remote_text, plain(ft_top_egress_color(t->is_public))}};
+    label_line(d, x, line_y(in, 1), w, NAME_LABEL, "remote", remote, 1);
+    ft_remote_name_format(n, text, sizeof(text));
+    const struct seg name[] = {{text, plain(FT_COLOR_BRIGHT)}};
+    label_line(d, x, line_y(in, 2), w, NAME_LABEL, "name", name, 1);
+    const struct seg source_segs[] = {{from[source], plain(FT_COLOR_TEXT)}};
+    label_line(d, x, line_y(in, 3), w, NAME_LABEL, "name from", source_segs, 1);
+
+    /* The looked-up names are listed where the name line does not already say them all. */
+    if (n->listed < 2 && !(source == FT_NAME_SOURCE_TLS && n->listed))
+        return;
+    for (uint32_t i = 0; i < n->listed && used < sizeof(text); i++)
+        used += (size_t)snprintf(text + used, sizeof(text) - used, "%s%s", i ? ", " : "",
+                                 n->resolved[i]);
+    if (n->count > n->listed && used < sizeof(text))
+        snprintf(text + used, sizeof(text) - used, " and %u more", n->count - n->listed);
+    const struct seg resolved[] = {{text, plain(FT_COLOR_TEXT)}};
+    label_line(d, x, line_y(in, 4), w, NAME_LABEL, "resolved names", resolved, 1);
+}
+
 static void inspect_process(struct inspect *in, const struct ft_top_process *p,
                             const struct ft_top_transfer *from)
 {
@@ -474,7 +511,10 @@ static void inspect_process(struct inspect *in, const struct ft_top_process *p,
     else
         label_line(d, lx, line_y(in, 5), lw, LABEL, "total", total_only, FT_ARRAY_LEN(total_only));
 
-    if (listed)
+    /* There is no room for both: the names of the inspected transfer take the transfers' place. */
+    if (from && from->names)
+        transfer_names(in, from);
+    else if (listed)
         process_transfers(in, p->transfers, p->ntransfers);
     else
         process_transfers(in, from ? &from : nullptr, from ? 1 : 0);
