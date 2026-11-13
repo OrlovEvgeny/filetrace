@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <limits.h>
 #include <sched.h>
@@ -4453,6 +4454,34 @@ static void copy_into(const char *from, const char *dir, char *to, size_t size)
     close(out);
 }
 
+/* This program's C library and loader, and the program itself. */
+struct own_libc {
+    char libc[4096];
+    char loader[4096];
+    char self[PATH_MAX];
+    char libc_copy[4096];
+    char loader_copy[4096];
+};
+
+static void find_libc(struct own_libc *c)
+{
+    ssize_t n = readlink("/proc/self/exe", c->self, sizeof(c->self) - 1);
+    if (n <= 0 || !mapped_path("libc.so", c->libc, sizeof(c->libc)) ||
+        !mapped_path("ld-linux", c->loader, sizeof(c->loader)))
+        die("no dynamic C library");
+    c->self[n] = '\0';
+}
+
+/* Runs the scenario through the loader copy, with the library copy beside it. */
+static void run_through(struct own_libc *c, const char *dir, char **args, int nargs)
+{
+    char *argv[16] = {c->loader_copy, "--library-path", (char *)dir, c->self};
+    for (int i = 0; i < nargs && i < 11; i++)
+        argv[4 + i] = args[i];
+    execv(c->loader_copy, argv);
+    die(c->loader_copy);
+}
+
 /*
  * privatelibc <dir> <scenario> [arguments]: in a mount namespace of its own, mounts a file system
  * at dir that holds copies of this program's C library and loader, and runs the scenario through
@@ -4460,31 +4489,35 @@ static void copy_into(const char *from, const char *dir, char *to, size_t size)
  */
 static void scenario_private_libc(const char *dir, char **args, int nargs)
 {
-    char libc[4096];
-    char loader[4096];
-    char self[PATH_MAX];
-    char libc_copy[4096];
-    char loader_copy[4096];
-
-    ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
-    if (n <= 0 || !mapped_path("libc.so", libc, sizeof(libc)) ||
-        !mapped_path("ld-linux", loader, sizeof(loader)))
-        die("no dynamic C library");
-    self[n] = '\0';
+    struct own_libc c;
+    find_libc(&c);
     if (unshare(CLONE_NEWNS) != 0)
         die("unshare");
     if (mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0)
         die("mount private");
     if (mount("tmpfs", dir, "tmpfs", 0, nullptr) != 0)
         die("mount tmpfs");
-    copy_into(libc, dir, libc_copy, sizeof(libc_copy));
-    copy_into(loader, dir, loader_copy, sizeof(loader_copy));
+    copy_into(c.libc, dir, c.libc_copy, sizeof(c.libc_copy));
+    copy_into(c.loader, dir, c.loader_copy, sizeof(c.loader_copy));
+    run_through(&c, dir, args, nargs);
+}
 
-    char *argv[16] = {loader_copy, "--library-path", (char *)dir, self};
-    for (int i = 0; i < nargs && i < 11; i++)
-        argv[4 + i] = args[i];
-    execv(loader_copy, argv);
-    die(loader_copy);
+/*
+ * sharedlibc <dir> <scenario> [arguments]: runs the scenario through copies of this program's C
+ * library and loader in dir, which the first run makes and later runs reuse.
+ */
+static void scenario_shared_libc(const char *dir, char **args, int nargs)
+{
+    struct own_libc c;
+    find_libc(&c);
+    const char *base = strrchr(c.loader, '/');
+    snprintf(c.loader_copy, sizeof(c.loader_copy), "%s/%s", dir, base ? base + 1 : c.loader);
+    /* The loader is copied last: once it is there, so is the library. */
+    if (access(c.loader_copy, X_OK) != 0) {
+        copy_into(c.libc, dir, c.libc_copy, sizeof(c.libc_copy));
+        copy_into(c.loader, dir, c.loader_copy, sizeof(c.loader_copy));
+    }
+    run_through(&c, dir, args, nargs);
 }
 
 /* waitsend <go> <name> <file>: once go exists, looks the name up and sends the file there. */
@@ -4509,6 +4542,42 @@ static void scenario_sleep_send(size_t ms, const char *name, const char *path)
     lookup(name, AF_UNSPEC, 0, &addr);
     send_to(&addr, path);
 }
+
+/*
+ * dlopensend <libc> <ms> <name> <file>: loads the C library file libc into a namespace of its own
+ * and, that many milliseconds later, looks the name up through it and sends the file there.
+ */
+#ifdef __GLIBC__
+static void scenario_dlopen_send(const char *libc, size_t ms, const char *name, const char *path)
+{
+    void *h = dlmopen(LM_ID_NEWLM, libc, RTLD_NOW);
+    if (!h)
+        die(libc);
+    int (*resolve)(const char *, const char *, const struct addrinfo *, struct addrinfo **) =
+        (int (*)(const char *, const char *, const struct addrinfo *, struct addrinfo **))dlsym(
+            h, "getaddrinfo");
+    void (*release)(struct addrinfo *) = (void (*)(struct addrinfo *))dlsym(h, "freeaddrinfo");
+    if (!resolve || !release)
+        die("dlsym");
+    struct timespec pause = {.tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000};
+    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {
+    }
+    struct addrinfo hints = {.ai_socktype = SOCK_STREAM};
+    struct addrinfo *res;
+    if (resolve(name, nullptr, &hints, &res) != 0)
+        die("getaddrinfo");
+    struct sockaddr_storage addr = {0};
+    memcpy(&addr, res->ai_addr, res->ai_addrlen);
+    release(res);
+    send_to(&addr, path);
+}
+#else
+/* Only glibc loads a second copy of a C library into a namespace of its own. */
+static void scenario_dlopen_send(const char *, size_t, const char *, const char *)
+{
+    printf("scenario=dlopensend loaded=unsupported\n");
+}
+#endif
 
 /* lookupwait <name> <file> <go>: looks the name up, then sends the file once go exists. */
 static void scenario_lookup_wait(const char *name, const char *path, const char *go)
@@ -4758,6 +4827,8 @@ int main(int argc, char **argv)
         scenario_partial_send(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "partialsendfile") == 0 && argc == 4)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "dlopensend") == 0 && argc == 6)
+        scenario_dlopen_send(argv[2], arg_size(argv[3]), argv[4], argv[5]);
     else if (strcmp(name, "sleepsend") == 0 && argc == 5)
         scenario_sleep_send(arg_size(argv[2]), argv[3], argv[4]);
     else if (strcmp(name, "lookupsend") == 0 && (argc == 5 || argc == 6))
@@ -4782,6 +4853,8 @@ int main(int argc, char **argv)
         scenario_wait_send(argv[2], argv[3], argv[4]);
     else if (strcmp(name, "privatelibc") == 0 && argc >= 4)
         scenario_private_libc(argv[2], argv + 3, argc - 3);
+    else if (strcmp(name, "sharedlibc") == 0 && argc >= 4)
+        scenario_shared_libc(argv[2], argv + 3, argc - 3);
     else if (strcmp(name, "pty") == 0 && argc >= 9 && strcmp(argv[7], "--") == 0)
         scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
                      nullptr, nullptr, nullptr, argv + 8);
