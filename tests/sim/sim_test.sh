@@ -115,6 +115,10 @@ ok "the name filter leaves what has the name" grep -q '"remote_name":"pg-backups
 ok "the name filter leaves nothing else" test "$(grep -vc '"remote_name":"pg-backups.s3.example.com"' named.jsonl)" -eq 0
 ok "an unknown name lists nothing" query unnamed.txt files --remote none.example.com --format quiet
 ok "nothing is listed for it" test ! -s unnamed.txt
+ok "raw events are listed" query events.raw events --type socket_connect --remote 'mirror-*' --limit 1 --raw
+ok "a raw event names its remote end" grep -Eq ' remote_port=873 remote_name=mirror-[12]\.internal bytes=' events.raw
+ok "raw events without a name are listed" query bare.raw events --type network_send --process nginx --limit 1 --raw
+ok "a raw event without a name keeps the field" grep -Eq ' remote_port=[0-9]+ remote_name=- bytes=' bare.raw
 
 
 ok "top prints a snapshot" query top.txt top --once

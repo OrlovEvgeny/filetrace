@@ -164,13 +164,14 @@ static void print_raw(FILE *o, const struct ft_row_event *e)
     fprintf(o,
             "seq=%" PRIu64 " time_ns=%" PRIu64 " type=%s pid=%" PRIu32 " ppid=%" PRIu32
             " uid=%" PRIu32 " comm=%s exit_status=%d socket=%" PRIu64 " protocol=%u"
-            " local_ip=%s local_port=%u remote_ip=%s remote_port=%u bytes=%" PRIu64
+            " local_ip=%s local_port=%u remote_ip=%s remote_port=%u remote_name=%s bytes=%" PRIu64
             " bytes_read=%" PRIu64 " device=%" PRIu64 " inode=%" PRIu64 " file_size=%" PRIu64
             " method=%u confidence=%u loss_kind=%u flags=%u text=%s\n",
             e->seq, e->time_ns, ft_record_type_name((enum ft_record_type)e->type), e->pid, e->ppid,
             e->uid, e->comm[0] ? e->comm : "-", e->exit_status, e->sock_id, e->proto, local,
-            e->local.port, remote, e->remote.port, e->bytes, e->read_bytes, e->dev, e->ino,
-            e->file_size, e->method, e->confidence, e->loss_kind, e->flags, e->text);
+            e->local.port, remote, e->remote.port, e->name_source ? ft_row_event_name(e) : "-",
+            e->bytes, e->read_bytes, e->dev, e->ino, e->file_size, e->method, e->confidence,
+            e->loss_kind, e->flags, e->text);
 }
 
 static void json_member(FILE *o, const char *key, const char *value)
