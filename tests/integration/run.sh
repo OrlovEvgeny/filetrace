@@ -148,6 +148,22 @@ expect "doctor exit code" "$doctor" 0
 expect_match "doctor lists the iterator that judges quiet windows" \
     "$(grep 'iter bpf_map_elem' "$work/doctor.txt")" '\[OK\] iter bpf_map_elem$'
 
+# Return probes, which the PHP probes use, are tested at start in a process under a seccomp
+# filter that refuses the uretprobe system call. An architecture whose kernel returns from them
+# without a system call needs no test; on request it runs anyway.
+seccomp_survived='AVAILABLE \(a process whose seccomp filter refuses the uretprobe system call survived one\)'
+seccomp_killed='LIMITED \(return probes kill processes under seccomp on this kernel'
+if [ "$(uname -m)" = x86_64 ]; then
+    expect_match "return probes: doctor" "$(grep 'Return probes:' "$work/doctor.txt")" \
+        "Return probes: +($seccomp_survived|$seccomp_killed)"
+else
+    expect_match "return probes: doctor" "$(grep 'Return probes:' "$work/doctor.txt")" \
+        'Return probes: +AVAILABLE \(this architecture returns from them without a system call\)'
+    expect_match "return probes: the test where none is needed" \
+        "$(FILETRACE_TEST_RETURN_PROBES=run "$bin/filetrace" doctor --probes "$probes" |
+            grep 'Return probes:')" "Return probes: +$seccomp_survived"
+fi
+
 start_agent || { echo "FAIL: the agent did not start"; exit 1; }
 
 expect "agent status exit code" "$(ft agent status >/dev/null; echo $?)" 0
@@ -1436,6 +1452,68 @@ if [ -n "$fpm" ] && command -v cgi-fcgi >/dev/null 2>&1; then
     php_fpm_stop
     stop_agent
     expect "php off agent exit code" "$?" 0
+
+    # Where return probes kill processes under seccomp, neither PHP probe is attached and the log
+    # and doctor say why; the setting attaches them anyway. With the PHP probes off, the test
+    # does not run.
+    # php_agent <log> [arguments]: an agent with its log at info level in the given file.
+    php_agent() {
+        log=$1
+        shift
+        "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms --log-level info \
+            --probes "$probes" "$@" 2>"$log" &
+        agent_pid=$!
+        i=0
+        while [ ! -S "$sock" ] && [ $i -lt 100 ]; do
+            sleep 0.1
+            i=$((i + 1))
+        done
+    }
+    FILETRACE_TEST_RETURN_PROBES=unsafe
+    export FILETRACE_TEST_RETURN_PROBES
+    php_agent "$work/unsafe.err"
+    head -c 300000 /dev/urandom >"$data/php-unsafe.bin"
+    php_fpm_start || { echo "FAIL: php-fpm did not start"; exit 1; }
+    php_request upload.php "$data/php-unsafe.bin"
+    settle
+    expect "unsafe return probes: the pool, not the script" \
+        "$(ft files --path "$data/php-unsafe.bin" --format csv | column process.script)" pool:ft
+    expect "unsafe return probes: no PHP probe" "$(grep -c 'probing PHP requests' "$work/unsafe.err")" \
+        0
+    expect_match "unsafe return probes: logged" "$(cat "$work/unsafe.err")" \
+        'warn: return probes kill processes under seccomp on this kernel.*update the kernel.*the PHP probes are not attached'
+    expect_match "unsafe return probes: doctor" "$(ft doctor | grep 'Return probes:')" \
+        "Return probes: +$seccomp_killed.*update the kernel; the agent attaches the PHP probes here only with \\[process\\] force_return_probes"
+    expect "unsafe return probes: doctor exit code" \
+        "$("$bin/filetrace" doctor --probes "$probes" >/dev/null 2>&1; echo $?)" 0
+    php_fpm_stop
+    stop_agent
+    expect "unsafe return probes: agent exit code" "$?" 0
+
+    printf '[process]\nforce_return_probes = true\n' >"$work/forced.toml"
+    php_agent "$work/forced.err" --config "$work/forced.toml"
+    head -c 300000 /dev/urandom >"$data/php-forced.bin"
+    php_fpm_start || { echo "FAIL: php-fpm did not start"; exit 1; }
+    php_request upload.php "$data/php-forced.bin"
+    settle
+    expect "forced return probes: the request script" \
+        "$(ft files --path "$data/php-forced.bin" --format csv | column process.script)" \
+        "$work/php/upload.php"
+    expect_match "forced return probes: probed" "$(cat "$work/forced.err")" 'probing PHP requests in'
+    expect_match "forced return probes: what it costs is logged" "$(cat "$work/forced.err")" \
+        'warn: return probes kill processes under seccomp on this kernel.*force_return_probes attaches the PHP probes all the same, so a PHP process under a seccomp filter is killed'
+    expect "forced return probes: nothing refused" \
+        "$(grep -c 'are not attached' "$work/forced.err")" 0
+    php_fpm_stop
+    stop_agent
+    expect "forced return probes: agent exit code" "$?" 0
+
+    php_agent "$work/no-php.err" --config "$work/no-php.toml"
+    expect "php off: no test of return probes" \
+        "$(grep -c 'return probes\|probing PHP' "$work/no-php.err")" 0
+    stop_agent
+    expect "php off with a refusal forced: agent exit code" "$?" 0
+    unset FILETRACE_TEST_RETURN_PROBES
 fi
 
 # Without arguments a command line keeps only the program; the script is still named.
