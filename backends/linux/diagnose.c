@@ -52,8 +52,42 @@ static const char *group_problem(const struct ft_linux_probes *p, enum ft_probe_
     return nullptr;
 }
 
+static void name_capability(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
+                            const struct ft_backend_stats *libraries, struct ft_capabilities *out)
+{
+    const char *tls = "TLS server names are not read";
+
+    if (cfg->mode < FT_MODE_STANDARD) {
+        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_DISABLED, "%s",
+                          "disabled in minimal mode");
+    } else if (!cfg->lookup_names) {
+        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_DISABLED, "%s",
+                          "turned off in the configuration");
+    } else if (!ft_sysinfo_host_pid_namespace()) {
+        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_UNAVAILABLE, "%s",
+                          "the agent is not in the host's PID namespace, where it finds the C "
+                          "libraries processes map");
+    } else if (!p->lookups) {
+        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_UNAVAILABLE,
+                          "the kernel refused the probes of getaddrinfo: %s",
+                          error_text(p->lookups_error));
+    } else if (!libraries) {
+        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL,
+                          "lookups are probed in the C libraries processes map; %s", tls);
+    } else {
+        char cut[96] = "";
+        if (libraries->name_libraries_configured > libraries->name_library_capacity)
+            snprintf(cut, sizeof(cut), "; the open file limit holds no more than %llu",
+                     (unsigned long long)libraries->name_library_capacity);
+        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL,
+                          "lookups probed in %llu %s%s; %s",
+                          (unsigned long long)libraries->name_libraries,
+                          libraries->name_libraries == 1 ? "library" : "libraries", cut, tls);
+    }
+}
+
 void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
-                           struct ft_capabilities *out)
+                           const struct ft_backend_stats *libraries, struct ft_capabilities *out)
 {
     char why[240];
     const char *problem;
@@ -164,6 +198,7 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_back
     ft_capability_set(out, FT_FEAT_NAMESPACES, FT_CAP_PARTIAL,
                       "cgroup and namespace identifiers are recorded per process; "
                       "container names are not resolved");
+    name_capability(p, cfg, libraries, out);
 }
 
 static bool lockdown_blocks_reads(void)
@@ -328,7 +363,7 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     bool have_network = ft_linux_network_attached(&probes);
     bool kprobes = probes.set->kind == FT_PROBES_KPROBE;
 
-    ft_linux_capabilities(&probes, &cfg, &out->caps);
+    ft_linux_capabilities(&probes, &cfg, nullptr, &out->caps);
     snprintf(out->backend, sizeof(out->backend), "Linux eBPF (%s)",
              kprobes ? "kprobes" : "trampolines");
     ft_linux_probes_unload(&probes);

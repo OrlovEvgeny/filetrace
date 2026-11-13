@@ -21,6 +21,7 @@ static const struct {
     [FT_FEAT_MMAP] = {"Mmap provenance", "mmap_provenance"},
     [FT_FEAT_PACKET_EGRESS] = {"Packet-level egress", "packet_level_egress"},
     [FT_FEAT_NAMESPACES] = {"Container namespaces", "container_namespaces"},
+    [FT_FEAT_DESTINATION_NAMES] = {"Destination names", "destination_names"},
 };
 
 const char *ft_feature_title(enum ft_feature f)

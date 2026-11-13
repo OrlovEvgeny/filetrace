@@ -72,8 +72,9 @@ const char *ft_linux_last_libbpf_message(void);
 bool ft_linux_group_attached(const struct ft_linux_probes *p, enum ft_probe_group group);
 bool ft_linux_network_attached(const struct ft_linux_probes *p);
 
+/* libraries: the agent's counts of library files probed for names; nullptr when it has none. */
 void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
-                           struct ft_capabilities *out);
+                           const struct ft_backend_stats *libraries, struct ft_capabilities *out);
 
 void ft_linux_diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *out);
 
