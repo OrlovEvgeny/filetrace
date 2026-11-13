@@ -828,6 +828,9 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev)
         if (ingest_loss(st, ev))
             record_loss(st, ev);
         break;
+    case FT_EVENT_NAME_LOOKUP:
+    case FT_EVENT_TLS_NAME:
+        break;
     }
 }
 
