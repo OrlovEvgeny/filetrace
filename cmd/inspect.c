@@ -242,16 +242,22 @@ static void provenance_json(FILE *o, const struct transfer_summary *sum)
 }
 
 static const struct ft_view_column history_columns[] = {
-    {"TIME", "transfer.started", false},    {"PROCESS", "process.name", false},
-    {"PID", "process.pid", false},          {"REMOTE", "@remote", false},
-    {"BYTES", "transfer.bytes_sent", true}, {"METHOD", "@method", false},
-    {"CONFIDENCE", "@confidence", false},   {"SCRIPT", "process.script", false},
+    {"TIME", "transfer.started", false},
+    {"PROCESS", "process.name", false},
+    {"PID", "process.pid", false},
+    {"REMOTE", "@remote", false},
+    {"NAME", "@name", false},
+    {"BYTES", "transfer.bytes_sent", true},
+    {"METHOD", "@method", false},
+    {"CONFIDENCE", "@confidence", false},
+    {"SCRIPT", "process.script", false},
 };
 
 static const struct ft_view_column sent_columns[] = {
     {"FILE", "@file", false},
     {"PROCESS", "process.name", false},
     {"REMOTE", "@remote", false},
+    {"NAME", "@name", false},
     {"BYTES", "transfer.bytes_sent", true},
     {"METHOD", "@method", false},
     {"CONFIDENCE", "@confidence", false},
@@ -673,11 +679,41 @@ static void endpoints(FILE *o, uint16_t proto, const struct ft_endpoint *local,
     field(o, "Remote:", "%s", remote->family || remote->port ? a : "*");
 }
 
+/* What is known of the remote end's names; nothing for one without a name. */
+static void names(FILE *o, const struct ft_remote_names *n)
+{
+    static const char *const from[] = {
+        [FT_NAME_SOURCE_LOOKUP] = "lookup",
+        [FT_NAME_SOURCE_TLS] = "TLS server name",
+        [FT_NAME_SOURCE_LOOKUP_TLS] = "lookup, TLS server name",
+    };
+    enum ft_name_source source = ft_remote_name_source(n);
+    char text[FT_NAMES_TEXT_MAX + 64];
+    size_t used = 0;
+
+    if (source == FT_NAME_SOURCE_NONE)
+        return;
+    ft_remote_name_format(n, text, sizeof(text));
+    field(o, "Name:", "%s", text);
+    field(o, "Name from:", "%s", from[source]);
+
+    /* The looked-up names are listed where the name line does not already say them all. */
+    if (n->listed < 2 && !(source == FT_NAME_SOURCE_TLS && n->listed))
+        return;
+    for (uint32_t i = 0; i < n->listed && used < sizeof(text); i++)
+        used += (size_t)snprintf(text + used, sizeof(text) - used, "%s%s", i ? ", " : "",
+                                 n->resolved[i]);
+    if (n->count > n->listed && used < sizeof(text))
+        snprintf(text + used, sizeof(text) - used, " and %u more", n->count - n->listed);
+    field(o, "Resolved names:", "%s", text);
+}
+
 static const struct ft_view_column flow_columns[] = {
     {"FLOW", "flow_id", false},
     {"PID", "pid", false},
     {"PROCESS", "process", false},
     {"REMOTE", "@remote", false},
+    {"NAME", "@name", false},
     {"SENT", "bytes_sent", true},
     {"RECEIVED", "bytes_received", true},
     {"OUTBOUND", "bytes_sent_per_second", true},
@@ -689,6 +725,7 @@ static int inspect_socket(struct inspect *in, const char *arg)
     struct ft_rows flows = {0};
     struct ft_rows transfers = {0};
     struct ft_row_connection c;
+    struct ft_remote_names remote_names;
     struct ft_query q;
     FILE *o = in->out.stream;
     uint64_t id;
@@ -740,6 +777,8 @@ static int inspect_socket(struct inspect *in, const char *arg)
     section(o, "SOCKET");
     field(o, "ID:", "%" PRIu64, c.sock_id);
     endpoints(o, c.proto, &c.local, &c.remote);
+    ft_row_connection_names(&c, &remote_names);
+    names(o, &remote_names);
     ft_strlcpy(a, ft_sock_state_name((enum ft_sock_state)c.state), sizeof(a));
     field(o, "State:", "%s", a);
     if (c.pid)
@@ -773,6 +812,7 @@ static int inspect_flow(struct inspect *in, const char *arg)
     struct ft_rows flows;
     struct ft_rows transfers = {0};
     struct ft_row_flow f;
+    struct ft_remote_names remote_names;
     struct ft_query q;
     FILE *o = in->out.stream;
     uint64_t id;
@@ -814,6 +854,8 @@ static int inspect_flow(struct inspect *in, const char *arg)
     field(o, "ID:", "%" PRIu64, f.id);
     field(o, "Socket:", "%" PRIu64, f.sock_id);
     endpoints(o, f.proto, &f.local, &f.remote);
+    ft_row_flow_names(&f, &remote_names);
+    names(o, &remote_names);
     field(o, "Process:", "%s (PID %" PRIu32 ")", f.comm[0] ? f.comm : "-", f.pid);
     times(o, f.first_wall_ns, f.last_wall_ns, 0);
     traffic(o, f.tx_bytes, f.rx_bytes, f.tx_rate, f.rx_rate);
