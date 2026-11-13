@@ -44,6 +44,7 @@ static const struct ft_probe_def trampoline_defs[] = {
     {"ft_vfs_read", "vfs_read", "fexit", 4, FT_PG_FILE_READ, FT_MODE_STANDARD},
     {"ft_splice_direct", "do_splice_direct", "fexit", 6, FT_PG_SENDFILE, FT_MODE_STANDARD},
     {"ft_destroy_inode", "__destroy_inode", "fentry", 1, FT_PG_FILE_END, FT_MODE_STANDARD},
+    {"ft_mapped_file", "security_mmap_file", "fentry", 3, FT_PG_MAPPED, FT_MODE_STANDARD},
 };
 
 static const struct ft_probe_def kprobe_defs[] = {
@@ -60,6 +61,7 @@ static const struct ft_probe_def kprobe_defs[] = {
     {"ft_vfs_read", "vfs_read", "kprobe", 4, FT_PG_FILE_READ, FT_MODE_STANDARD},
     {"ft_splice_direct", "do_splice_direct", "kprobe", 6, FT_PG_SENDFILE, FT_MODE_STANDARD},
     {"ft_destroy_inode", "__destroy_inode", "kprobe", 1, FT_PG_FILE_END, FT_MODE_STANDARD},
+    {"ft_mapped_file", "security_mmap_file", "kprobe", 3, FT_PG_MAPPED, FT_MODE_STANDARD},
 };
 
 static_assert(FT_ARRAY_LEN(trampoline_defs) <= FT_LINUX_MAX_PROBES);
@@ -165,6 +167,13 @@ static uint32_t round_up_pow2(uint32_t v, uint32_t min)
     return p;
 }
 
+/* Some library is probed for what processes do through it, which needs their /proc entries. */
+static bool prober_wanted(const struct ft_backend_config *cfg)
+{
+    return (cfg->lookup_names || cfg->php_scripts || cfg->tls_names) &&
+           cfg->mode >= FT_MODE_STANDARD && ft_sysinfo_host_pid_namespace();
+}
+
 static bool probe_wanted(const struct ft_probe_def *def, const struct ft_backend_config *cfg)
 {
     if (cfg->mode < def->min_mode)
@@ -176,6 +185,8 @@ static bool probe_wanted(const struct ft_probe_def *def, const struct ft_backend
         return cfg->track_sendfile;
     case FT_PG_FILE_END:
         return cfg->track_read || cfg->track_sendfile;
+    case FT_PG_MAPPED:
+        return prober_wanted(cfg);
     default:
         return true;
     }
@@ -188,6 +199,16 @@ static bool enabled_file_probes(const struct ft_probe_set *set,
     for (size_t i = 0; i < set->count; i++) {
         if (enabled[i] &&
             (set->defs[i].group == FT_PG_FILE_READ || set->defs[i].group == FT_PG_SENDFILE))
+            return true;
+    }
+    return false;
+}
+
+static bool group_enabled(const struct ft_probe_set *set, const bool enabled[FT_LINUX_MAX_PROBES],
+                          enum ft_probe_group group)
+{
+    for (size_t i = 0; i < set->count; i++) {
+        if (enabled[i] && set->defs[i].group == group)
             return true;
     }
     return false;
@@ -271,8 +292,8 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
     bpf_cfg->wakeup_bytes = queue / 4;
     bpf_cfg->file_corr = cfg->mode >= FT_MODE_STANDARD && enabled_file_probes(set, enabled);
-    bpf_cfg->exec_wakeup = (cfg->lookup_names || cfg->php_scripts || cfg->tls_names) &&
-                           cfg->mode >= FT_MODE_STANDARD && ft_sysinfo_host_pid_namespace();
+    bpf_cfg->mapped_files = group_enabled(set, enabled, FT_PG_MAPPED);
+    bpf_cfg->exec_wakeup = prober_wanted(cfg);
     bpf_map__set_max_entries(events, queue);
     bpf_map__set_max_entries(agg_a, cfg->agg_entries);
     bpf_map__set_max_entries(agg_b, cfg->agg_entries);
@@ -395,6 +416,12 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
             if (nargs >= 0 && nargs != def->nargs) {
                 enabled[i] = false;
                 out->status[i].state = FT_PROBE_MISMATCH;
+                continue;
+            }
+            /* A kernel built without security modules has no such hook to report mappings at. */
+            if (nargs < 0 && def->group == FT_PG_MAPPED) {
+                enabled[i] = false;
+                out->status[i] = (struct ft_probe_status){FT_PROBE_LOAD_FAILED, ENOENT};
                 continue;
             }
         }

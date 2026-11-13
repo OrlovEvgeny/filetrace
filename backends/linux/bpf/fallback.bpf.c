@@ -605,6 +605,13 @@ int BPF_KPROBE(ft_destroy_inode, struct inode *inode)
     return 0;
 }
 
+SEC("kprobe/security_mmap_file")
+int BPF_KPROBE(ft_mapped_file, struct file *file, unsigned long prot)
+{
+    mapped_file(file, prot);
+    return 0;
+}
+
 struct udp_ports {
     __be16 source;
     __be16 dest;

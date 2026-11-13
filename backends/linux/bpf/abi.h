@@ -23,6 +23,7 @@ enum ft_bpf_event_kind {
     FT_BPF_EV_SCRIPT = 6,
     FT_BPF_EV_LOOKUP = 7,
     FT_BPF_EV_TLS_NAME = 8,
+    FT_BPF_EV_MAPPED = 9,
 };
 
 struct ft_bpf_ev_hdr {
@@ -247,12 +248,31 @@ struct ft_bpf_program_key {
 
 #define FT_BPF_QUIET_MAX 256
 
+/* A file as the kernel names it: device in the kernel's encoding, inode number, generation. */
+struct ft_bpf_file_key {
+    __u64 ino;
+    __u32 dev;
+    __u32 gen;
+};
+
+/* Files reported mapped: a host's executables and libraries fit many times over. */
+#define FT_BPF_MAPPED_MAX 16384
+
+/* A process maps an executable file no process was reported mapping before. */
+struct ft_bpf_ev_mapped {
+    struct ft_bpf_ev_hdr hdr;
+    __u32 pid;
+    __u32 pad;
+    struct ft_bpf_file_key file;
+};
+
 struct ft_bpf_cfg {
     __u64 corr_window_ns;
     __u64 wakeup_bytes; /* consumer is woken once this much data is queued */
     __u8 file_corr;
-    __u8 exec_wakeup; /* a program starting wakes the consumer, which looks at it promptly */
-    __u8 pad[6];
+    __u8 exec_wakeup;  /* a program starting wakes the consumer, which looks at it promptly */
+    __u8 mapped_files; /* the first mapping of an executable file is reported */
+    __u8 pad[5];
 };
 
 #endif

@@ -163,6 +163,14 @@ struct {
     __type(value, struct known_file);
 } known_files SEC(".maps");
 
+/* The executable files reported mapped; the agent takes out one whose probes it lacks. */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, FT_BPF_MAPPED_MAX);
+    __type(key, struct ft_bpf_file_key);
+    __type(value, __u8);
+} mapped_files SEC(".maps");
+
 /*
  * What a connection sends that cannot be told from what it opens with, held back until it can:
  * - FLIGHT: the socket had heard nothing from its peer, so the bytes may be a TLS ClientHello
@@ -409,6 +417,40 @@ static __always_inline __u64 exec_wake_flags(const struct ft_bpf_ev_exec *e)
         return wake_flags();
     exec_woken_ns = now;
     return BPF_RB_FORCE_WAKEUP;
+}
+
+#define PROT_EXEC 0x4
+
+/* Reports the first mapping of an executable file, while the process that maps it is there. */
+static __always_inline void mapped_file(struct file *file, unsigned long prot)
+{
+    if (!cfg.mapped_files || !file || !(prot & PROT_EXEC))
+        return;
+    struct inode *inode = FT_READ(file, f_inode);
+    struct super_block *sb = FT_READ(inode, i_sb);
+    struct ft_bpf_file_key key = {
+        .ino = FT_READ(inode, i_ino),
+        .dev = FT_READ(sb, s_dev),
+        .gen = FT_READ(inode, i_generation),
+    };
+    __u8 one = 1;
+    if (bpf_map_lookup_elem(&mapped_files, &key) ||
+        bpf_map_update_elem(&mapped_files, &key, &one, BPF_NOEXIST))
+        return;
+    struct ft_bpf_ev_mapped *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e) {
+        /* Not reported: the next mapping tries again. */
+        bpf_map_delete_elem(&mapped_files, &key);
+        count(FT_BPF_CNT_RING_FULL);
+        return;
+    }
+    e->hdr.ts_ns = bpf_ktime_get_boot_ns();
+    e->hdr.kind = FT_BPF_EV_MAPPED;
+    e->hdr.pad = 0;
+    e->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+    e->pad = 0;
+    e->file = key;
+    bpf_ringbuf_submit(e, BPF_RB_FORCE_WAKEUP);
 }
 
 static __always_inline void fill_proc(struct ft_bpf_ev_proc *e, struct task_struct *task,
@@ -1995,6 +2037,10 @@ static __always_inline void forget_file(struct inode *inode)
         .dev = FT_READ(sb, s_dev),
         .gen = FT_READ(inode, i_generation),
     };
+    /* A file mapped again after this is reported again, under whichever inode it has then. */
+    struct ft_bpf_file_key mk = {.ino = fk.ino, .dev = fk.dev, .gen = fk.gen};
+    bpf_map_delete_elem(&mapped_files, &mk);
+
     struct known_file *known = bpf_map_lookup_elem(&known_files, &fk);
     /* The identity went to a newer inode, whose entry this is. */
     bool own = known && (known->inode == (__u64)inode || !known->inode);
