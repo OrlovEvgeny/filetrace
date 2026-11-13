@@ -398,6 +398,45 @@ static void background_paths_default_to_shared_files(void)
     ft_config_free(cfg);
 }
 
+static bool background_by_default(const struct ft_backend_config *backend, const char *path)
+{
+    for (size_t i = 0; i < backend->background_path_count; i++) {
+        if (ft_glob_match(backend->background_paths[i], path))
+            return true;
+    }
+    return false;
+}
+
+/* What a JVM reads from its own installation as classes load is background where JDKs live. */
+static void background_paths_default_to_jdk_files(void)
+{
+    struct ft_config *cfg = ft_config_new();
+    ft_config_finish(cfg);
+    const struct ft_backend_config *backend = &cfg->agent.backend_cfg;
+    static const char *const jdk[] = {
+        "/usr/lib/jvm/java-21-openjdk-amd64/lib/modules",
+        "/usr/lib/jvm/java-21-openjdk-amd64/lib/libnet.so",
+        "/usr/lib/jvm/java-21-openjdk-amd64/lib/server/classes.jsa",
+        "/etc/java-21-openjdk/net.properties",
+        "/etc/java21-openjdk/security/java.security",
+        "/etc/java/java-17-openjdk/java-17-openjdk-17.0.13.0.11-3.el9.x86_64/conf/net.properties",
+        "/usr/lib64/jvm/java-17-openjdk-17/lib/libextnet.so",
+        "/opt/java/openjdk/lib/libextnet.so",
+        "/opt/java/openjdk/conf/net.properties",
+        "/usr/local/openjdk-17/lib/libnio.so",
+        "/usr/java/openjdk-22/lib/modules",
+        "/root/.sdkman/candidates/java/21.0.5-tem/lib/modules",
+        "/srv/app/runtime/lib/server/classes.jsa",
+        "/srv/app/runtime/lib/libnet.so",
+        "/srv/app/runtime/conf/security/java.security",
+    };
+    for (size_t i = 0; i < FT_ARRAY_LEN(jdk); i++)
+        CHECK(background_by_default(backend, jdk[i]));
+    CHECK(!background_by_default(backend, "/home/dev/build/lib/libfoo.so"));
+    CHECK(!background_by_default(backend, "/opt/app/lib/libapp.so"));
+    ft_config_free(cfg);
+}
+
 /* PHP binaries are probed unless the setting turns it off. */
 static void php_scripts_can_be_turned_off(void)
 {
@@ -433,6 +472,7 @@ void test_config(void)
     reports_what_is_wrong();
     prints_what_it_reads();
     background_paths_default_to_shared_files();
+    background_paths_default_to_jdk_files();
     php_scripts_can_be_turned_off();
     return_probes_can_be_forced();
 }
