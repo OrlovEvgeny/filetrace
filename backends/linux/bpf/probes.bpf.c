@@ -10,6 +10,11 @@ static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
     return BPF_CORE_READ((struct sock *)sk, sk_write_pending) > 0;
 }
 
+static __always_inline __u64 sock_cookie(__u64 sk)
+{
+    return (__u64)BPF_CORE_READ((struct sock *)sk, __sk_common.skc_cookie.counter);
+}
+
 SEC("tp_btf/inet_sock_set_state")
 int BPF_PROG(ft_sock_state, struct sock *sk, int oldstate, int newstate)
 {

@@ -267,6 +267,12 @@ static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
     return FT_READ((struct sock *)sk, sk_write_pending) > 0;
 }
 
+static __always_inline __u64 sock_cookie(__u64 sk)
+{
+    struct sock_track *t = bpf_map_lookup_elem(&socks, &sk);
+    return t ? t->id : 0;
+}
+
 /* Returns whether the receiver has consumed anything since the socket was last looked at. */
 static __always_inline bool tcp_settle_rx(void *map, struct sock *sk, struct sock_track *t,
                                           __u32 tgid, __u64 now)
