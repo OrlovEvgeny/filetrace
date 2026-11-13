@@ -1699,7 +1699,14 @@ TMPL
             echo "SKIP: this C library has no dlopen for the TLS client;" \
                 "the late TLS library check did not run"
         else
-            settle
+            # The handshake follows the load at once, so the run whose mapping gets the copy
+            # probed may go unnamed itself; a later one, loading it two seconds in as well, is not.
+            i=0
+            while settle && [ "$(tls_source_of late.ft.test)" != tls ] && [ $i -lt 2 ]; do
+                "$dynamic" tlsconnect 2000 127.0.0.1 "$tls_port" late.ft.test \
+                    "$data/tls-late.bin" "$work/ssl-late/libssl.so.3" >/dev/null
+                i=$((i + 1))
+            done
             expect "names: a TLS library loaded two seconds in" "$(tls_source_of late.ft.test)" \
                 tls
         fi
