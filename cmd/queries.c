@@ -862,7 +862,12 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
                 ft_format_count(s->name_libraries.capacity, b, sizeof(b));
                 fprintf(o, "%-18s%s of %s, ", "Name libraries:", a, b);
                 ft_format_count(s->name_libraries_configured, a, sizeof(a));
-                fprintf(o, "not the %s configured: the open file limit holds no more\n", a);
+                fprintf(o, "not the %s configured: the open file limit holds no more", a);
+                if (s->name_libraries.evictions) {
+                    ft_format_count(s->name_libraries.evictions, a, sizeof(a));
+                    fprintf(o, " (%s forgotten)", a);
+                }
+                fputc('\n', o);
             } else if (s->name_libraries.capacity) {
                 usage_line(o, "Name libraries:", &s->name_libraries);
             }

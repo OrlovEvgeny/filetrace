@@ -970,6 +970,7 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
     out->name_libraries = ft_linux_prober_count(b->prober, b->lookup_kind);
     out->name_library_capacity = b->lookup_capacity;
     out->name_libraries_configured = b->lookup_wanted;
+    out->name_libraries_forgotten = ft_linux_prober_forgotten(b->prober, b->lookup_kind);
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)

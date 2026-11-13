@@ -178,6 +178,8 @@ void ft_linux_prober_destroy(struct ft_linux_prober *p);
 /* Returns the kind's index, or -1. */
 int ft_linux_prober_add(struct ft_linux_prober *p, const struct ft_linux_probe_kind *kind);
 size_t ft_linux_prober_count(const struct ft_linux_prober *p, int kind);
+/* Files that gave their place to newer ones once the kind was full. */
+size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind);
 
 /*
  * A process started the program named so, by an exec or a fork at ts_ns: it is looked at by

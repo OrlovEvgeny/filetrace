@@ -25,6 +25,8 @@
 #define WORK_BUDGET_NS (20 * FT_NS_PER_MS)
 #define SETTLE_NS (5 * FT_NS_PER_MS)
 #define CANDIDATES_MAX 4 /* distinct files of the kinds a process is looked at for */
+/* A full kind gives a file's place to a new one when no look has found it for this long. */
+#define IDLE_NS (60 * FT_NS_PER_SEC)
 
 /*
  * A file as probes see it. Uprobes attach to the file underneath overlayfs, which every
@@ -41,14 +43,16 @@ struct identity {
 struct probed {
     struct identity id;
     struct bpf_link *links[FT_LINUX_KIND_PROBES];
+    uint64_t found_ns; /* when a look last found a process mapping or running it */
 };
 
 struct kind {
     struct ft_linux_probe_kind def;
     struct probed *files;
     size_t count;
+    size_t forgotten; /* files that gave their place to newer ones */
     bool full_logged;
-    struct identity skipped[MAX_SKIPPED]; /* not of the kind, refused the probe, or no room */
+    struct identity skipped[MAX_SKIPPED]; /* not of the kind, or refused the probe */
     size_t skipped_count;
 };
 
@@ -147,23 +151,46 @@ size_t ft_linux_prober_count(const struct ft_linux_prober *p, int kind)
     return p && kind >= 0 && (size_t)kind < p->kind_count ? p->kinds[kind].count : 0;
 }
 
+size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind)
+{
+    return p && kind >= 0 && (size_t)kind < p->kind_count ? p->kinds[kind].forgotten : 0;
+}
+
 static bool same(const struct identity *a, const struct identity *b)
 {
     return a->ino == b->ino && a->size == b->size && a->mtime_sec == b->mtime_sec &&
            a->mtime_nsec == b->mtime_nsec;
 }
 
-static bool known(const struct kind *k, const struct identity *id)
+static struct probed *probed_file(struct kind *k, const struct identity *id)
 {
     for (size_t i = 0; i < k->count; i++) {
         if (same(&k->files[i].id, id))
-            return true;
+            return &k->files[i];
     }
+    return nullptr;
+}
+
+static bool skipped(const struct kind *k, const struct identity *id)
+{
     for (size_t i = 0; i < k->skipped_count; i++) {
         if (same(&k->skipped[i], id))
             return true;
     }
     return false;
+}
+
+/* Where a new file goes: a free place, else that of the file least lately found. */
+static struct probed *place(struct kind *k)
+{
+    if (k->count < k->def.capacity)
+        return &k->files[k->count];
+    struct probed *oldest = &k->files[0];
+    for (size_t i = 1; i < k->count; i++) {
+        if (k->files[i].found_ns < oldest->found_ns)
+            oldest = &k->files[i];
+    }
+    return oldest;
 }
 
 static void skip(struct kind *k, const struct identity *id)
@@ -216,7 +243,23 @@ static void consider(struct kind *k, const char *path, const char *name, uint32_
         .mtime_sec = (int64_t)st.st_mtim.tv_sec,
         .mtime_nsec = (int64_t)st.st_mtim.tv_nsec,
     };
-    if (known(k, &id)) {
+    uint64_t now = ft_clock_mono_ns();
+    struct probed *found = probed_file(k, &id);
+    if (found)
+        found->found_ns = now;
+    if (found || skipped(k, &id)) {
+        close(fd);
+        return;
+    }
+    struct probed *slot = place(k);
+    bool full = k->count == k->def.capacity;
+    if (full && now - slot->found_ns < IDLE_NS) {
+        if (!k->full_logged)
+            ft_log(FT_LOG_WARN,
+                   "already probing %zu %s, each in use; %s and others are probed once one "
+                   "has gone unused for a minute",
+                   k->def.capacity, k->def.many, name);
+        k->full_logged = true;
         close(fd);
         return;
     }
@@ -227,36 +270,33 @@ static void consider(struct kind *k, const char *path, const char *name, uint32_
         close(fd);
         return;
     }
-    if (k->count == k->def.capacity) {
-        if (!k->full_logged)
-            ft_log(FT_LOG_WARN, "already probing %zu %s; %s and later ones are not probed",
-                   k->def.capacity, k->def.many, name);
-        k->full_logged = true;
-        /* Every process that maps it would otherwise have it read again. */
-        skip(k, &id);
-        close(fd);
-        return;
-    }
 
     /* Held open, the file stays reachable after the process that named it exits. */
     char held[32];
     snprintf(held, sizeof(held), "/proc/self/fd/%d", fd);
-    struct probed *f = &k->files[k->count];
+    struct probed fresh = {.id = id, .found_ns = now};
     bool attached = true;
     for (size_t i = 0; i < FT_LINUX_KIND_PROBES && k->def.probes[i].prog && attached; i++) {
-        f->links[i] = attach(&k->def.probes[i], held, cookie);
-        attached = f->links[i] != nullptr;
+        fresh.links[i] = attach(&k->def.probes[i], held, cookie);
+        attached = fresh.links[i] != nullptr;
     }
     close(fd);
     if (!attached) {
         ft_log(FT_LOG_WARN, "cannot probe %s %s: %s", k->def.one, name,
                ft_linux_last_libbpf_message());
-        detach(f);
+        detach(&fresh);
         skip(k, &id);
         return;
     }
-    f->id = id;
-    k->count++;
+    if (full) {
+        ft_log(FT_LOG_INFO, "already probing %zu %s; the one unused longest makes room for %s",
+               k->def.capacity, k->def.many, name);
+        detach(slot);
+        k->forgotten++;
+    } else {
+        k->count++;
+    }
+    *slot = fresh;
     k->def.probed(name, pid, cookie);
 }
 
