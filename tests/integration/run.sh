@@ -1499,19 +1499,6 @@ if [ -n "$dynamic" ]; then
         alone.ft.test
     expect "names: another alike but for its device" "$(name_of private2.bin)" alone.ft.test
 
-    # A C library that only short processes map, each over well within a flush interval: the
-    # second of them is named at the latest, however short the first was.
-    mkdir -p "$work/short"
-    for i in 1 2 3; do
-        named "$dynamic" sharedlibc "$work/short" sleepsend 0 alone.ft.test "$data/short$i.bin" \
-            >/dev/null
-    done
-    settle
-    expect "names: the second short process of a new C library" "$(name_of short2.bin)" \
-        alone.ft.test
-    expect "names: the third short process of a new C library" "$(name_of short3.bin)" \
-        alone.ft.test
-
     # A process of a program the agent has not seen loads a C library file no process has mapped,
     # and looks a name up through it a tenth of a second later.
     mkdir -p "$work/loaded"
@@ -2102,6 +2089,25 @@ if [ -n "$dynamic" ]; then
     expect_match "names: full table, refused" "$(ft stats --json)" '"names_refused_full":[1-9]'
     stop_agent
     expect "names: full table agent exit code" "$?" 0
+
+    # A C library that only short processes map is probed while the first of them runs, long
+    # before a flush: each lives a tenth of a second and this agent flushes every three.
+    "$bin/filetrace-agent" --socket "$sock" --flush-interval 3s --log-level warn \
+        --probes "$probes" &
+    agent_pid=$!
+    wait_for_socket
+    mkdir -p "$work/short"
+    for i in 1 2 3; do
+        named "$dynamic" sharedlibc "$work/short" sleepsend 100 alone.ft.test \
+            "$data/short$i.bin" >/dev/null
+    done
+    sleep 4
+    expect "names: the second short process of a new C library" "$(name_of short2.bin)" \
+        alone.ft.test
+    expect "names: the third short process of a new C library" "$(name_of short3.bin)" \
+        alone.ft.test
+    stop_agent
+    expect "names: short processes agent exit code" "$?" 0
 
     # A fresh agent names a lookup only once it has probed the C library of the process making it.
     lookups_named() {
