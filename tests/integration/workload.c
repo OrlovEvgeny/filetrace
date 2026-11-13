@@ -2952,19 +2952,186 @@ static void screen_feed(struct screen_text *s, const char *buf, size_t n)
     }
 }
 
+/*
+ * What each cell of the screen holds, as xterm and the Linux console keep it: a character in the
+ * last column leaves the cursor on it until the next character wraps, so an erase there takes it.
+ */
+struct screen_cells {
+    size_t columns;
+    size_t rows;
+    char (*cell)[5]; /* one UTF-8 character each, or empty */
+    size_t row;
+    size_t col;
+    bool wrap_next;
+    size_t last; /* the cell the bytes that continue a character go to */
+    enum escape_state state;
+    char params[32];
+    size_t nparams;
+};
+
+static void cells_erase(struct screen_cells *s, size_t from, size_t to)
+{
+    for (size_t i = from; i < to; i++)
+        s->cell[i][0] = '\0';
+}
+
+static void cells_next_row(struct screen_cells *s)
+{
+    size_t width = s->columns;
+
+    if (s->row + 1 < s->rows) {
+        s->row++;
+        return;
+    }
+    memmove(s->cell, s->cell + width, (s->rows - 1) * width * sizeof(*s->cell));
+    cells_erase(s, (s->rows - 1) * width, s->rows * width);
+}
+
+static void cells_put(struct screen_cells *s, unsigned char c)
+{
+    size_t len = strlen(s->cell[s->last]);
+
+    if ((c & 0xc0) == 0x80) {
+        if (len + 1 < sizeof(*s->cell)) {
+            s->cell[s->last][len] = (char)c;
+            s->cell[s->last][len + 1] = '\0';
+        }
+        return;
+    }
+    if (s->wrap_next) {
+        s->wrap_next = false;
+        s->col = 0;
+        cells_next_row(s);
+    }
+    s->last = s->row * s->columns + s->col;
+    s->cell[s->last][0] = (char)c;
+    s->cell[s->last][1] = '\0';
+    if (s->col + 1 < s->columns)
+        s->col++;
+    else
+        s->wrap_next = true;
+}
+
+/* Cursor position, erase in line and in display, and the alternate screen; the rest is ignored. */
+static void cells_control(struct screen_cells *s, char final)
+{
+    bool private_mode = s->nparams > 0 && s->params[0] == '?';
+    unsigned long n[2] = {0, 0};
+    char *p = s->params + (private_mode ? 1 : 0);
+
+    s->params[s->nparams] = '\0';
+    for (size_t i = 0; i < 2 && *p; i++) {
+        n[i] = strtoul(p, &p, 10);
+        if (*p == ';')
+            p++;
+    }
+    size_t here = s->row * s->columns + s->col;
+    size_t line = s->row * s->columns;
+    size_t all = s->rows * s->columns;
+    if (private_mode) {
+        if (final == 'h' && n[0] == 1049)
+            cells_erase(s, 0, all);
+        return;
+    }
+    switch (final) {
+    case 'H':
+    case 'f':
+        s->row = n[0] > 1 ? (n[0] <= s->rows ? n[0] : s->rows) - 1 : 0;
+        s->col = n[1] > 1 ? (n[1] <= s->columns ? n[1] : s->columns) - 1 : 0;
+        s->wrap_next = false;
+        break;
+    case 'K':
+        cells_erase(s, n[0] == 0 ? here : line, n[0] == 1 ? here + 1 : line + s->columns);
+        s->wrap_next = false;
+        break;
+    case 'J':
+        cells_erase(s, n[0] == 0 ? here : 0, n[0] == 1 ? here + 1 : all);
+        break;
+    default:
+        break;
+    }
+}
+
+static void cells_feed(struct screen_cells *s, const char *buf, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)buf[i];
+
+        switch (s->state) {
+        case ESCAPE:
+            s->state = c == '[' ? CSI : c == ']' ? OSC : c >= '(' && c <= '+' ? CHARSET : TEXT;
+            s->nparams = 0;
+            continue;
+        case CSI:
+            if (c >= 0x40 && c <= 0x7e) {
+                cells_control(s, (char)c);
+                s->state = TEXT;
+            } else if (c >= 0x30 && c <= 0x3f && s->nparams + 1 < sizeof(s->params)) {
+                s->params[s->nparams++] = (char)c;
+            }
+            continue;
+        case OSC:
+            if (c == 0x07)
+                s->state = TEXT;
+            else if (c == 0x1b)
+                s->state = OSC_ESCAPE;
+            continue;
+        case OSC_ESCAPE:
+        case CHARSET:
+            s->state = TEXT;
+            continue;
+        case TEXT:
+            break;
+        }
+        if (c == 0x1b) {
+            s->state = ESCAPE;
+        } else if (c == '\r') {
+            s->col = 0;
+            s->wrap_next = false;
+        } else if (c == '\n') {
+            cells_next_row(s);
+            s->wrap_next = false;
+        } else if (c >= 0x20 && c != 0x7f) {
+            cells_put(s, c);
+        }
+    }
+}
+
+/* One line per row, a blank cell as a space. */
+static void cells_write(const struct screen_cells *s, const char *path)
+{
+    FILE *f = fopen(path, "w");
+
+    if (!f)
+        die(path);
+    for (size_t r = 0; r < s->rows; r++) {
+        for (size_t c = 0; c < s->columns; c++) {
+            const char *cell = s->cell[r * s->columns + c];
+            fputs(cell[0] ? cell : " ", f);
+        }
+        fputc('\n', f);
+    }
+    if (fclose(f) != 0)
+        die(path);
+}
+
 /* Waits up to 10 ms for output and reads it, so the command never blocks on a full terminal. */
-static void drain(int terminal, struct screen_text *s)
+static bool drain(int terminal, struct screen_text *s, struct screen_cells *cells)
 {
     struct pollfd p = {.fd = terminal, .events = POLLIN};
     char buf[4096];
 
     if (poll(&p, 1, 10) <= 0)
-        return;
+        return false;
     ssize_t n = read(terminal, buf, sizeof(buf));
-    if (n > 0)
-        screen_feed(s, buf, (size_t)n);
-    else
+    if (n <= 0) {
         usleep(10 * 1000);
+        return false;
+    }
+    screen_feed(s, buf, (size_t)n);
+    if (cells)
+        cells_feed(cells, buf, (size_t)n);
+    return true;
 }
 
 static bool reaped(pid_t pid, int *status)
@@ -3098,17 +3265,21 @@ static int open_terminal(size_t columns, size_t rows)
 }
 
 /*
- * pty <columns> <rows> <text> <seconds> <key:c|signal:NAME> -- <command...>: runs the command as
- * the foreground job of a terminal of that size, waits up to the seconds for the text on its
- * screen, presses the key or sends the signal, and waits as long again for the command to end.
- * Then follows its children for up to 5 seconds.
+ * pty <columns> <rows> <text> <seconds> <key:c|signal:NAME> [<screen file>] -- <command...>: runs
+ * the command as the foreground job of a terminal of that size, waits up to the seconds for the
+ * text on its screen, presses the key or sends the signal, and waits as long again for the command
+ * to end. Then follows its children for up to 5 seconds. With a screen file, writes there what the
+ * screen holds once the text has appeared and the output has paused, a line for each row.
  */
 static void scenario_pty(size_t columns, size_t rows, const char *text, size_t seconds,
-                         const char *action, char **command)
+                         const char *action, const char *screen_file, char **command)
 {
     constexpr uint64_t CHILDREN_WINDOW_MS = 5000;
+    constexpr uint64_t PAUSE_MS = 200;
     constexpr size_t MAX_CHILDREN = 16;
     struct screen_text screen = {.text = text, .len = strlen(text)};
+    struct screen_cells cells = {.columns = columns, .rows = rows};
+    struct screen_cells *grid = screen_file ? &cells : nullptr;
     struct descendant children[MAX_CHILDREN];
     uint64_t limit_ms = (uint64_t)seconds * 1000;
     int key = -1;
@@ -3121,6 +3292,11 @@ static void scenario_pty(size_t columns, size_t rows, const char *text, size_t s
     if ((key < 0 && signo == 0) || screen.len == 0 || screen.len > sizeof(screen.tail)) {
         fprintf(stderr, "pty: invalid action '%s' or text '%s'\n", action, text);
         exit(2);
+    }
+    if (grid) {
+        cells.cell = columns && rows ? calloc(columns * rows, sizeof(*cells.cell)) : nullptr;
+        if (!cells.cell)
+            die("pty: screen");
     }
 
     lead_session();
@@ -3147,11 +3323,21 @@ static void scenario_pty(size_t columns, size_t rows, const char *text, size_t s
     int status = 0;
     bool ended = false;
     while (!screen.seen && !ended && now_ms() - start < limit_ms) {
-        drain(master, &screen);
+        drain(master, &screen, grid);
         ended = reaped(pid, &status);
     }
     bool seen = screen.seen;
     uint64_t seen_ms = now_ms() - start;
+    for (uint64_t quiet = now_ms(); grid && seen && !ended && now_ms() - quiet < PAUSE_MS &&
+                                    now_ms() - start < 2 * limit_ms;) {
+        if (drain(master, &screen, grid))
+            quiet = now_ms();
+        ended = reaped(pid, &status);
+    }
+    if (grid) {
+        cells_write(grid, screen_file);
+        free(cells.cell);
+    }
 
     size_t nchildren = ended ? 0 : children_of(pid, children, MAX_CHILDREN);
     uint64_t acted = now_ms();
@@ -3164,7 +3350,7 @@ static void scenario_pty(size_t columns, size_t rows, const char *text, size_t s
     }
     bool ended_before = ended;
     while (!ended && now_ms() - acted < limit_ms) {
-        drain(master, &screen);
+        drain(master, &screen, nullptr);
         ended = reaped(pid, &status);
     }
     if (!ended) {
@@ -3185,7 +3371,7 @@ static void scenario_pty(size_t columns, size_t rows, const char *text, size_t s
         }
         if (left == 0 || now_ms() - end >= CHILDREN_WINDOW_MS)
             break;
-        drain(master, &screen);
+        drain(master, &screen, nullptr);
     }
 
     char how[32] = "stuck";
@@ -3451,7 +3637,10 @@ int main(int argc, char **argv)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "pty") == 0 && argc >= 9 && strcmp(argv[7], "--") == 0)
         scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
-                     argv + 8);
+                     nullptr, argv + 8);
+    else if (strcmp(name, "pty") == 0 && argc >= 10 && strcmp(argv[8], "--") == 0)
+        scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
+                     argv[7], argv + 9);
     else {
         fprintf(stderr, "usage: %s <scenario> <arguments>\n", argv[0]);
         return 2;
