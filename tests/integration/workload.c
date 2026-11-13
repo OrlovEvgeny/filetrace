@@ -4359,6 +4359,65 @@ static void wait_for(const char *go)
         usleep(100 * 1000);
 }
 
+/* Copies from into dir under its own name, keeping its modification time. */
+static void copy_into(const char *from, const char *dir, char *to, size_t size)
+{
+    const char *base = strrchr(from, '/');
+    snprintf(to, size, "%s/%s", dir, base ? base + 1 : from);
+    int in = open_file(from);
+    int out = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (out < 0)
+        die(to);
+    char buf[65536];
+    ssize_t n;
+    while ((n = read(in, buf, sizeof(buf))) > 0) {
+        if (write(out, buf, (size_t)n) != n)
+            die("write");
+    }
+    struct stat st;
+    if (n < 0 || fstat(in, &st) != 0)
+        die(from);
+    struct timespec times[2] = {st.st_atim, st.st_mtim};
+    if (futimens(out, times) != 0)
+        die("futimens");
+    close(in);
+    close(out);
+}
+
+/*
+ * privatelibc <dir> <scenario> [arguments]: in a mount namespace of its own, mounts a file system
+ * at dir that holds copies of this program's C library and loader, and runs the scenario through
+ * that loader with that library, as a container's first process runs its image's own.
+ */
+static void scenario_private_libc(const char *dir, char **args, int nargs)
+{
+    char libc[4096];
+    char loader[4096];
+    char self[PATH_MAX];
+    char libc_copy[4096];
+    char loader_copy[4096];
+
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (n <= 0 || !mapped_path("libc.so", libc, sizeof(libc)) ||
+        !mapped_path("ld-linux", loader, sizeof(loader)))
+        die("no dynamic C library");
+    self[n] = '\0';
+    if (unshare(CLONE_NEWNS) != 0)
+        die("unshare");
+    if (mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0)
+        die("mount private");
+    if (mount("tmpfs", dir, "tmpfs", 0, nullptr) != 0)
+        die("mount tmpfs");
+    copy_into(libc, dir, libc_copy, sizeof(libc_copy));
+    copy_into(loader, dir, loader_copy, sizeof(loader_copy));
+
+    char *argv[16] = {loader_copy, "--library-path", (char *)dir, self};
+    for (int i = 0; i < nargs && i < 11; i++)
+        argv[4 + i] = args[i];
+    execv(loader_copy, argv);
+    die(loader_copy);
+}
+
 /* waitsend <go> <name> <file>: once go exists, looks the name up and sends the file there. */
 static void scenario_wait_send(const char *go, const char *name, const char *path)
 {
@@ -4634,6 +4693,8 @@ int main(int argc, char **argv)
         scenario_libc_path();
     else if (strcmp(name, "waitsend") == 0 && argc == 5)
         scenario_wait_send(argv[2], argv[3], argv[4]);
+    else if (strcmp(name, "privatelibc") == 0 && argc >= 4)
+        scenario_private_libc(argv[2], argv + 3, argc - 3);
     else if (strcmp(name, "pty") == 0 && argc >= 9 && strcmp(argv[7], "--") == 0)
         scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
                      nullptr, nullptr, nullptr, argv + 8);
