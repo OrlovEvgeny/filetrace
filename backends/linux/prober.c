@@ -503,13 +503,19 @@ void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid)
         mark(p, pid, false);
 }
 
+void ft_linux_prober_forget(struct ft_linux_prober *p)
+{
+    if (p)
+        memset(p->seen, 0, p->pid_limit / 8 + 1);
+}
+
 void ft_linux_prober_rescan(struct ft_linux_prober *p)
 {
     if (!p || !p->kind_count || p->pass)
         return;
     /* Outside the host's PID namespace no event names a process by its /proc entry. */
     if (!ft_sysinfo_host_pid_namespace())
-        memset(p->seen, 0, p->pid_limit / 8 + 1);
+        ft_linux_prober_forget(p);
     p->pass = opendir("/proc");
 }
 

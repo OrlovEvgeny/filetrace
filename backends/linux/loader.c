@@ -896,6 +896,9 @@ static void report_losses(struct ft_backend *b, const uint64_t totals[FT_BPF_CNT
         {FT_BPF_CNT_PATH_BUSY, FT_LOSS_PATH_BUSY},
     };
 
+    /* A lost exec leaves its process taken as looked at, with the program it had before. */
+    if (totals[FT_BPF_CNT_RING_FULL] != b->counters[FT_BPF_CNT_RING_FULL])
+        ft_linux_prober_forget(b->prober);
     for (size_t i = 0; i < FT_ARRAY_LEN(losses); i++) {
         uint64_t delta = totals[losses[i].counter] - b->counters[losses[i].counter];
         if (delta == 0)
