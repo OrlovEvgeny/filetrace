@@ -458,7 +458,7 @@ static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
         ft_row_flow_names(&flow, &names);
         switch (grouping) {
         case GROUP_PROCESS:
-            snprintf(label, sizeof(label), "%s", flow.comm[0] ? flow.comm : "-");
+            ft_strlcpy(label, flow.comm, sizeof(label));
             break;
         case GROUP_REMOTE: {
             const char *host = qa->resolve ? ft_resolver_name(&flow.remote) : nullptr;
