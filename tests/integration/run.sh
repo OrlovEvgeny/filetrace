@@ -1580,7 +1580,7 @@ if [ -n "$dynamic" ]; then
         'Remote: +127\.0\.0\.3:[0-9]+ .*Name: +alone\.ft\.test .*Name from: +lookup'
 
     expect_match "names: capability" "$(ft capabilities | grep '^Destination names')" \
-        'Destination names +(PARTIAL|FULL) +lookups probed in [1-9][0-9]* librar(y|ies); TLS server names (are read where the client.s library is probed|in [1-9][0-9]* librar)'
+        'Destination names +(PARTIAL|FULL) +lookups (probed in [1-9][0-9]* librar(y|ies)|are probed in the C libraries processes map); TLS server names (are read where the client.s library is probed|in [1-9][0-9]* librar)'
     stats=$(ft stats --json)
     expect_match "names: stats names" "$stats" '"names":\{"entries":[1-9]'
     expect_match "names: stats lookups" "$stats" '"name_lookups":\{"entries":[1-9]'
@@ -1679,9 +1679,56 @@ TMPL
     expect_match "names: capability counts the probed TLS library" \
         "$(ft capabilities | grep '^Destination names')" \
         'TLS server names in [1-9][0-9]* librar(y|ies)'
+    expect_match "names: stats counts the TLS library" "$(ft stats --json)" '"tls_libraries":[1-9]'
+    expect_match "names: stats shows the TLS library count" \
+        "$(ft stats | grep 'TLS libraries:')" 'TLS libraries: +[1-9]'
+    expect_match "names: doctor shows the TLS library count" \
+        "$(ft doctor | grep 'TLS libraries:')" 'TLS libraries: +[1-9]'
 
     stop_agent
     expect "TLS server names agent exit code" "$?" 0
+
+    # Lookups off but TLS on: the capability names the lookup half off and keeps TLS, and a
+    # client's server name still binds, with no looked-up name beside it.
+    printf '[names]\nlookups = false\n' >"$work/tls-only.toml"
+    start_agent --config "$work/tls-only.toml" ||
+        { echo "FAIL: the agent did not start for TLS-only names"; exit 1; }
+    i=0
+    while [ $i -lt 40 ]; do
+        gnutls_get gnutls-cli --insecure -p "$tls_port" files.ft.test
+        settle
+        [ "$(tls_source_of files.ft.test)" = tls ] && break
+        i=$((i + 1))
+    done
+    expect "names: lookups off, the handshake alone names the connection" \
+        "$(tls_source_of files.ft.test)" tls
+    expect_match "names: lookups off, capability names the halves" \
+        "$(ft capabilities | grep '^Destination names')" \
+        'PARTIAL +lookups are turned off in the configuration; TLS server names (in [1-9][0-9]* librar|are read where)'
+    stop_agent
+    expect "TLS-only agent exit code" "$?" 0
+
+    # TLS off but lookups on: the capability names the TLS half off, no TLS library is probed,
+    # and a client's connection carries only its looked-up name.
+    printf '[names]\ntls = false\n' >"$work/lookups-only.toml"
+    start_agent --config "$work/lookups-only.toml" ||
+        { echo "FAIL: the agent did not start for lookup-only names"; exit 1; }
+    i=0
+    while [ $i -lt 40 ]; do
+        gnutls_get gnutls-cli --insecure -p "$tls_port" files.ft.test
+        settle
+        [ "$(tls_source_of files.ft.test)" = lookup ] && break
+        i=$((i + 1))
+    done
+    expect "names: TLS off, the connection carries only its looked-up name" \
+        "$(tls_source_of files.ft.test)" lookup
+    expect_match "names: TLS off, capability names the halves" \
+        "$(ft capabilities | grep '^Destination names')" \
+        'PARTIAL +lookups .*; TLS server names are turned off in the configuration'
+    expect "names: TLS off probes no TLS library" \
+        "$(ft stats --json | grep -c '\"tls_libraries\":[1-9]')" 0
+    stop_agent
+    expect "lookup-only agent exit code" "$?" 0
     kill "$serv_pid" 2>/dev/null
     wait "$serv_pid" 2>/dev/null
 else
