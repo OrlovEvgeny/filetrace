@@ -19,11 +19,22 @@ struct lookup_addrinfo {
     __u64 next;
 };
 
-/* A call in progress on a thread: the name asked for and where the result goes. */
+/* A call in progress on a thread: the name asked for, where the result goes, and its stack. */
 struct lookup_call {
     __u64 node;
     __u64 res;
+    __u64 sp;
 };
+
+/*
+ * How far the stack pointer at a return lies from where it was at the call's first instruction:
+ * x86-64 has popped the return address, arm64 keeps it in a register.
+ */
+#if defined(__TARGET_ARCH_x86)
+#define LOOKUP_RETURN_SP 8
+#else
+#define LOOKUP_RETURN_SP 0
+#endif
 
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
@@ -81,6 +92,7 @@ int BPF_UPROBE(ft_getaddrinfo, const char *node, const char *service, const void
     if (call) {
         call->node = (__u64)node;
         call->res = (__u64)res;
+        call->sp = PT_REGS_SP(ctx);
     }
     return 0;
 }
@@ -95,6 +107,9 @@ int BPF_URETPROBE(ft_getaddrinfo_return, int ret)
     __u64 node = call->node;
     __u64 res = call->res;
     call->node = 0;
+    /* A call of a signal handler, or one left by longjmp, is not the one this returns from. */
+    if (PT_REGS_SP(ctx) != call->sp + LOOKUP_RETURN_SP)
+        return 0;
 
     __u64 list = 0;
     if (ret != 0 || !res || bpf_probe_read_user(&list, sizeof(list), (void *)res) || !list)
