@@ -1751,10 +1751,10 @@ TMPL
         "$(ft capabilities | grep '^Destination names')" \
         'TLS server names in [1-9][0-9]* librar(y|ies)'
     expect_match "names: stats counts the TLS library" "$(ft stats --json)" '"tls_libraries":[1-9]'
-    expect_match "names: stats shows the TLS library count" \
-        "$(ft stats | grep 'TLS libraries:')" 'TLS libraries: +[1-9]'
-    expect_match "names: doctor shows the TLS library count" \
-        "$(ft doctor | grep 'TLS libraries:')" 'TLS libraries: +[1-9]'
+    expect_match "names: stats shows the TLS libraries against their limit" \
+        "$(ft stats | grep 'TLS libraries:')" 'TLS libraries: +[1-9][0-9]* of [1-9]'
+    expect_match "names: doctor shows the TLS libraries against their limit" \
+        "$(ft doctor | grep 'TLS libraries:')" 'TLS libraries: +[1-9][0-9]* of [1-9]'
     expect_match "names: stats shows the TLS library capacity" "$(ft stats --json)" \
         '"tls_library_capacity":[1-9]'
 
@@ -1783,6 +1783,8 @@ TMPL
         '"name_libraries_configured":[1-9]'
     expect_match "names: lookups off reports the TLS capacity" "$(ft stats --json)" \
         '"tls_library_capacity":[1-9]'
+    expect "names: lookups off prints no Name libraries line" \
+        "$(ft stats | grep -c '^Name libraries:')" 0
     stop_agent
     expect "TLS-only agent exit code" "$?" 0
 
@@ -1806,6 +1808,8 @@ TMPL
         'PARTIAL +lookups .*; TLS server names are turned off in the configuration'
     expect "names: TLS off probes no TLS library" \
         "$(ft stats --json | grep -c '\"tls_libraries\":[1-9]')" 0
+    expect "names: TLS off prints no TLS libraries line" \
+        "$(ft stats | grep -c '^TLS libraries:')" 0
     stop_agent
     expect "lookup-only agent exit code" "$?" 0
     kill "$serv_pid" 2>/dev/null
