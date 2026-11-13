@@ -388,6 +388,21 @@ static __always_inline __u64 wake_flags(void)
     return queued >= cfg.wakeup_bytes ? BPF_RB_FORCE_WAKEUP : BPF_RB_NO_WAKEUP;
 }
 
+/* An exec wakes the consumer once per gap; the look it arms reads the execs in between. */
+#define EXEC_WAKE_GAP_NS 2000000ULL
+static __u64 exec_woken_ns;
+
+static __always_inline __u64 exec_wake_flags(void)
+{
+    if (!cfg.exec_wakeup)
+        return wake_flags();
+    __u64 now = bpf_ktime_get_boot_ns();
+    if (now - exec_woken_ns < EXEC_WAKE_GAP_NS)
+        return wake_flags();
+    exec_woken_ns = now;
+    return BPF_RB_FORCE_WAKEUP;
+}
+
 static __always_inline void fill_proc(struct ft_bpf_ev_proc *e, struct task_struct *task,
                                       __u32 kind)
 {
@@ -1815,7 +1830,7 @@ int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct li
             return 0;
         }
         fill_exec(plain, task, bprm);
-        bpf_ringbuf_submit(plain, wake_flags());
+        bpf_ringbuf_submit(plain, exec_wake_flags());
         return 0;
     }
 
@@ -1850,7 +1865,7 @@ int BPF_PROG(ft_process_exec, struct task_struct *task, pid_t old_pid, struct li
 
     __u64 size = sizeof(*e) + cwd + args;
     if (size <= sizeof(*e) + sizeof(s->tail) &&
-        bpf_ringbuf_output(&events, e, size, wake_flags()) != 0)
+        bpf_ringbuf_output(&events, e, size, exec_wake_flags()) != 0)
         count(FT_BPF_CNT_RING_FULL);
     s->busy = 0;
     return 0;
