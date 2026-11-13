@@ -58,6 +58,8 @@ struct ft_bpf_ev_exec {
     __u16 cwd_flags; /* FT_BPF_FILE_TRUNCATED, FT_BPF_FILE_DETACHED */
     __u32 args_len;
     __u32 pad;
+    __u64 exe_ino; /* the program file, as the kernel opened it */
+    __u64 exe_size;
 };
 
 struct ft_bpf_ev_sock {

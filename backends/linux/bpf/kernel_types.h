@@ -161,6 +161,7 @@ struct task_struct {
 };
 
 struct linux_binprm {
+    struct file *file;
     const char *filename;
 };
 
