@@ -384,6 +384,7 @@ enum flow_grouping : uint8_t {
     GROUP_NONE,
     GROUP_PROCESS,
     GROUP_REMOTE,
+    GROUP_NAME,
     GROUP_PORT,
     GROUP_PROTOCOL,
     GROUP_FILE,
@@ -392,6 +393,7 @@ enum flow_grouping : uint8_t {
 static const struct group_layout flow_layouts[] = {
     [GROUP_PROCESS] = {"PROCESS", "process", "FLOWS", "flows", true, false, false, false},
     [GROUP_REMOTE] = {"REMOTE", "remote_ip", "FLOWS", "flows", true, false, false, true},
+    [GROUP_NAME] = {"NAME", "remote_name", "FLOWS", "flows", true, false, false, false},
     [GROUP_PORT] = {"REMOTE PORT", "remote_port", "FLOWS", "flows", true, false, false, false},
     [GROUP_PROTOCOL] = {"PROTO", "protocol", "FLOWS", "flows", true, false, false, false},
     [GROUP_FILE] = {"FILE", "file", "TRANSFERS", "transfers", false, true, false, false},
@@ -460,6 +462,11 @@ static int run_grouped(const struct ft_cli *cli, struct ft_query_args *qa,
                 ft_addr_format(&flow.remote, label, sizeof(label));
             break;
         }
+        case GROUP_NAME:
+            ft_remote_name_format(&names, label, sizeof(label));
+            if (!label[0])
+                snprintf(label, sizeof(label), "-");
+            break;
         case GROUP_PORT:
             snprintf(label, sizeof(label), "%u", flow.remote.port);
             break;
@@ -554,6 +561,8 @@ int ft_cmd_flows(const struct ft_cli *cli, struct ft_args *a)
                 grouping = GROUP_PROCESS;
             else if (strcmp(v, "remote") == 0)
                 grouping = GROUP_REMOTE;
+            else if (strcmp(v, "name") == 0)
+                grouping = GROUP_NAME;
             else if (strcmp(v, "port") == 0)
                 grouping = GROUP_PORT;
             else if (strcmp(v, "protocol") == 0)
@@ -561,7 +570,7 @@ int ft_cmd_flows(const struct ft_cli *cli, struct ft_args *a)
             else
                 return ft_usage_error("flows",
                                       "invalid value '%s' for --group-by (expected process, "
-                                      "remote, port or protocol)",
+                                      "remote, name, port or protocol)",
                                       v);
         } else if ((r = ft_args_value(a, "--direction", &v)) != 0) {
             if (r < 0)

@@ -321,7 +321,8 @@ static void help_flows(FILE *o)
           o);
     fputs(remote_names, o);
     fputs("Options:\n"
-          "  --group-by <key>        Merge flows by process, remote, port or protocol\n"
+          "  --group-by <key>        Merge flows by process, remote, name, port or\n"
+          "                          protocol\n"
           "  --direction <dir>       Order by inbound, outbound (default) or both\n"
           "  --active                Only flows with recent traffic\n",
           o);
