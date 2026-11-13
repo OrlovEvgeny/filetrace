@@ -1989,6 +1989,17 @@ if [ -n "$dynamic" ]; then
     stop_agent
     expect "names: full table agent exit code" "$?" 0
 
+    # A fresh agent names a lookup only once it has probed the C library of the process making it.
+    lookups_named() {
+        i=0
+        while [ $i -lt 20 ]; do
+            named "$dynamic" lookupsend alone.ft.test "$data/warm-$1-$i.bin" tcp >/dev/null
+            settle
+            [ "$(name_of "warm-$1-$i.bin")" = alone.ft.test ] && return
+            i=$((i + 1))
+        done
+    }
+
     # Under an open file limit too small for the libraries asked for, the agent probes what the
     # limit holds and says so.
     printf '[limits]\nname_libraries = 4096\n' >"$work/many-libraries.toml"
@@ -1997,6 +2008,7 @@ if [ -n "$dynamic" ]; then
         2>"$work/limited.err" &
     agent_pid=$!
     wait_for_socket
+    lookups_named limited
     named "$dynamic" lookupsend alone.ft.test "$data/limited.bin" tcp >/dev/null
     settle
     expect "names: small open file limit, named" "$(name_of limited.bin)" alone.ft.test
@@ -2136,6 +2148,7 @@ if [ -n "$dynamic" ]; then
         --probes "$probes" --config "$work/forced.toml" 2>"$work/forced.err" &
     agent_pid=$!
     wait_for_socket
+    lookups_named forced
     named "$dynamic" lookupsend alone.ft.test "$data/forced.bin" tcp >/dev/null
     settle
     expect "forced return probes: named" "$(name_of forced.bin)" alone.ft.test
