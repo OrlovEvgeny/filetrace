@@ -178,6 +178,20 @@ expect "sendfile incomplete" "$(printf '%s\n' "$csv" | column transfer.incomplet
 first_port=$(field "$report" port)
 first_pid=$(field "$report" pid)
 
+# The event log holds the records that these totals add up. Read now: the log keeps only the
+# most recent events, and the scenarios below fill it.
+jsonl=$(ft events --type file_transfer --file "$data/report.csv" --jsonl)
+expect_match "events: transfer record" "$jsonl" \
+    '^\{"event":"file_transfer","timestamp":"[^"]+","sequence":[0-9]+,"process":\{"pid":[0-9]+,.*"name":"ft_workload"[^}]*\},"file":\{"path":"[^"]*/report\.csv",.*"size":5000000,.*"network":\{"protocol":"tcp",.*"remote_ip":"127\.0\.0\.1",.*"transfer":\{"method":"sendfile","bytes_sent":[0-9]+,"confidence":"exact"\}\}$'
+expect "events: transfer bytes add up" "$(printf '%s\n' "$jsonl" |
+    sed 's/.*"method":"sendfile","bytes_sent":\([0-9]*\).*/\1/' | awk '{ s += $1 } END { print s }')" \
+    5000000
+expect_match "events: text form" "$(ft events --type file_seen --file "$data/report.csv")" \
+    'FILE_SEEN'
+expect_match "events: text fields" \
+    "$(ft events --type file_seen --file "$data/report.csv" | tr '\n' ' ')" \
+    "file=$data/report.csv +inode=[0-9]+ +device=[0-9]+ +size=5000000"
+
 # Both ends of its connection, and its listener, are closed. Checked before any
 # other scenario runs, because a later one can be given the same port.
 csv=$(ft connections --port "$first_port" --state closed --format csv)
@@ -979,18 +993,6 @@ expect_match "top files" "$(ft top files --limit 1 | sed -n 3,4p | tr '\n' ' ')"
 expect_match "grouped flows" "$(ft flows --group-by protocol --format csv | head -1)" \
     '^protocol,bytes_sent,bytes_received,flows$'
 
-# The event log holds the records that the totals above add up.
-jsonl=$(ft events --type file_transfer --file "$data/report.csv" --jsonl)
-expect_match "events: transfer record" "$jsonl" \
-    '^\{"event":"file_transfer","timestamp":"[^"]+","sequence":[0-9]+,"process":\{"pid":[0-9]+,.*"name":"ft_workload"[^}]*\},"file":\{"path":"[^"]*/report\.csv",.*"size":5000000,.*"network":\{"protocol":"tcp",.*"remote_ip":"127\.0\.0\.1",.*"transfer":\{"method":"sendfile","bytes_sent":[0-9]+,"confidence":"exact"\}\}$'
-expect "events: transfer bytes add up" "$(printf '%s\n' "$jsonl" |
-    sed 's/.*"method":"sendfile","bytes_sent":\([0-9]*\).*/\1/' | awk '{ s += $1 } END { print s }')" \
-    5000000
-expect_match "events: text form" "$(ft events --type file_seen --file "$data/report.csv")" \
-    'FILE_SEEN'
-expect_match "events: text fields" \
-    "$(ft events --type file_seen --file "$data/report.csv" | tr '\n' ' ')" \
-    "file=$data/report.csv +inode=[0-9]+ +device=[0-9]+ +size=5000000"
 expect "events: limit" "$(ft events --type network_send --limit 3 --jsonl | wc -l | tr -d ' ')" 3
 expect_match "events: raw" "$(ft events --type socket_close --limit 1 --raw)" \
     '^seq=[0-9]+ time_ns=[0-9]+ type=socket_close pid=[0-9]+ .* text=$'
