@@ -184,7 +184,7 @@ size_t ft_linux_prober_count(const struct ft_linux_prober *p, int kind);
  * the work after that, once. A process that ended is forgotten.
  */
 void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char *program,
-                             uint64_t ts_ns);
+                             bool forked, uint64_t ts_ns);
 void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid);
 
 /* Starts a pass over every running process not looked at yet, which the work carries on. */

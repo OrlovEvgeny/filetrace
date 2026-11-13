@@ -18,12 +18,13 @@
 
 #define MAX_KINDS 4
 #define MAX_SKIPPED 256
-#define MAX_SYMBOL_BYTES (8u << 20)
+#define MAX_SYMBOL_BYTES (2u << 20) /* libphp's take a tenth of it, the C libraries' less */
 #define PENDING_MAX 4096
 #define PID_LIMIT_MAX (4u << 20) /* the kernel's PID_MAX_LIMIT on 64-bit */
 /* Time a flush gives to reading /proc, so that a host with many processes does not hold it. */
 #define WORK_BUDGET_NS (20 * FT_NS_PER_MS)
 #define SETTLE_NS (5 * FT_NS_PER_MS)
+#define CANDIDATES_MAX 4 /* distinct files of the kinds a process is looked at for */
 
 /*
  * A file as probes see it. Uprobes attach to the file underneath overlayfs, which every
@@ -54,6 +55,7 @@ struct kind {
 /* A process that started, to be looked at once its program has had a moment to load. */
 struct pending {
     uint32_t pid;
+    bool retried; /* the time ran out once while its maps were read */
     uint64_t ts_ns;
 };
 
@@ -264,35 +266,61 @@ static const char *base_name(const char *path)
     return slash ? slash + 1 : path;
 }
 
-/* The files of the kinds that look through this process's maps, among those it has mapped. */
-static void consider_mapped(struct ft_linux_prober *p, const bool *wanted, uint32_t pid)
+/* A file as a maps line names it, before it is opened. */
+struct mapped_file {
+    unsigned major;
+    unsigned minor;
+    unsigned long long ino;
+};
+
+/*
+ * The files of the kinds that look through this process's maps, among those it has mapped; a
+ * real process maps one of each. False when the time ran out before the maps were read.
+ */
+static bool consider_mapped(struct ft_linux_prober *p, const bool *wanted, uint32_t pid,
+                            uint64_t until)
 {
     char path[64];
     char line[PATH_MAX + 128];
-    char last[PATH_MAX] = "";
+    struct mapped_file candidates[CANDIDATES_MAX];
+    size_t count = 0;
+    size_t lines = 0;
+    bool finished = true;
 
     snprintf(path, sizeof(path), "/proc/%" PRIu32 "/maps", pid);
     FILE *f = fopen(path, "re");
     if (!f)
-        return;
+        return true;
     while (fgets(line, sizeof(line), f)) {
+        if (++lines % 64 == 0 && ft_clock_mono_ns() >= until) {
+            finished = false;
+            break;
+        }
         char range[64];
         char perms[8];
+        struct mapped_file mf;
         int file_at = 0;
-        if (sscanf(line, "%63s %7s %*s %*s %*s %n", range, perms, &file_at) != 2 || !file_at ||
-            !strchr(perms, 'x'))
+        if (sscanf(line, "%63s %7s %*s %x:%x %llu %n", range, perms, &mf.major, &mf.minor, &mf.ino,
+                   &file_at) != 5 ||
+            !file_at || !strchr(perms, 'x'))
             continue;
         char *file = line + file_at;
         file[strcspn(file, "\n")] = '\0';
-        if (file[0] != '/' || strcmp(file, last) == 0)
+        if (file[0] != '/')
             continue;
         const char *name = base_name(file);
         bool matched = false;
         for (size_t i = 0; i < p->kind_count; i++)
             matched = matched || (wanted[i] && p->kinds[i].def.mapped(file, name));
-        if (!matched)
+        size_t at = 0;
+        while (at < count && (candidates[at].ino != mf.ino || candidates[at].major != mf.major ||
+                              candidates[at].minor != mf.minor))
+            at++;
+        if (!matched || at < count)
             continue;
-        ft_strlcpy(last, file, sizeof(last));
+        if (count == CANDIDATES_MAX)
+            break;
+        candidates[count++] = mf;
         /* The mapped file itself: a mount over its directory cannot put anything else there. */
         char mapped[128];
         snprintf(mapped, sizeof(mapped), "/proc/%" PRIu32 "/map_files/%s", pid, range);
@@ -302,13 +330,15 @@ static void consider_mapped(struct ft_linux_prober *p, const bool *wanted, uint3
         }
     }
     fclose(f);
+    return finished;
 }
 
-static bool wants(const struct ft_linux_prober *p, const char *program)
+/* A forked child maps what its parent maps, which the kinds of every process have looked at. */
+static bool wants(const struct ft_linux_prober *p, const char *program, bool forked)
 {
     for (size_t i = 0; i < p->kind_count; i++) {
         const struct ft_linux_probe_kind *def = &p->kinds[i].def;
-        if (def->every_process || (def->runs && def->runs(program)) ||
+        if ((def->every_process && !forked) || (def->runs && def->runs(program)) ||
             (def->maps_of && def->maps_of(program)))
             return true;
     }
@@ -330,8 +360,11 @@ static void mark(struct ft_linux_prober *p, uint32_t pid, bool on)
         p->seen[pid / 8] &= (uint8_t)~(1u << (pid % 8));
 }
 
-/* Probes the files of the kinds that the process runs or has mapped. */
-static void look_at(struct ft_linux_prober *p, uint32_t pid)
+/*
+ * Probes the files of the kinds that the process runs or has mapped. False when the time ran
+ * out before its maps were read: it is not taken as looked at.
+ */
+static bool look_at(struct ft_linux_prober *p, uint32_t pid, uint64_t until)
 {
     char path[64];
     char exe[PATH_MAX];
@@ -340,7 +373,7 @@ static void look_at(struct ft_linux_prober *p, uint32_t pid)
     snprintf(path, sizeof(path), "/proc/%" PRIu32 "/exe", pid);
     ssize_t n = readlink(path, exe, sizeof(exe) - 1);
     if (n <= 0)
-        return;
+        return true;
     exe[n] = '\0';
     const char *name = base_name(exe);
 
@@ -353,8 +386,11 @@ static void look_at(struct ft_linux_prober *p, uint32_t pid)
         else if (def->every_process || (def->maps_of && def->maps_of(name)))
             maps = wanted[i] = true;
     }
-    if (maps)
-        consider_mapped(p, wanted, pid);
+    if (maps && !consider_mapped(p, wanted, pid, until)) {
+        mark(p, pid, false);
+        return false;
+    }
+    return true;
 }
 
 /* Process IDs past this are looked at on every pass. */
@@ -385,12 +421,12 @@ struct ft_linux_prober *ft_linux_prober_create(void)
 }
 
 void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char *program,
-                             uint64_t ts_ns)
+                             bool forked, uint64_t ts_ns)
 {
     if (!p)
         return;
     mark(p, pid, false);
-    if (!wants(p, program))
+    if (!wants(p, program, forked))
         return;
     /* A process that finds no room is left for the next pass. */
     if (p->queued == PENDING_MAX)
@@ -414,8 +450,11 @@ void ft_linux_prober_rescan(struct ft_linux_prober *p)
     p->pass = opendir("/proc");
 }
 
-/* Takes the next entry of the pass, looking at its process unless seen; false once it is over. */
-static bool pass_step(struct ft_linux_prober *p)
+/*
+ * Takes the next entry of the pass, looking at its process unless seen; one the time ran out on
+ * is left to the next pass. False once the pass is over.
+ */
+static bool pass_step(struct ft_linux_prober *p, uint64_t until)
 {
     struct dirent *e = readdir(p->pass);
     if (!e) {
@@ -427,7 +466,7 @@ static bool pass_step(struct ft_linux_prober *p)
     unsigned long pid = strtoul(e->d_name, &end, 10);
     if (isdigit((unsigned char)e->d_name[0]) && *end == '\0' && pid > 0 && pid <= UINT32_MAX &&
         !seen(p, (uint32_t)pid))
-        look_at(p, (uint32_t)pid);
+        look_at(p, (uint32_t)pid, until);
     return true;
 }
 
@@ -439,11 +478,18 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
     do {
         /* A program's loader maps its libraries just after the exec. */
         if (p->queued && p->queue[p->head].ts_ns + SETTLE_NS <= now_ns) {
-            uint32_t pid = p->queue[p->head].pid;
+            struct pending next = p->queue[p->head];
             p->head = (p->head + 1) % PENDING_MAX;
             p->queued--;
-            look_at(p, pid);
-        } else if (!p->pass || !pass_step(p)) {
+            if (!look_at(p, next.pid, until) && !next.retried) {
+                /* Once more first thing at the next flush; after that it is left to a pass. */
+                p->head = (p->head + PENDING_MAX - 1) % PENDING_MAX;
+                p->queue[p->head] = next;
+                p->queue[p->head].retried = true;
+                p->queued++;
+                break;
+            }
+        } else if (!p->pass || !pass_step(p, until)) {
             break;
         }
     } while (ft_clock_mono_ns() < until);
