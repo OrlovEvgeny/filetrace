@@ -1585,6 +1585,19 @@ expect_match "watch output" "$out" 'ACTIVE FILE TRANSFERS'
 expect_match "watch output" "$out" '^PROCESSES$'
 expect_match "watch notice" "$(cat "$work/watch.err")" 'monitoring in the foreground'
 
+# A row as wide as the terminal keeps its last cell: at 62 columns the row of keys ends in "[?] Help".
+out=$("$workload" pty 62 24 "[?] Help" 15 key:q "$work/watch-screen.txt" -- \
+    "$bin/filetrace" --socket "$work/none.sock" watch)
+if [ "$(field "$out" pty)" = none ]; then
+    echo "SKIP: no pseudo-terminal could be opened; the watch screen check did not run"
+else
+    expect "watch: keys on the screen" "$(field "$out" seen)" yes
+    expect "watch: exit after q" "$(field "$out" status)" exit:0
+    expect "watch: a row as wide as the terminal" \
+        "$(grep -F '[F] Files' "$work/watch-screen.txt")" \
+        "[F] Files  [P] Processes  [N] Network  [Space] Pause  [?] Help"
+fi
+
 # A command that collects for itself shows files whatever mode the configuration file asks for.
 printf '[agent]\nmode = "minimal"\n' >"$work/minimal.toml"
 "$workload" steady "$data/session.bin" 8000000 6 >/dev/null &
