@@ -58,6 +58,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(NOT FILETRACE_STATIC AND NOT FILETRACE_SANITIZE)
         target_link_options(ft_workload PRIVATE -static)
     endif()
+    # The same program linked to the shared C library, whose getaddrinfo the agent probes.
+    add_executable(ft_workload_dynamic integration/workload.c)
+    target_compile_definitions(ft_workload_dynamic PRIVATE _GNU_SOURCE)
+    set_target_properties(ft_workload_dynamic PROPERTIES
+        OUTPUT_NAME ft_workload
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/dynamic)
     foreach(probes auto kprobe)
         add_test(NAME integration-${probes}
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/run.sh $<TARGET_FILE_DIR:filetrace>

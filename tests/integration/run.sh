@@ -1340,6 +1340,167 @@ PYTHON
         "$work/scripts/quick.py"
 fi
 
+# Names that processes look up with the C library's getaddrinfo, from a hosts file that only the
+# workload sees: it mounts this /etc over its own in a mount namespace of its own. The probes
+# attach to the C library's file, which is the same one inside that namespace.
+mkdir -p "$work/etc"
+cat >"$work/etc/hosts" <<'HOSTS'
+127.0.0.2 files.ft.test
+127.0.0.2 other.ft.test
+127.0.0.3 alone.ft.test
+127.0.0.5 proxy.ft.test
+127.0.0.2 later.ft.test
+HOSTS
+printf 'hosts: files\n' >"$work/etc/nsswitch.conf"
+named() {
+    FT_ETC="$work/etc" "$@"
+}
+# Prints the named column of the CSV rows whose column key holds value.
+column_where() {
+    awk -F, -v name="$1" -v key="$2" -v value="$3" '
+        NR == 1 { for (i = 1; i <= NF; i++) { if ($i == name) c = i; if ($i == key) k = i }; next }
+        c && k && $k == value { print $c }'
+}
+# The workload linked to the shared C library, as programs that look names up are.
+dynamic=$(dirname "$workload")/dynamic/ft_workload
+"$dynamic" >/dev/null 2>&1
+if [ $? -ne 2 ]; then
+    echo "SKIP: no workload linked to the shared C library runs here; the name checks did not run"
+    dynamic=
+fi
+
+if [ -n "$dynamic" ]; then
+    expect_match "names: doctor lists the feature" "$(grep 'Destination names' "$work/doctor.txt")" \
+        '\[WARN\] Destination names: lookups are probed in the C libraries processes map'
+
+    # A connection to an address the process looked a name up for carries the name; the
+    # connection the listener accepted does not.
+    report=$(named "$dynamic" lookupsend alone.ft.test "$data/n1.bin" tcp)
+    settle
+    expect_match "names: lookup" "$(ft files --path "$data/n1.bin" | sed -n 2p)" \
+        'n1\.bin +ft_workload +127\.0\.0\.3 +alone\.ft\.test +'
+    csv=$(ft files --path "$data/n1.bin" --format csv)
+    expect "names: lookup name" "$(printf '%s\n' "$csv" | column network.remote_name)" alone.ft.test
+    expect "names: lookup source" "$(printf '%s\n' "$csv" | column network.remote_name_source)" \
+        lookup
+    expect "names: lookup count" "$(printf '%s\n' "$csv" | column network.resolved_name_count)" 1
+    n1_port=$(field "$report" port)
+    n1_local=$(field "$report" local)
+    csv=$(ft connections --port "$n1_port" --format csv)
+    expect "names: the connecting side" \
+        "$(printf '%s\n' "$csv" | column_where remote_name local_port "$n1_local")" alone.ft.test
+    expect "names: the accepted side has none" \
+        "$(printf '%s\n' "$csv" | column_where remote_name local_port "$n1_port" | tr -d '\n')" ""
+
+    # Two names looked up to one address: both are kept and the table says so.
+    named "$dynamic" lookupsend files.ft.test "$data/n2.bin" both other.ft.test >/dev/null
+    # Another process looks the name up and hands the address on; its own lookups are its own.
+    named "$dynamic" lookupwrite alone.ft.test "$work/alone.addr" >/dev/null
+    named "$dynamic" sendto "$(cat "$work/alone.addr")" "$data/n3.bin" >/dev/null
+    # A forked child connects with what its parent looked up before the fork, not after it.
+    named "$dynamic" lookupsend alone.ft.test "$data/n4.bin" fork >/dev/null
+    named "$dynamic" lookupsend alone.ft.test "$data/n5.bin" forklater >/dev/null
+    # An exec starts a program that looked nothing up.
+    named "$dynamic" lookupsend alone.ft.test "$data/n6.bin" exec >/dev/null
+    # A lookup on one thread names the connection made on another.
+    named "$dynamic" lookupsend alone.ft.test "$data/n7.bin" thread >/dev/null
+    # An IPv4 address returned as IPv4-mapped IPv6 and connected to from an IPv6 socket.
+    named "$dynamic" lookupsend alone.ft.test "$data/n8.bin" mapped >/dev/null
+    # An address given as the name names nothing.
+    named "$dynamic" lookupsend 127.0.0.3 "$data/n9.bin" numeric >/dev/null
+    # A program linked statically has no C library to probe.
+    named "$workload" lookupsend alone.ft.test "$data/n10.bin" tcp >/dev/null
+    udp_report=$(named "$dynamic" lookupsend alone.ft.test "$data/n11.bin" udp)
+    later_report=$(named "$dynamic" lookuplater files.ft.test later.ft.test "$data/n12.bin")
+    settle
+
+    name_of() {
+        ft files --path "$data/$1" --format csv | column network.remote_name
+    }
+    expect_match "names: two names" "$(ft files --path "$data/n2.bin" | sed -n 2p)" \
+        ' (files|other)\.ft\.test \(\+1\) '
+    csv=$(ft files --path "$data/n2.bin" --format csv)
+    expect "names: two names count" "$(printf '%s\n' "$csv" | column network.resolved_name_count)" 2
+    expect_match "names: two names listed" "$(printf '%s\n' "$csv" | column network.resolved_names)" \
+        '^(files\.ft\.test;other\.ft\.test|other\.ft\.test;files\.ft\.test)$'
+    expect "names: another process" "$(name_of n3.bin)" ""
+    expect "names: fork" "$(name_of n4.bin)" alone.ft.test
+    expect "names: lookup after the fork" "$(name_of n5.bin)" ""
+    expect "names: exec" "$(name_of n6.bin)" ""
+    expect "names: threads" "$(name_of n7.bin)" alone.ft.test
+    csv=$(ft files --path "$data/n8.bin" --format csv)
+    expect "names: IPv4-mapped name" "$(printf '%s\n' "$csv" | column network.remote_name)" \
+        alone.ft.test
+    expect "names: IPv4-mapped address" "$(printf '%s\n' "$csv" | column network.remote_ip)" \
+        127.0.0.3
+    expect "names: numeric" "$(name_of n9.bin)" ""
+    expect "names: static binary" "$(name_of n10.bin)" ""
+    expect "names: static binary transfer" \
+        "$(ft files --path "$data/n10.bin" --format csv | column network.remote_ip)" 127.0.0.3
+
+    # Datagrams from one socket to two peers: the flow to the looked-up address alone is named.
+    csv=$(ft flows --pid "$(field "$udp_report" pid)" --protocol udp --format csv)
+    expect "names: datagram flows" "$(printf '%s\n' "$csv" | rows)" 2
+    expect "names: datagram flow names" \
+        "$(printf '%s\n' "$csv" | column remote_name | sort | tr '\n' ,)" ",alone.ft.test,"
+
+    # A connection keeps the names it was opened with; one opened after another lookup to the
+    # same address has both.
+    csv=$(ft connections --pid "$(field "$later_report" pid)" --format csv)
+    first=$(field "$later_report" first)
+    second=$(field "$later_report" second)
+    expect "names: no renaming" "$(printf '%s\n' "$csv" | column_where remote_name local_port "$first")" \
+        files.ft.test
+    expect "names: no renaming count" \
+        "$(printf '%s\n' "$csv" | column_where resolved_name_count local_port "$first")" 1
+    expect "names: after the second lookup count" \
+        "$(printf '%s\n' "$csv" | column_where resolved_name_count local_port "$second")" 2
+    expect_match "names: after the second lookup" \
+        "$(ft connections --pid "$(field "$later_report" pid)" | grep ":$second ")" \
+        ' (files|later)\.ft\.test \(\+1\) '
+
+    # A name filters the listings; an address still does, and both together must match.
+    expect "names: filter by pattern" \
+        "$(ft files --remote '*.ft.test' --format quiet | grep -c 'n1\.bin')" 1
+    expect "names: filter by another name" \
+        "$(ft files --remote 'none.ft.test' --format quiet | grep -c 'n1\.bin')" 0
+    expect "names: filter by address" \
+        "$(ft files --remote 127.0.0.3 --format quiet | grep -c 'n1\.bin')" 1
+    expect "names: filter by network and name" \
+        "$(ft files --remote 127.0.0.0/8 --remote 'alone.*' --format quiet | grep -c 'n1\.bin')" 1
+    expect "names: invalid name exit code" "$(ft files --remote 'bad name' >/dev/null 2>&1; echo $?)" 2
+    expect_match "names: invalid name message" "$(ft files --remote 'bad name' 2>&1)" \
+        "invalid value 'bad name' for --remote \\(expected an IP address, a CIDR network or a host name; '\\*' wildcards in a name\\)"
+
+    expect_match "names: connect event" \
+        "$(ft events --type socket_connect --remote alone.ft.test --jsonl)" \
+        '"remote_name":"alone\.ft\.test","remote_name_source":"lookup"'
+    expect_match "names: connect event raw" \
+        "$(ft events --type socket_connect --remote alone.ft.test --raw)" 'remote_name=alone\.ft\.test'
+
+    flow=$(ft flows --port "$n1_port" --format csv | column_where flow_id local_port "$n1_local")
+    expect_match "names: inspect flow" "$(ft inspect flow "$flow" | tr '\n' ' ')" \
+        'Remote: +127\.0\.0\.3:[0-9]+ .*Name: +alone\.ft\.test .*Name from: +lookup'
+
+    expect_match "names: capability" "$(ft capabilities | grep '^Destination names')" \
+        'PARTIAL +lookups probed in [1-9][0-9]* librar(y|ies); TLS server names are not read'
+    stats=$(ft stats --json)
+    expect_match "names: stats names" "$stats" '"names":\{"entries":[1-9]'
+    expect_match "names: stats lookups" "$stats" '"name_lookups":\{"entries":[1-9]'
+    expect_match "names: stats libraries" "$stats" \
+        '"name_libraries":\{"entries":[1-9][0-9]*,"capacity":[1-9]'
+
+    # musl's getaddrinfo is in its loader, which every program linked to musl maps.
+    musl=$(dirname "$workload")/musl/ft_workload
+    if [ -x "$musl" ] && { "$musl" >/dev/null 2>&1; [ $? -eq 2 ]; }; then
+        named "$musl" lookupsend alone.ft.test "$data/musl.bin" tcp >/dev/null
+        settle
+        expect "names: musl" "$(name_of musl.bin)" alone.ft.test
+    else
+        echo "SKIP: no workload linked to musl runs here; the musl name check did not run"
+    fi
+fi
+
 stop_agent
 expect "agent exit code" "$?" 0
 expect "socket removed" "$([ -e "$sock" ] && echo present || echo removed)" removed
@@ -1353,6 +1514,8 @@ csv=$(ft flows --port "$(field "$report" port)" --pid "$(field "$report" pid)" -
 expect "minimal: bytes still counted" "$(printf '%s\n' "$csv" | column bytes_sent)" 900000
 expect_match "minimal: capability disabled" \
     "$(ft capabilities | grep '^Sendfile attribution')" 'DISABLED'
+expect_match "minimal: names disabled" "$(ft capabilities | grep '^Destination names')" \
+    'DISABLED +disabled in minimal mode'
 csv=$(ft transfers --port "$(field "$report" port)" --pid "$(field "$report" pid)" --format csv)
 expect "minimal: bytes have no file" \
     "$(printf '%s\n' "$csv" | column transfer.confidence)" unknown
@@ -1656,6 +1819,84 @@ expect "no rankings: top --leaders --once exit code" "$?" 5
 expect_match "no rankings: top --leaders --once" "$out" 'the agent keeps no rankings'
 stop_agent
 expect "no rankings: agent exit code" "$?" 0
+
+if [ -n "$dynamic" ]; then
+    # With names off nothing is probed for them, and the listings print as they would without.
+    printf '[names]\nenabled = false\n' >"$work/no-names.toml"
+    start_agent --config "$work/no-names.toml" ||
+        { echo "FAIL: the agent did not start without names"; exit 1; }
+    named "$dynamic" lookupsend alone.ft.test "$data/off.bin" tcp >/dev/null
+    settle
+    expect_match "names off: header" "$(ft files --path "$data/off.bin" | head -1)" \
+        '^FILE +PROCESS +DESTINATION +BYTES'
+    expect "names off: none in JSON" \
+        "$(ft files --path "$data/off.bin" --jsonl | grep -c remote_name)" 0
+    expect_match "names off: capability" "$(ft capabilities --json)" \
+        '"feature":"destination_names","status":"DISABLED"'
+    stop_agent
+    expect "names off: agent exit code" "$?" 0
+
+    # A lookup made before the agent started is not known to it.
+    start_agent || { echo "FAIL: the agent did not start for the restart check"; exit 1; }
+    rm -f "$work/go"
+    named "$dynamic" lookupwait alone.ft.test "$data/restart.bin" "$work/go" >"$work/restart.out" &
+    restart_job=$!
+    i=0
+    while ! grep -q 'looked=up' "$work/restart.out" && [ $i -lt 100 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    stop_agent
+    start_agent || { echo "FAIL: the agent did not start again for the restart check"; exit 1; }
+    touch "$work/go"
+    wait "$restart_job"
+    settle
+    csv=$(ft files --path "$data/restart.bin" --format csv)
+    expect "names: lookup before a restart, transfer" "$(printf '%s\n' "$csv" | rows)" 1
+    expect "names: lookup before a restart" "$(printf '%s\n' "$csv" | column network.remote_name)" ""
+    stop_agent
+    expect "names: restart agent exit code" "$?" 0
+
+    # Once listed connections hold every kept name, a new name is refused and counted.
+    printf '[limits]\nnames = 2\n' >"$work/two-names.toml"
+    start_agent --config "$work/two-names.toml" ||
+        { echo "FAIL: the agent did not start with two names"; exit 1; }
+    named "$dynamic" lookupsend files.ft.test "$data/full1.bin" tcp >/dev/null
+    named "$dynamic" lookupsend alone.ft.test "$data/full2.bin" tcp >/dev/null
+    named "$dynamic" lookupsend proxy.ft.test "$data/full3.bin" tcp >/dev/null
+    settle
+    expect "names: full table, first" "$(name_of full1.bin)" files.ft.test
+    expect "names: full table, second" "$(name_of full2.bin)" alone.ft.test
+    expect "names: full table, third" "$(name_of full3.bin)" ""
+    expect_match "names: full table, refused" "$(ft stats --json)" '"names_refused_full":[1-9]'
+    stop_agent
+    expect "names: full table agent exit code" "$?" 0
+
+    # Under an open file limit too small for the libraries asked for, the agent probes what the
+    # limit holds and says so.
+    printf '[limits]\nname_libraries = 4096\n' >"$work/many-libraries.toml"
+    "$workload" nofile 600 "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms \
+        --log-level warn --probes "$probes" --config "$work/many-libraries.toml" \
+        2>"$work/limited.err" &
+    agent_pid=$!
+    wait_for_socket
+    named "$dynamic" lookupsend alone.ft.test "$data/limited.bin" tcp >/dev/null
+    settle
+    expect "names: small open file limit, named" "$(name_of limited.bin)" alone.ft.test
+    stats=$(ft stats --json)
+    held=$(printf '%s\n' "$stats" |
+        sed -n 's/.*"name_libraries":{"entries":[0-9]*,"capacity":\([0-9]*\).*/\1/p')
+    expect "names: small open file limit, capacity" \
+        "$([ "${held:-0}" -ge 1 ] && [ "${held:-0}" -lt 4096 ] && echo cut || echo "$held")" cut
+    expect_match "names: small open file limit, configured" "$stats" \
+        '"name_libraries_configured":4096,'
+    expect_match "names: small open file limit, logged" "$(cat "$work/limited.err")" \
+        "the open file limit of 600 leaves room to probe $held of the 4096 C libraries"
+    expect_match "names: small open file limit, doctor" "$(ft doctor | grep 'Name libraries:')" \
+        "of $held, not the 4,096 configured: the agent's open file limit holds no more"
+    stop_agent
+    expect "names: small open file limit agent exit code" "$?" 0
+fi
 
 # Without an agent, watch collects for as long as it runs.
 out=$(timeout -s INT 3 "$bin/filetrace" --socket "$work/absent.sock" watch --no-ui \
