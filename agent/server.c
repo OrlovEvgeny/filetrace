@@ -537,6 +537,9 @@ static bool agent_open(struct agent *d, struct ft_error *err)
         state_cfg.lookup_process = cfg->backend->lookup_process;
     if (!state_cfg.read_process_text)
         state_cfg.read_process_text = cfg->backend->read_process_text;
+    /* Names come from probes that only standard mode attaches; with none asked for, none come. */
+    state_cfg.names = state_cfg.names && cfg->backend_cfg.mode == FT_MODE_STANDARD &&
+                      (cfg->backend_cfg.lookup_names || cfg->backend_cfg.tls_names);
     d->state = ft_state_create(&state_cfg);
     d->live = malloc(sizeof(*d->live));
     if (!d->state || !d->live) {
