@@ -884,7 +884,7 @@ expect "udp remote port" "$(printf '%s\n' "$csv" | column remote_port)" "$port"
 expect "udp send operations" "$(printf '%s\n' "$csv" | column send_operations)" 50
 csv=$(ft transfers --confidence unknown --protocol udp --port "$port" --format csv)
 expect "udp bytes have no file" "$(printf '%s\n' "$csv" | column transfer.bytes_sent)" 50000
-expect "udp transfer id" "$(ft transfers --confidence unknown --port "$port" --format quiet |
+expect "udp transfer id" "$(ft transfers --confidence unknown --protocol udp --port "$port" --format quiet |
     grep -c '^tr_s')" 1
 
 # Both directions of a half-closed exchange, byte for byte: a peek, a wait
