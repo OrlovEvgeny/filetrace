@@ -13,6 +13,8 @@ enum ft_event_type : uint8_t {
     FT_EVENT_FLOW,     /* network bytes accumulated since the previous record */
     FT_EVENT_TRANSFER, /* file-to-socket bytes accumulated since the previous record */
     FT_EVENT_LOSS,
+    FT_EVENT_NAME_LOOKUP, /* a process looked a name up and got addresses */
+    FT_EVENT_TLS_NAME,    /* a TLS client's handshake went out on a socket */
 };
 
 struct ft_ev_process {
@@ -42,6 +44,7 @@ struct ft_ev_socket {
     enum ft_sock_state state;
     struct ft_endpoint local;
     struct ft_endpoint remote;
+    uint32_t tid; /* CONNECTING: the thread that called connect; 0 when it was not observed */
 };
 
 struct ft_ev_file {
@@ -98,6 +101,24 @@ struct ft_ev_loss {
     uint64_t since_ns; /* start of the interval in which the loss happened */
 };
 
+#define FT_LOOKUP_ADDRS 16
+
+/* A lookup that succeeded: the name as the process gave it and the addresses it got back. */
+struct ft_ev_lookup {
+    uint32_t pid;
+    uint32_t tid;
+    const char *name; /* borrowed for the call */
+    uint32_t addr_count;
+    struct ft_endpoint addrs[FT_LOOKUP_ADDRS]; /* as ft_endpoint_set fills them, port 0 */
+};
+
+/* The server name a TLS client set for the handshake whose first bytes the socket carried. */
+struct ft_ev_tls_name {
+    uint64_t sock_id;
+    uint32_t pid;
+    const char *name; /* borrowed for the call */
+};
+
 struct ft_event {
     enum ft_event_type type;
     uint64_t ts_ns;
@@ -108,6 +129,8 @@ struct ft_event {
         struct ft_ev_flow flow;
         struct ft_ev_transfer transfer;
         struct ft_ev_loss loss;
+        struct ft_ev_lookup lookup;
+        struct ft_ev_tls_name tls_name;
     };
 };
 

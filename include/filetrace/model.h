@@ -8,6 +8,7 @@
 #define FT_PATH_MAX 4096
 #define FT_CMDLINE_MAX 4096
 #define FT_FS_TYPE_MAX 16
+#define FT_NAME_MAX 254 /* a host name's 253 bytes and its terminator */
 
 #define FT_PROTO_TCP 6
 #define FT_PROTO_UDP 17
