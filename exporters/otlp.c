@@ -277,6 +277,8 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
     memset(stored, 0, size);
     memcpy(stored, row, offsetof(struct ft_row_event, text) + text_len);
     stored->flags &= (uint8_t)~FT_EVENT_PROCESS_TEXT;
+    /* The copy has no room for the name, which its size would otherwise count. */
+    stored->name_source = FT_NAME_SOURCE_NONE;
     if (with_strings) {
         ft_process_strings_pack(stored->text + text_len + 1, strings_size, &strings);
         stored->flags |= FT_EVENT_PROCESS_TEXT;

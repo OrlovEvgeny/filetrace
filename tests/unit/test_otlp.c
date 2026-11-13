@@ -421,6 +421,35 @@ static void sums_keep_the_first_strings(void)
     free(described);
 }
 
+/* Whatever the length of the strings before it, a record's name does not run into the next. */
+static void keeps_named_records_apart(void)
+{
+    for (size_t len = 1; len <= 16; len++) {
+        struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false);
+        struct ft_row_event *row = transfer_row(10, 1);
+
+        row->seq = 0x4141414141414141;
+        memset(row->text, 'a', len);
+        row->text[len] = '\0';
+        ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP, "files.example.com");
+        for (uint64_t sock = 1; sock <= 3; sock++) {
+            row->sock_id = sock;
+            CHECK(ft_otlp_logs_add(batch, row));
+        }
+        LogsRequest *request = encode(batch);
+        const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
+            request->resource_logs[0]->scope_logs[0];
+        CHECK_U64(scope->n_log_records, 3);
+        for (size_t i = 0; i < scope->n_log_records; i++) {
+            CHECK_STR(scope->log_records[i]->event_name, "filetrace.file_transfer");
+            CHECK_U64(number(scope->log_records[i], "filetrace.socket.id"), i + 1);
+        }
+        release(request);
+        ft_otlp_logs_free(batch);
+        free(row);
+    }
+}
+
 void test_otlp(void)
 {
     describes_a_transfer_with_standard_names();
@@ -430,4 +459,5 @@ void test_otlp(void)
     encodes_counters_as_cumulative_sums();
     says_what_a_process_runs();
     sums_keep_the_first_strings();
+    keeps_named_records_apart();
 }
