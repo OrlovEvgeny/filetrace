@@ -18,7 +18,8 @@ const char *ft_config_default_path(void)
 
 /* Files that programs read on their way to a connection and that nobody sends by reading them:
  * trust stores, resolver files, time zones, locale data, interpreter configuration, compiled
- * modules and the data files that libraries load whole as they start. */
+ * modules, the data files that libraries load whole as they start, and what a JVM loads from
+ * its JDK. */
 static const char *const default_background_paths[] = {
     "/etc/ssl/certs/*",
     "/etc/ssl/cert.pem",
@@ -59,6 +60,22 @@ static const char *const default_background_paths[] = {
     "*/service-2.json.gz",
     "*/endpoint-rule-set-1.json",
     "*/endpoint-rule-set-1.json.gz",
+    "/usr/lib/jvm/*",
+    "/usr/lib64/jvm/*",
+    "/usr/java/*",
+    "/usr/local/openjdk-*",
+    "/opt/java/*",
+    "/etc/java*",
+    /* By name, so that a JVM's own files count from their first read in a container too. */
+    "*/modules",
+    "*/libnet.so",
+    "*/libnio.so",
+    "*/libextnet.so",
+    "*/libjimage.so",
+    "*/net.properties",
+    "*/java.security",
+    "*.policy",
+    "*.jsa",
 };
 
 /* Files that programs load as they run and that people also send: account databases, source
