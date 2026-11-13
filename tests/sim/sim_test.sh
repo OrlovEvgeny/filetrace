@@ -77,19 +77,21 @@ stream_two_lines()
         head -n 2 >stream.ndjson
 }
 
-# watch_frame <file>: the first frame of watch, which is stopped once the frame is whole.
+# watch_frame <file> [<option>...]: the first frame of watch, stopped once the frame is whole.
 watch_frame()
 {
-    "$cli" --socket sim.sock watch --no-ui --limit 100 >"$1" 2>/dev/null &
+    frame=$1
+    shift
+    "$cli" --socket sim.sock watch --no-ui --limit 100 "$@" >"$frame" 2>/dev/null &
     watcher=$!
     waited=0
-    while ! grep -q 'LOST: ' "$1" && [ "$waited" -lt 50 ]; do
+    while ! grep -q 'LOST: ' "$frame" && [ "$waited" -lt 50 ]; do
         sleep 0.1
         waited=$((waited + 1))
     done
     kill "$watcher" 2>/dev/null || true
     wait "$watcher" 2>/dev/null || true
-    grep -q 'LOST: ' "$1"
+    grep -q 'LOST: ' "$frame"
 }
 
 # A history of the stream makes the transfers and the processes known as soon as it serves.
@@ -231,6 +233,11 @@ ok "a destination says a name through a proxy" grep -Eq '^[0-9]+ +10\.0\.8\.40 +
 ok "top prints a snapshot" query top.txt top --once
 ok "the snapshot has its header" grep -q 'DESTINATION' top.txt
 ok "the snapshot has rows" grep -q 'nginx' top.txt
+ok "the snapshot shows a name in place of an address" grep -Eq ' rclone +/srv/backups/pg/[^ ]+ +pg-backups\.s3\.' top.txt
+ok "the snapshot leaves the address of a named end out" exits 1 grep -q '198\.51\.100\.7:443' top.txt
+ok "top prints a snapshot by address" query top-addresses.txt top --once --addresses
+ok "the snapshot by address shows the address of a named end" grep -Eq ' rclone +/srv/backups/pg/[^ ]+ +198\.51\.100\.7:443 ' top-addresses.txt
+ok "the snapshot by address leaves the name out" exits 1 grep -q 'pg-backups\.s3\.' top-addresses.txt
 for mode in transfers processes destinations files; do
     ok "top lists the $mode as JSON" query "top-$mode.json" top --mode "$mode" --once --json
     ok "the $mode JSON is valid" json_valid "top-$mode.json"
@@ -253,6 +260,9 @@ ok "watch prints a frame" watch_frame watch.txt
 ok "watch shows a name in place of an address" grep -Eq '^rclone [0-9]+ +/srv/backups/pg/[^ ]+ +pg-backups\.s3\.example\.com +read-write ' watch.txt
 ok "watch leaves the address of a named end out" exits 1 grep -q '52\.219\.170\.52' watch.txt
 ok "watch shows the address of an end nobody named" grep -Eq '^java [0-9]+ +/var/lib/kafka/[^ ]+ +10\.0\.5\.2[23] +sendfile ' watch.txt
+ok "watch prints a frame by address" watch_frame watch-addresses.txt --addresses
+ok "the frame by address shows the address of a named end" grep -Eq '^rclone [0-9]+ +/srv/backups/pg/[^ ]+ +198\.51\.100\.7 +read-write ' watch-addresses.txt
+ok "the frame by address leaves the name out" exits 1 grep -q 'pg-backups\.s3\.example\.com' watch-addresses.txt
 
 kill -TERM "$pid"
 status=0

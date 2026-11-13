@@ -231,6 +231,10 @@ static int parse_option(struct top_args *t, struct ft_args *a)
         t->opt.resolve = true;
         return 1;
     }
+    if (ft_args_flag(a, "--addresses")) {
+        t->opt.addresses = true;
+        return 1;
+    }
     if ((r = parse_choice_option(t, a)) != 0)
         return r;
 

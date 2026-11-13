@@ -61,6 +61,7 @@ struct ft_watch_options {
     bool plain;                        /* append snapshots instead of drawing a dashboard */
     bool timestamps;                   /* head each appended snapshot with its time */
     bool resolve;                      /* show remote addresses by host name */
+    bool addresses;                    /* start with the remote ends by address, as the key a */
 
     /* Filters of every view; its sort orders the transfers, its limit caps each table. */
     struct ft_query filter;

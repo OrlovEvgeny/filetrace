@@ -2286,6 +2286,7 @@ bool ft_top_control_init(struct ft_top_controller *c, struct ft_top_model *m,
     ui->mode = mode;
     ui->previous_mode = FT_TOP_TRANSFERS;
     ui->full_paths = true;
+    ui->addresses = opt->addresses;
     ui->delay_ns = opt->delay_ns < FT_TOP_DELAY_MIN_NS   ? FT_TOP_DELAY_MIN_NS
                    : opt->delay_ns > FT_TOP_DELAY_MAX_NS ? FT_TOP_DELAY_MAX_NS
                                                          : opt->delay_ns;

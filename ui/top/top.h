@@ -72,6 +72,7 @@ struct ft_top_options {
     bool once;          /* one snapshot on stdout instead of the screen */
     bool json;          /* with once: JSON; without: one JSON line per refresh */
     bool resolve;       /* show remote addresses by host name */
+    bool addresses;     /* start with destinations by address, as the key a */
 };
 
 void ft_top_options_defaults(struct ft_top_options *opt);
