@@ -2157,6 +2157,44 @@ static void scenario_stalled_page(const char *path)
 }
 
 /*
+ * replypieces <path> <bytes> <head bytes> <tail bytes> <hear|wait>: over a connection that has
+ * heard from its peer, reads the file in pieces of 16384 bytes and sends each as it is read, with
+ * the head from memory between the first read and its piece and the tail from memory after the
+ * last; then hears the answer, or keeps the connection open for three seconds, and closes.
+ */
+static void scenario_reply_pieces(const char *path, size_t size, size_t head, size_t tail,
+                                  bool answered)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, answered ? SINK_ANSWER : SINK_GREET);
+    char *extra = calloc(1, head + tail + 1);
+    char piece[16384];
+    if (!extra)
+        die("malloc");
+    make_file(path, size);
+
+    int sock = connect_sink(&sink);
+    if (answered)
+        send_all(sock, "hello\n", 6);
+    hear(sock);
+    int file = open_file(path);
+    for (ssize_t n; (n = read(file, piece, sizeof(piece))) > 0;) {
+        send_all(sock, extra, head);
+        head = 0;
+        send_all(sock, piece, (size_t)n);
+    }
+    send_all(sock, extra, tail);
+    if (answered)
+        hear(sock);
+    else
+        sleep(3);
+    close(sock);
+    close(file);
+    free(extra);
+    report("replypieces", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
  * rereadhello <path> <bytes>: reads the file and sends a hello the size of a TLS ClientHello on a
  * connection whose peer answers late; reads the file again and does the same on a second one.
  * Each connection then hears its answer and sends a request, as a client reads its CA file per
@@ -3196,6 +3234,9 @@ int main(int argc, char **argv)
         scenario_failed_send(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "stalledpage") == 0 && argc == 3)
         scenario_stalled_page(argv[2]);
+    else if (strcmp(name, "replypieces") == 0 && argc == 7)
+        scenario_reply_pieces(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]),
+                              strcmp(argv[6], "hear") == 0);
     else if (strcmp(name, "rereadhello") == 0 && argc == 4)
         scenario_reread_hello(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "rereadput") == 0 && argc == 4)
