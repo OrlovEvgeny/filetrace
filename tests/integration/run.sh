@@ -400,6 +400,10 @@ done
 # An interpreter's configuration read at startup is background, whatever is uploaded after it.
 mkdir -p "$data/etc/php/8.4/cli"
 "$workload" readmemory "$data/etc/php/8.4/cli/php.ini" 75000 75000 >/dev/null
+# What a JVM reads from its JDK as classes load between the file's read and its post is
+# background wherever the JDK is installed.
+mkdir -p "$data/jdk/lib" "$data/jdk/conf"
+"$workload" jvmpost "$data/java-post.dat" 20480 "$data/jdk" >/dev/null
 # A small file read after a large one is what a later send over an open connection takes, but
 # not once the read is stale. A module loaded after it takes its place, and is not what went.
 "$workload" readsendother "$data/side-bg-large.bin" 300000 "$data/side-bg-small.bin" 20000 \
@@ -408,7 +412,7 @@ mkdir -p "$data/etc/php/8.4/cli"
     >/dev/null
 settle
 for pair in stream-after-dial:300000 stream-sniffed:1048364 chatty:300000 two-a:300000 two-d:200000 \
-    reply-thread:300000 small-before:20000; do
+    reply-thread:300000 small-before:20000 java-post:20480; do
     name=${pair%%:*}
     path=$(ls "$data/$name".* | head -1)
     csv=$(ft files --path "$path" --format csv)
@@ -424,6 +428,10 @@ expect "dialed path, side-bg-lib.py: not reported" \
     "$(ft files --path "$data/side-bg-lib.py" --format csv | rows)" 0
 expect "dialed path, php.ini: not reported" \
     "$(ft files --path "$data/etc/php/8.4/cli/php.ini" --format csv | rows)" 0
+for name in lib/modules lib/libnet.so conf/net.properties; do
+    expect "dialed path, JDK $name: not reported" \
+        "$(ft files --path "$data/jdk/$name" --format csv | rows)" 0
+done
 csv=$(ft files --path "$data/fanout.bin" --format csv)
 expect "dialed path, fan-out: rows" "$(printf '%s\n' "$csv" | rows)" 2
 expect "dialed path, fan-out: bytes" \

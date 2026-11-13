@@ -2338,6 +2338,53 @@ static void scenario_read_bundle(const char *path, size_t size, const char *bund
     stop_sink(&sink);
 }
 
+/* Reads a page of the file at every step from one offset to another, as a loader does. */
+static void read_pages(int fd, off_t from, off_t to, off_t step)
+{
+    char page[4096];
+    for (off_t at = from; at < to; at += step)
+        if (pread(fd, page, sizeof(page), at) != (ssize_t)sizeof(page))
+            die("pread");
+}
+
+/*
+ * jvmpost <path> <bytes> <jdk>: a JVM's upload. The runtime image is read as the JVM starts, then
+ * the file whole; loading the HTTP classes reads the image again, checks a library's header twice
+ * and reads the network settings; then a request head and the file go.
+ */
+static void scenario_jvm_post(const char *path, size_t size, const char *jdk)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    char image[PATH_MAX];
+    char library[PATH_MAX];
+    char settings[PATH_MAX];
+    snprintf(image, sizeof(image), "%s/lib/modules", jdk);
+    snprintf(library, sizeof(library), "%s/lib/libnet.so", jdk);
+    snprintf(settings, sizeof(settings), "%s/conf/net.properties", jdk);
+    make_file(image, 600000);
+    make_file(library, 79736);
+    int jimage = open_file(image);
+    read_pages(jimage, 0, 65536, 4096);
+
+    char *contents = read_whole_file(path, size);
+    read_pages(jimage, 131072, 262144, 8192);
+    int lib = open_file(library);
+    read_pages(lib, 0, 4096, 4096);
+    read_pages(lib, 0, 4096, 4096);
+    close(lib);
+    free(read_whole_file(settings, 7441));
+    char head[177];
+    memset(head, 'h', sizeof(head));
+    int sock = connect_sink(&sink);
+    send_all(sock, head, sizeof(head));
+    send_all(sock, contents, size);
+    close(sock);
+    close(jimage);
+    free(contents);
+    report("jvmpost", path, size, sink.port);
+    stop_sink(&sink);
+}
+
 /* upload <path> <chunk>: sends a file that already exists, in reads of chunk bytes */
 static void scenario_upload(const char *path, size_t chunk)
 {
@@ -3280,6 +3327,8 @@ int main(int argc, char **argv)
         scenario_read_recv_elsewhere(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
     else if (strcmp(name, "readbundle") == 0 && argc == 6)
         scenario_read_bundle(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "jvmpost") == 0 && argc == 5)
+        scenario_jvm_post(argv[2], arg_size(argv[3]), argv[4]);
     else if (strcmp(name, "fifolib") == 0 && argc == 3)
         scenario_fifo_lib(argv[2]);
     else if (strcmp(name, "read") == 0 && argc == 3)
