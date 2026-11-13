@@ -521,7 +521,7 @@ static void join_path(const char *comps, size_t len, uint16_t flags, char *path,
 }
 
 /*
- * Probes the files a process starts with, or those a forked child carries on with: PHP-FPM
+ * Has the files a process starts with probed, or those a forked child carries on with: PHP-FPM
  * forks its master off the process that ran it, and web servers load PHP before forking workers.
  */
 static void process_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe)
@@ -534,8 +534,7 @@ static void process_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e
     comm[sizeof(comm) - 1] = '\0';
     const char *slash = exe ? strrchr(exe, '/') : nullptr;
     const char *name = exe ? (slash ? slash + 1 : exe) : comm;
-    if (ft_linux_prober_wants(b->prober, name))
-        ft_linux_prober_attach_pid(b->prober, e->pid);
+    ft_linux_prober_started(b->prober, e->pid, name, e->hdr.ts_ns);
 }
 
 static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe,
@@ -677,6 +676,8 @@ static int on_ring_event(void *ctx, void *data, size_t size)
             on_process(b, data, nullptr, nullptr, 0, nullptr);
             if (hdr->kind == FT_BPF_EV_FORK)
                 process_started(b, data, nullptr);
+            else if (ft_sysinfo_host_pid_namespace())
+                ft_linux_prober_ended(b->prober, ((const struct ft_bpf_ev_proc *)data)->pid);
         }
         break;
     case FT_BPF_EV_SOCK_STATE:
@@ -866,9 +867,10 @@ static void backend_flush(struct ft_backend *b)
     if (now_ns - b->background_scan_ns > BACKGROUND_RESCAN_NS) {
         if (b->background_fd >= 0)
             background_scan(b, now_ns);
-        ft_linux_prober_scan(b->prober);
+        ft_linux_prober_rescan(b->prober);
         b->background_scan_ns = now_ns;
     }
+    ft_linux_prober_work(b->prober, now_ns);
 }
 
 static int backend_poll_fd(struct ft_backend *b)
@@ -992,8 +994,9 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
         b->prober = ft_linux_prober_create();
         b->php = b->prober ? ft_linux_php_open(obj, b->prober) : nullptr;
-        ft_linux_prober_scan(b->prober);
     }
+    ft_linux_prober_rescan(b->prober);
+    ft_linux_prober_work(b->prober, ft_clock_mono_ns());
 
     b->ring = ring_buffer__new(bpf_map__fd(events), on_ring_event, b, nullptr);
     b->cpu_values = calloc((size_t)(b->ncpus > 0 ? b->ncpus : 1), sizeof(uint64_t));
