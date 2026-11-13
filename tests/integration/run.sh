@@ -152,6 +152,18 @@ start_agent || { echo "FAIL: the agent did not start"; exit 1; }
 
 expect "agent status exit code" "$(ft agent status >/dev/null; echo $?)" 0
 
+# Where the agent chose kprobes by itself, doctor names the trampoline the kernel refused.
+if [ "$probes" = auto ]; then
+    if ft stats | grep -q 'eBPF (kprobes)'; then
+        expect_match "doctor says why trampolines are not used" \
+            "$(grep 'BPF trampolines:' "$work/doctor.txt")" \
+            'LIMITED \((fexit|fentry) [a-z0-9_]+: .+; kernel functions are traced with kprobes'
+    else
+        expect_match "doctor: trampolines" "$(grep 'BPF trampolines:' "$work/doctor.txt")" \
+            'AVAILABLE'
+    fi
+fi
+
 # sendfile over IPv4: an exact attribution with exact byte counts.
 report=$("$workload" sendfile "$data/report.csv" 5000000)
 settle
