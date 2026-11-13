@@ -4,7 +4,7 @@
 Each scenario plays a program whose system calls come in an exact order, then asks the agent
 what it listed for this process, at once and 5 s later, and compares that with what really
 left: every file a scenario sends must be listed with the bytes it sent, and nothing else.
-The last line printed is RESULT: OK, RESULT: BUG or RESULT: INVALID."""
+The last line printed is RESULT: OK, RESULT: BUG, RESULT: INVALID or RESULT: SKIP."""
 import faulthandler
 import functools
 import os
@@ -30,10 +30,11 @@ SCENARIOS = {}
 class Case:
     """notes: what the scenario did; expect: file name -> (least, most) bytes sent; check: more
     problems from the listed files; judge: replaces the comparison; invalid: why the scenario
-    could not set itself up; close: a connection left open, closed between two listings, of
-    which those named in judged ("open", "closed") count"""
+    could not set itself up; skip: why the scenario does not apply on this machine; close: a
+    connection left open, closed between two listings, of which those named in judged ("open",
+    "closed") count"""
 
-    def __init__(self, notes, expect=None, check=None, judge=None, invalid=None, close=None, judged=("open", "closed")):
+    def __init__(self, notes, expect=None, check=None, judge=None, invalid=None, close=None, judged=("open", "closed"), skip=None):
         self.notes = notes
         self.expect = expect or {}
         self.check = check
@@ -41,6 +42,7 @@ class Case:
         self.invalid = invalid
         self.close = close
         self.judged = judged
+        self.skip = skip
 
 
 def scenario(name):
@@ -1136,6 +1138,9 @@ def main():
     try:
         case = SCENARIOS[name]()
         print("scenario %s: %s" % (name, case.notes))
+        if case.skip:
+            print("RESULT: SKIP (%s)" % case.skip)
+            return 3
         if case.invalid:
             print("RESULT: INVALID (%s)" % case.invalid)
             return 2
