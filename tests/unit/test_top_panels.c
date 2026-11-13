@@ -37,9 +37,11 @@ static void process(struct fixture *f, uint32_t pid, uint32_t ppid, const char *
     free(row);
 }
 
-static void transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate, uint64_t ino,
-                     const char *path, const char *remote, const char *script)
+static void named_transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate,
+                           uint64_t ino, const char *path, const char *remote, const char *script,
+                           const struct ft_remote_names *names)
 {
+    static const struct ft_remote_names nameless = {.tls = ""};
     struct ft_row_transfer *row = calloc(1, sizeof(*row));
     struct ft_process_strings text = {"", "/srv", script};
 
@@ -59,9 +61,17 @@ static void transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate
     ft_strlcpy(row->comm, "worker", sizeof(row->comm));
     ft_strlcpy(row->path, path, FT_PATH_MAX);
     size_t lead = strlen(row->path) + 1;
-    ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    lead += ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    ft_remote_names_pack(names ? names : &nameless, &row->names, row->path + lead,
+                         sizeof(row->path) - lead);
     CHECK(ft_rows_append(&f->transfers, row, ft_row_transfer_size(row)));
     free(row);
+}
+
+static void transfer(struct fixture *f, uint64_t id, uint32_t pid, uint64_t rate, uint64_t ino,
+                     const char *path, const char *remote, const char *script)
+{
+    named_transfer(f, id, pid, rate, ino, path, remote, script, nullptr);
 }
 
 static void leader(struct ft_rows *rows, uint32_t rank, const char *text, uint64_t bytes,
@@ -456,6 +466,69 @@ static void inspect(void)
     fixture_free(&f);
 }
 
+/* The right half of the panel of a transfer: a label and its value per row, nullptr for none. */
+static void inspect_names_of(struct fixture *f, uint64_t id, const char *const lines[4][2])
+{
+    struct ft_canvas *c = canvas(174, 44);
+    struct ft_top_draw d = drawing(f, c);
+    struct ft_rect r = {0, 36, 174, 7};
+
+    for (size_t i = 0; i < ft_top_row_count(f->m, FT_TOP_TRANSFERS); i++) {
+        const struct ft_top_row *row = ft_top_row_at(f->m, FT_TOP_TRANSFERS, i);
+        if (row->kind == FT_TOP_ROW_TRANSFER && row->transfer->id == id)
+            ft_top_select_at(f->m, FT_TOP_TRANSFERS, i);
+    }
+    f->ui.mode = FT_TOP_TRANSFERS;
+    ft_top_draw_inspect(&d, r);
+    for (int i = 0; i < 4; i++) {
+        int y = r.y + 1 + i;
+        if (!lines[i][0]) {
+            CHECK_U64(count_runes(c, 88, y, 30, UNTOUCHED), 30);
+            continue;
+        }
+        int width = ft_text_columns(lines[i][1]);
+        CHECK_STR(text_at(c, 88, y, (int)strlen(lines[i][0])), lines[i][0]);
+        CHECK_STR(text_at(c, 104, y, width), lines[i][1]);
+        CHECK(ft_canvas_at(c, 104 + width, y)->rune == UNTOUCHED);
+    }
+    ft_canvas_destroy(c);
+}
+
+static void inspect_names(void)
+{
+    static const struct ft_remote_names proxied = {
+        .tls = "s3.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+    static const struct ft_remote_names looked_up = {
+        .tls = "", .resolved = {"files.example.com"}, .listed = 1, .count = 1};
+    static const char *const proxied_lines[4][2] = {
+        {"remote", "10.0.8.40:443"},
+        {"name", "s3.example.com via proxy.corp.example"},
+        {"name from", "TLS server name"},
+        {"resolved names", "proxy.corp.example"},
+    };
+    static const char *const looked_up_lines[4][2] = {
+        {"remote", "198.51.100.7:443"},
+        {"name", "files.example.com"},
+        {"name from", "lookup"},
+        {nullptr, nullptr},
+    };
+    struct fixture f;
+    fixture_init(&f);
+
+    named_transfer(&f, 6, 200, 50 * MIB, 6, "/srv/a.bin", "10.0.8.40", "", &proxied);
+    named_transfer(&f, 7, 200, 40 * MIB, 7, "/srv/b.bin", "198.51.100.7", "", &looked_up);
+    struct ft_top_sample s = {
+        .mono_ns = 2 * SECOND,
+        .stats = &f.stats,
+        .transfers = &f.transfers,
+        .processes = &f.processes,
+    };
+    CHECK(ft_top_model_sample(f.m, &s));
+    inspect_names_of(&f, 6, proxied_lines);
+    inspect_names_of(&f, 7, looked_up_lines);
+    fixture_free(&f);
+}
+
 /* The panel lists the mode's sort keys in order, the one in effect marked. */
 static void panel_sorts(struct fixture *f, enum ft_top_mode mode)
 {
@@ -601,6 +674,7 @@ void test_top_panels(void)
     leaders_narrow();
     leaders_off();
     inspect();
+    inspect_names();
     panel();
     help();
     overlay();
