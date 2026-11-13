@@ -43,21 +43,26 @@ struct {
     __type(value, struct lookup_call);
 } lookup_calls SEC(".maps");
 
+/*
+ * The count lives in the record, which the verifier knows nothing of: before 6.7 it checks a
+ * callback once, would take a count on the stack for 0 at every step, and drop the comparison
+ * with the address before as dead code.
+ */
 struct lookup_walk {
     struct ft_bpf_ev_lookup *e;
     __u64 next;
-    __u32 count;
-    __u32 inet6;
 };
 
 /* Takes the address of one entry of the result, unless it repeats the one before it. */
 static long lookup_step(__u64 index, void *arg)
 {
     struct lookup_walk *w = arg;
+    struct ft_bpf_ev_lookup *e = w->e;
     struct lookup_addrinfo ai;
     __u64 addr[2] = {};
+    __u32 count = e->count;
 
-    if (!w->next || w->count >= FT_BPF_LOOKUP_ADDRS ||
+    if (!w->next || count >= FT_BPF_LOOKUP_ADDRS ||
         bpf_probe_read_user(&ai, sizeof(ai), (void *)w->next))
         return 1;
     w->next = ai.next;
@@ -73,14 +78,18 @@ static long lookup_step(__u64 index, void *arg)
     }
 
     __u32 inet6 = ai.family == AF_INET6;
-    if (w->count) {
-        __u64 *last = (__u64 *)w->e->addrs[(w->count - 1) & (FT_BPF_LOOKUP_ADDRS - 1)];
-        if (last[0] == addr[0] && last[1] == addr[1] && ((w->inet6 >> (w->count - 1)) & 1) == inet6)
+    if (count) {
+        /* Masked where the verifier sees it: the compiler would drop a mask it knows is moot. */
+        __u32 before = count - 1;
+        barrier_var(before);
+        before &= FT_BPF_LOOKUP_ADDRS - 1;
+        __u64 *last = (__u64 *)e->addrs[before];
+        if (last[0] == addr[0] && last[1] == addr[1] && ((e->inet6 >> before) & 1) == inet6)
             return 0;
     }
-    __builtin_memcpy(w->e->addrs[w->count & (FT_BPF_LOOKUP_ADDRS - 1)], addr, 16);
-    w->inet6 |= inet6 << w->count;
-    w->count++;
+    __builtin_memcpy(e->addrs[count & (FT_BPF_LOOKUP_ADDRS - 1)], addr, 16);
+    e->inet6 |= inet6 << count;
+    e->count = count + 1;
     return 0;
 }
 
@@ -120,9 +129,11 @@ int BPF_URETPROBE(ft_getaddrinfo_return, int ret)
         return 0;
     }
     struct lookup_walk w = {.e = e, .next = list};
+    e->count = 0;
+    e->inet6 = 0;
     if (bpf_probe_read_user_str(e->name, sizeof(e->name), (void *)node) > 1)
         bpf_loop(FT_BPF_LOOKUP_ENTRIES, lookup_step, &w, 0);
-    if (!w.count) {
+    if (!e->count) {
         bpf_ringbuf_discard(e, 0);
         return 0;
     }
@@ -133,8 +144,6 @@ int BPF_URETPROBE(ft_getaddrinfo_return, int ret)
     e->hdr.pad = 0;
     e->pid = (__u32)(ids >> 32);
     e->tid = (__u32)ids;
-    e->count = w.count;
-    e->inet6 = w.inet6;
     bpf_ringbuf_submit(e, wake_flags());
     return 0;
 }
