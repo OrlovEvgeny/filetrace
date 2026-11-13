@@ -585,6 +585,8 @@ static bool agent_open(struct agent *d, struct ft_error *err)
 
 int ft_agent_run(const struct ft_agent_config *cfg, struct ft_error *err)
 {
+    ft_sysinfo_small_pages();
+
     struct agent *d = calloc(1, sizeof(*d));
     if (!d)
         return ft_error_set(err, FT_EXIT_ERROR, "Out of memory");

@@ -457,6 +457,41 @@ static void keeps_names_where_they_can_come_from(void)
     CHECK_U64(room_for_names(no_source_of_names), 0);
 }
 
+/* Where the kernel says whether a process may get huge pages, the agent has asked for none. */
+static void runs_on_small_pages(void)
+{
+#if defined(__linux__)
+    struct reply r = {0};
+    struct ft_error err = {0};
+    struct ft_query q;
+    char path[64];
+    char line[128];
+    int allowed = -1;
+    int pair[2];
+
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    pid_t pid = start_agent(&scripted_ops, nullptr, pair[1], pair[0]);
+    close(pair[1]);
+
+    struct ft_client *c = ft_client_adopt(pair[0]);
+    ft_query_init(&q, FT_Q_STATS);
+    CHECK_U64(ft_client_query(c, &q, on_row, &r, nullptr, &err), FT_EXIT_OK);
+
+    snprintf(path, sizeof(path), "/proc/%d/status", (int)pid);
+    FILE *status = fopen(path, "r");
+    while (status && fgets(line, sizeof(line), status)) {
+        if (sscanf(line, "THP_enabled: %d", &allowed) == 1)
+            break;
+    }
+    if (status)
+        fclose(status);
+    CHECK(allowed != 1);
+
+    ft_client_close(c);
+    CHECK_U64(wait_exit(pid), FT_EXIT_OK);
+#endif
+}
+
 static void reports_a_backend_that_cannot_start(void)
 {
     struct ft_error err = {0};
@@ -986,6 +1021,7 @@ void test_agent(void)
     serves_a_single_session();
     streams_events_to_a_follower();
     keeps_names_where_they_can_come_from();
+    runs_on_small_pages();
     reports_a_backend_that_cannot_start();
     serves_metrics_to_a_scraper();
     exports_to_a_collector_that_appears_later();

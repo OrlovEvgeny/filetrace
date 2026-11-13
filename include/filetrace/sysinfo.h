@@ -30,6 +30,13 @@ bool ft_sysinfo_host_pid_namespace(void);
 
 bool ft_sysinfo_process_open_files(uint32_t pid, uint32_t *count);
 
+/*
+ * Asks the kernel to back this process's memory with pages of the base size only. Tables are
+ * reserved whole and used a little at a time; behind a huge page every first touch makes
+ * megabytes resident. Does nothing where the system has no such setting or refuses.
+ */
+void ft_sysinfo_small_pages(void);
+
 /* "linux", "macos", "freebsd" or the lowercase system name. */
 const char *ft_platform_name(void);
 
