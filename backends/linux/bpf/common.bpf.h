@@ -787,6 +787,14 @@ static __always_inline __u64 carry_whole(const struct carry *c)
     return (copies ? copies : 1) * c->size;
 }
 
+/* Takes a dropped window's held charges off the dial of its own connection, not a later one's. */
+static __always_inline void carry_uncharge(__u64 sk, const struct carry *c)
+{
+    struct dial *d = bpf_map_lookup_elem(&dials, &sk);
+    if (d && d->cookie == c->cookie)
+        dial_charged(sk, &c->file, -(__s64)c->sent);
+}
+
 /*
  * Reports the file a first flight or a reply carried, or drops it. A first flight is taken by
  * its charges, unless it holds a strict file read whole; a reply is taken by what went.
@@ -804,7 +812,7 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
     bool small = c->held || (c->size && c->size < CARRY_FLOOR);
     if (flight && (((end == CARRY_AGAIN || end == CARRY_HUNG) && c->wire < CARRY_FLIGHT_MAX) ||
                    (small && c->wire > whole + CARRY_SLACK + whole / 128))) {
-        dial_charged(sk, &c->file, -(__s64)c->sent);
+        carry_uncharge(sk, c);
         return;
     }
     bool by_volume = !flight || c->held;
@@ -829,7 +837,7 @@ static __always_inline void carry_judge(void *map, __u64 sk, const struct carry 
         carry_report(map, c, &c->file, by_volume && whole < c->sent ? whole : c->sent, c->read);
         return;
     }
-    dial_charged(sk, &c->file, -(__s64)c->sent);
+    carry_uncharge(sk, c);
 }
 
 static __always_inline __u32 current_tid(void)
