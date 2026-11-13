@@ -8,6 +8,7 @@ RUN apt-get update \
         cmake \
         git \
         gnutls-bin \
+        openssl \
         iproute2 \
         libbpf-dev \
         libclang-rt-dev \
