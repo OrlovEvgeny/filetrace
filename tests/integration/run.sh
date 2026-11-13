@@ -1352,7 +1352,14 @@ cat >"$work/etc/hosts" <<'HOSTS'
 127.0.0.5 proxy.ft.test
 127.0.0.2 later.ft.test
 HOSTS
+i=1
+while [ $i -le 20 ]; do
+    echo "127.0.1.$i many.ft.test" >>"$work/etc/hosts"
+    i=$((i + 1))
+done
 printf 'hosts: files\n' >"$work/etc/nsswitch.conf"
+# Every line of the hosts file that names a host, not the first only, as Debian sets glibc.
+printf 'multi on\n' >"$work/etc/host.conf"
 named() {
     FT_ETC="$work/etc" "$@"
 }
@@ -1366,7 +1373,6 @@ column_where() {
 dynamic=$(dirname "$workload")/dynamic/ft_workload
 "$dynamic" >/dev/null 2>&1
 if [ $? -ne 2 ]; then
-    echo "SKIP: no workload linked to the shared C library runs here; the name checks did not run"
     dynamic=
 fi
 
@@ -1480,6 +1486,27 @@ if [ -n "$dynamic" ]; then
     expect "names: a C library in a container's own file system" "$(name_of private1.bin)" \
         alone.ft.test
     expect "names: another alike but for its device" "$(name_of private2.bin)" alone.ft.test
+
+    # A name with 20 addresses asked for without a socket type: each address comes back once per
+    # type, and the first 16 distinct ones are kept.
+    many=$(named "$dynamic" lookupmany many.ft.test "$data/many0.bin" 0)
+    expect "names: entries of a lookup without a socket type" "$(field "$many" entries)" 60
+    expect "names: their distinct addresses" "$(field "$many" distinct)" 20
+    for index in 15 16 19; do
+        named "$dynamic" lookupmany many.ft.test "$data/many$index.bin" "$index" >/dev/null
+    done
+    # A failed lookup leaves nothing behind for the good one after it.
+    named "$dynamic" lookupsend alone.ft.test "$data/afterfail.bin" afterfail >/dev/null
+    settle
+    expect "names: the first of many addresses" "$(name_of many0.bin)" many.ft.test
+    expect "names: the 16th of many addresses" "$(name_of many15.bin)" many.ft.test
+    expect "names: the 17th of many addresses" "$(name_of many16.bin)" ""
+    expect "names: the 20th of many addresses" "$(name_of many19.bin)" ""
+    csv=$(ft files --path "$data/afterfail.bin" --format csv)
+    expect "names: after a failed lookup" "$(printf '%s\n' "$csv" | column network.remote_name)" \
+        alone.ft.test
+    expect "names: after a failed lookup, one name" \
+        "$(printf '%s\n' "$csv" | column network.resolved_name_count)" 1
 
     # Datagrams from one socket to two peers: the flow to the looked-up address alone is named.
     csv=$(ft flows --pid "$(field "$udp_report" pid)" --protocol udp --format csv)
@@ -1870,10 +1897,16 @@ expect "no rankings: agent exit code" "$?" 0
 if [ -n "$dynamic" ]; then
     # With names off nothing is probed for them, and the listings print as they would without.
     printf '[names]\nenabled = false\n' >"$work/no-names.toml"
-    start_agent --config "$work/no-names.toml" ||
-        { echo "FAIL: the agent did not start without names"; exit 1; }
+    "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms --log-level info \
+        --probes "$probes" --config "$work/no-names.toml" 2>"$work/no-names.err" &
+    agent_pid=$!
+    wait_for_socket
     named "$dynamic" lookupsend alone.ft.test "$data/off.bin" tcp >/dev/null
     settle
+    expect "names off: nothing probed for them" \
+        "$(grep -c 'probing name lookups' "$work/no-names.err")" 0
+    expect_match "names off: the agent's log is read" "$(cat "$work/no-names.err")" \
+        'collecting with the Linux eBPF backend'
     expect_match "names off: header" "$(ft files --path "$data/off.bin" | head -1)" \
         '^FILE +PROCESS +DESTINATION +BYTES'
     expect "names off: none in JSON" \
@@ -2104,5 +2137,8 @@ else
     echo "NOTE: the collector of a killed top stopped $(field "$out" gone_ms) ms after it"
 fi
 
+if [ -z "$dynamic" ]; then
+    echo "WARNING: THE NAME CHECKS DID NOT RUN: no workload linked to the shared C library runs here"
+fi
 echo "$checks checks, $failures failed"
 [ "$failures" -eq 0 ]

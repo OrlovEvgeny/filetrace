@@ -4178,7 +4178,7 @@ static void send_datagrams(const struct sockaddr_storage *named, const char *pat
  * up before a fork, sent from the child); forklater (the parent looks up after the fork and
  * hands the address to the child); exec (sent after an exec of this program); mapped (asked
  * for IPv6 with IPv4-mapped results, sent from an IPv6 socket); numeric (the name is an
- * address); both (name2 looked up as well).
+ * address); both (name2 looked up as well); afterfail (a name the hosts lack looked up first).
  */
 static void scenario_lookup_send(const char *name, const char *path, const char *how,
                                  const char *name2)
@@ -4212,6 +4212,13 @@ static void scenario_lookup_send(const char *name, const char *path, const char 
         if (write(pipefd[1], &addr, sizeof(addr)) != (ssize_t)sizeof(addr))
             die("write");
         waitpid(child, nullptr, 0);
+    } else if (strcmp(how, "afterfail") == 0) {
+        struct addrinfo hints = {.ai_socktype = SOCK_STREAM};
+        struct addrinfo *res;
+        if (getaddrinfo("missing.ft.test", nullptr, &hints, &res) == 0)
+            die("missing.ft.test resolved");
+        lookup(name, AF_UNSPEC, 0, &addr);
+        send_to(&addr, path);
     } else if (strcmp(how, "mapped") == 0) {
         lookup(name, AF_INET6, AI_V4MAPPED, &addr);
         const struct sockaddr_in6 *mapped = (const struct sockaddr_in6 *)&addr;
@@ -4260,6 +4267,38 @@ static void scenario_lookup_send(const char *name, const char *path, const char 
             send_to(&addr, path);
         }
     }
+}
+
+/*
+ * lookupmany <name> <file> <index>: looks the name up for IPv4 without a socket type, so that each
+ * address comes back once per type, and sends the file to the index-th of its distinct addresses.
+ */
+static void scenario_lookup_many(const char *name, const char *path, size_t index)
+{
+    struct addrinfo hints = {.ai_family = AF_INET};
+    struct addrinfo *res;
+    int rc = getaddrinfo(name, nullptr, &hints, &res);
+    if (rc != 0) {
+        fprintf(stderr, "getaddrinfo %s: %s\n", name, gai_strerror(rc));
+        exit(1);
+    }
+    struct sockaddr_storage addr = {0};
+    struct in_addr last = {0};
+    size_t entries = 0;
+    size_t distinct = 0;
+    for (const struct addrinfo *ai = res; ai; ai = ai->ai_next, entries++) {
+        struct in_addr a = ((const struct sockaddr_in *)ai->ai_addr)->sin_addr;
+        if (distinct && a.s_addr == last.s_addr)
+            continue;
+        last = a;
+        if (distinct++ == index)
+            memcpy(&addr, ai->ai_addr, ai->ai_addrlen);
+    }
+    freeaddrinfo(res);
+    if (index >= distinct)
+        die("no such address");
+    printf("scenario=lookupmany entries=%zu distinct=%zu\n", entries, distinct);
+    send_to(&addr, path);
 }
 
 /* lookupwrite <name> <out>: looks the name up and writes its first address to out. */
@@ -4679,6 +4718,8 @@ int main(int argc, char **argv)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "lookupsend") == 0 && (argc == 5 || argc == 6))
         scenario_lookup_send(argv[2], argv[3], argv[4], argc == 6 ? argv[5] : nullptr);
+    else if (strcmp(name, "lookupmany") == 0 && argc == 5)
+        scenario_lookup_many(argv[2], argv[3], arg_size(argv[4]));
     else if (strcmp(name, "lookupwrite") == 0 && argc == 4)
         scenario_lookup_write(argv[2], argv[3]);
     else if (strcmp(name, "sendto") == 0 && argc == 4)
