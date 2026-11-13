@@ -209,6 +209,33 @@ static void more_note(FILE *o, size_t total, size_t shown, const char *one, cons
                 plural(total - shown, one, many));
 }
 
+constexpr size_t LISTED = 8; /* items a line names before it counts the rest */
+
+/* A field of up to LISTED items and how many more there are; nothing for no item. */
+static void list_field(FILE *o, const char *label, const char *const *items, size_t count,
+                       size_t more)
+{
+    size_t rest = (count > LISTED ? count - LISTED : 0) + more;
+
+    if (count == 0)
+        return;
+    fprintf(o, "%-18s", label);
+    for (size_t i = 0; i < count && i < LISTED; i++)
+        fprintf(o, "%s%s", i ? ", " : "", items[i]);
+    if (rest)
+        fprintf(o, " and %zu more", rest);
+    fputc('\n', o);
+}
+
+static void names_field(FILE *o, const struct ft_address_names *a)
+{
+    const char *names[FT_ADDRESS_NAMES];
+
+    for (size_t i = 0; i < a->count; i++)
+        names[i] = a->names[i].name;
+    list_field(o, "Names:", names, a->count, a->more);
+}
+
 static void provenance(FILE *o, const struct transfer_summary *sum)
 {
     static const enum ft_method methods[] = {FT_METHOD_SENDFILE, FT_METHOD_READ_SEND};
@@ -875,6 +902,7 @@ struct talker {
     uint64_t tx;
     uint64_t rx;
     uint64_t rate;
+    struct ft_kept_names names; /* of the remote ends it talked to */
 };
 
 struct talkers {
@@ -896,6 +924,14 @@ static int talker_by_bytes(const void *a, const void *b)
     return talker_by_pid(a, b);
 }
 
+static void talkers_free(struct talkers *t)
+{
+    for (size_t i = 0; i < t->count; i++)
+        ft_kept_names_free(&t->items[i].names);
+    free(t->items);
+}
+
+/* On failure, t holds what talkers_free needs. */
 static bool group_talkers(const struct ft_rows *flows, struct talkers *t)
 {
     size_t n = flows->count;
@@ -907,10 +943,16 @@ static bool group_talkers(const struct ft_rows *flows, struct talkers *t)
 
     for (size_t i = 0; i < n; i++) {
         struct ft_row_flow flow;
+        struct ft_remote_names names;
         ft_rows_get(flows, i, &flow, sizeof(flow));
+        ft_row_flow_names(&flow, &names);
         t->items[i] = (struct talker){
             .pid = flow.pid, .tx = flow.tx_bytes, .rx = flow.rx_bytes, .rate = flow.tx_rate};
         ft_strlcpy(t->items[i].comm, flow.comm, sizeof(t->items[i].comm));
+        if (!ft_kept_names_add(&t->items[i].names, &names, flow.tx_bytes)) {
+            t->count = i;
+            return false;
+        }
     }
     qsort(t->items, n, sizeof(*t->items), talker_by_pid);
     for (size_t i = 0; i < n; i++) {
@@ -919,6 +961,7 @@ static bool group_talkers(const struct ft_rows *flows, struct talkers *t)
             last->tx += t->items[i].tx;
             last->rx += t->items[i].rx;
             last->rate += t->items[i].rate;
+            ft_kept_names_join(&last->names, &t->items[i].names);
         } else {
             t->items[t->count++] = t->items[i];
         }
@@ -927,38 +970,87 @@ static bool group_talkers(const struct ft_rows *flows, struct talkers *t)
     return true;
 }
 
+/* Every name behind the remote ends of all of them. */
+static void talkers_names(const struct talkers *t, struct ft_address_names *behind)
+{
+    *behind = (struct ft_address_names){0};
+    for (size_t i = 0; i < t->count; i++)
+        ft_kept_names_gather(&t->items[i].names, behind);
+    ft_address_names_sort(behind);
+}
+
+enum talker_field : uint8_t {
+    TALKER_PID,
+    TALKER_PROCESS,
+    TALKER_NAME,
+    TALKER_RATE,
+    TALKER_TX,
+    TALKER_RX,
+};
+
+struct talker_table {
+    const struct talkers *talkers;
+    enum talker_field fields[TALKER_RX + 1];
+};
+
 static const char *talker_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
 {
-    const struct talkers *t = ctx;
-    const struct talker *it = &t->items[r];
+    const struct talker_table *t = ctx;
+    const struct talker *it = &t->talkers->items[r];
 
-    switch (c) {
-    case 0:
+    switch (t->fields[c]) {
+    case TALKER_PID:
         snprintf(buf, size, "%" PRIu32, it->pid);
         break;
-    case 1:
+    case TALKER_PROCESS:
         snprintf(buf, size, "%s", it->comm[0] ? it->comm : "-");
         break;
-    case 2:
+    case TALKER_NAME:
+        ft_kept_names_format(&it->names, buf, size);
+        return buf[0] ? buf : "-";
+    case TALKER_RATE:
         ft_format_rate(it->rate, buf, size);
         break;
-    case 3:
+    case TALKER_TX:
         ft_format_bytes(it->tx, buf, size);
         break;
-    default:
+    case TALKER_RX:
         ft_format_bytes(it->rx, buf, size);
         break;
     }
     return buf;
 }
 
-static int inspect_ip(struct inspect *in, const char *arg)
+/* The first shown of them, with a NAME column where one of those has a name. */
+static void talkers_table(FILE *o, const struct talkers *t, size_t shown)
 {
     static const struct ft_column_spec columns[] = {
-        {"PID", false}, {"PROCESS", false}, {"OUTBOUND", true}, {"SENT", true}, {"RECEIVED", true}};
+        [TALKER_PID] = {"PID", false},   [TALKER_PROCESS] = {"PROCESS", false},
+        [TALKER_NAME] = {"NAME", false}, [TALKER_RATE] = {"OUTBOUND", true},
+        [TALKER_TX] = {"SENT", true},    [TALKER_RX] = {"RECEIVED", true},
+    };
+    struct ft_column_spec specs[FT_ARRAY_LEN(columns)];
+    struct talker_table table = {.talkers = t};
+    bool named = false;
+    size_t n = 0;
+
+    for (size_t i = 0; i < shown; i++)
+        named = named || t->items[i].names.first;
+    for (enum talker_field k = TALKER_PID; k <= TALKER_RX; k++) {
+        if (k == TALKER_NAME && !named)
+            continue;
+        table.fields[n] = k;
+        specs[n++] = columns[k];
+    }
+    ft_table_print(o, specs, n, shown, talker_cell, &table, ft_term_styled(o));
+}
+
+static int inspect_ip(struct inspect *in, const char *arg)
+{
     struct ft_rows flows;
     struct ft_rows transfers = {0};
     struct talkers talkers = {0};
+    struct ft_address_names behind;
     struct ft_endpoint net;
     struct ft_query q;
     FILE *o = in->out.stream;
@@ -994,6 +1086,7 @@ static int inspect_ip(struct inspect *in, const char *arg)
         rx += talkers.items[i].rx;
         rate += talkers.items[i].rate;
     }
+    talkers_names(&talkers, &behind);
 
     if (in->out.format == FT_FMT_JSON) {
         fputs("{\"kind\":\"ip\",\"network\":", o);
@@ -1001,16 +1094,22 @@ static int inspect_ip(struct inspect *in, const char *arg)
         fprintf(o,
                 ",\"totals\":{\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
                 ",\"bytes_sent_per_second\":%" PRIu64 ",\"flows\":%zu,\"processes\":%zu,"
-                "\"transfers\":%zu},\"processes\":[",
+                "\"transfers\":%zu",
                 tx, rx, rate, flows.count, talkers.count, transfers.count);
+        ft_json_names(o, "names", &behind);
+        fputs("},\"processes\":[", o);
         for (size_t i = 0; i < talkers.count; i++) {
             const struct talker *t = &talkers.items[i];
+            struct ft_address_names used;
             fprintf(o, "%s{\"pid\":%" PRIu32 ",\"name\":", i ? "," : "", t->pid);
             ft_json_string(o, t->comm);
             fprintf(o,
                     ",\"bytes_sent\":%" PRIu64 ",\"bytes_received\":%" PRIu64
-                    ",\"bytes_sent_per_second\":%" PRIu64 "}",
+                    ",\"bytes_sent_per_second\":%" PRIu64,
                     t->tx, t->rx, t->rate);
+            ft_kept_names_behind(&t->names, &used);
+            ft_json_names(o, "remote_names", &used);
+            fputc('}', o);
         }
         fputs("],\"transfers\":", o);
         ft_view_json_array(FT_VIEW_FILES, &transfers, o);
@@ -1028,6 +1127,7 @@ static int inspect_ip(struct inspect *in, const char *arg)
 
     section(o, bits == (net.family == 6 ? 128 : 32) ? "ADDRESS" : "NETWORK");
     field(o, "Remote:", "%s", arg);
+    names_field(o, &behind);
     ft_format_bytes(tx, a, sizeof(a));
     ft_format_rate(rate, b, sizeof(b));
     field(o, "Sent to it:", "%s (%s)", a, b);
@@ -1040,8 +1140,7 @@ static int inspect_ip(struct inspect *in, const char *arg)
     size_t shown = in->limit < talkers.count ? in->limit : talkers.count;
     fputc('\n', o);
     section(o, "PROCESSES");
-    ft_table_print(o, columns, FT_ARRAY_LEN(columns), shown, talker_cell, &talkers,
-                   ft_term_styled(o));
+    talkers_table(o, &talkers, shown);
     more_note(o, talkers.count, shown, "process", "processes");
 
     sent_files(in, &transfers, "FILES SENT TO IT",
@@ -1049,7 +1148,7 @@ static int inspect_ip(struct inspect *in, const char *arg)
     history_note(in, o);
 
 out:
-    free(talkers.items);
+    talkers_free(&talkers);
     ft_rows_free(&flows);
     ft_rows_free(&transfers);
     return code;

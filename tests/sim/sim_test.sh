@@ -155,6 +155,16 @@ flow=$("$cli" --socket sim.sock flows --process nginx --format quiet 2>/dev/null
 ok "a flow nobody named is inspected" query bare.txt inspect flow "$flow"
 ok "it has no line of names" exits 1 grep -Eq '^(Name|Name from|Resolved names):' bare.txt
 ok "its files have no column of names" exits 1 grep -q ' NAME ' bare.txt
+ok "an address is inspected" query address.txt inspect ip 10.0.6.14
+ok "the address has its names" grep -Eq '^Names: +ch-replica-2\.internal, clickhouse\.internal$' address.txt
+ok "its processes have a column of names" grep -Eq '^PID +PROCESS +NAME +OUTBOUND +SENT +RECEIVED$' address.txt
+ok "a process shows the names it used" grep -Eq '^[0-9]+ +clickhouse-serv +ch-replica-2\.internal \(\+1\) ' address.txt
+ok "an address is inspected as JSON" query address.json inspect ip 10.0.6.14 --json
+ok "the totals list the names" grep -q '"transfers":[0-9]*,"names":\["ch-replica-2.internal","clickhouse.internal"\]},"processes":' address.json
+ok "a process lists the names it used" grep -q '"bytes_sent_per_second":[0-9]*,"remote_names":\["ch-replica-2.internal","clickhouse.internal"\]}' address.json
+ok "an address nobody named is inspected" query bare-address.txt inspect ip 10.0.5.22
+ok "it has no line of names" exits 1 grep -q '^Names:' bare-address.txt
+ok "its processes have no column of names" grep -Eq '^PID +PROCESS +OUTBOUND +SENT +RECEIVED$' bare-address.txt
 
 ok "flows are grouped by remote" query by-remote.txt flows --group-by remote
 ok "the groups have a column of names" grep -Eq '^REMOTE +NAME +SENT +RECEIVED +FLOWS$' by-remote.txt
