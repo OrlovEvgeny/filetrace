@@ -137,7 +137,7 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
         } else {
             printf("  %-18s%s\n", "Event log:", "off");
         }
-        if (stats->name_libraries_configured) {
+        if (stats->name_libraries.capacity) {
             char b[64];
             ft_format_count(stats->name_libraries.count, a, sizeof(a));
             ft_format_count(stats->name_libraries.capacity, b, sizeof(b));
@@ -148,9 +148,11 @@ static void doctor_text(const struct ft_diagnosis *d, const struct ft_host_info 
             }
             putchar('\n');
         }
-        if (stats->tls_libraries) {
+        if (stats->tls_library_capacity) {
+            char tb[64];
             ft_format_count(stats->tls_libraries, a, sizeof(a));
-            printf("  %-18s%s\n", "TLS libraries:", a);
+            ft_format_count(stats->tls_library_capacity, tb, sizeof(tb));
+            printf("  %-18s%s of %s\n", "TLS libraries:", a, tb);
         }
     } else if (agent == FT_AGENT_UNREACHABLE) {
         printf("  %-18s%s\n", "Agent:", "running, but its socket is not accessible to this user");

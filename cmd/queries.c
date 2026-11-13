@@ -861,7 +861,8 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
         if (s->names.capacity) {
             usage_line(o, "Names:", &s->names);
             usage_line(o, "Name lookups:", &s->name_lookups);
-            if (s->name_libraries_configured > s->name_libraries.capacity) {
+            if (s->name_libraries.capacity &&
+                s->name_libraries_configured > s->name_libraries.capacity) {
                 ft_format_count(s->name_libraries.count, a, sizeof(a));
                 ft_format_count(s->name_libraries.capacity, b, sizeof(b));
                 fprintf(o, "%-18s%s of %s, ", "Name libraries:", a, b);
@@ -875,9 +876,10 @@ static void stats_table(FILE *o, const struct ft_row_stats *s, enum stats_sectio
             } else if (s->name_libraries.capacity) {
                 usage_line(o, "Name libraries:", &s->name_libraries);
             }
-            if (s->tls_libraries) {
+            if (s->tls_library_capacity) {
                 ft_format_count(s->tls_libraries, a, sizeof(a));
-                fprintf(o, "%-18s%s\n", "TLS libraries:", a);
+                ft_format_count(s->tls_library_capacity, b, sizeof(b));
+                fprintf(o, "%-18s%s of %s\n", "TLS libraries:", a, b);
             }
             if (s->names_invalid || s->names_refused) {
                 ft_format_count(s->names_invalid, a, sizeof(a));
