@@ -1664,6 +1664,22 @@ static bool build_leaders(struct ft_top_model *m, struct ft_top_mode_state *ms)
     return true;
 }
 
+static bool names_match(const struct ft_remote_names *names, const char *needle, size_t n)
+{
+    size_t a;
+    size_t b;
+
+    if (!names)
+        return false;
+    if (ft_top_find(names->tls, needle, n, &a, &b))
+        return true;
+    for (uint32_t i = 0; i < names->listed; i++) {
+        if (ft_top_find(names->resolved[i], needle, n, &a, &b))
+            return true;
+    }
+    return false;
+}
+
 static bool row_matches(const struct ft_top_row *r, const char *needle, size_t n)
 {
     size_t a;
@@ -1674,8 +1690,8 @@ static bool row_matches(const struct ft_top_row *r, const char *needle, size_t n
         const struct ft_top_transfer *t = r->transfer;
         const struct ft_top_process_entry *p = process_entry(t->process);
         return FIND(p->pid_text) || FIND(p->pub.user) || FIND(p->pub.title) || FIND(t->script) ||
-               FIND(t->path) || FIND(t->remote_text) || FIND(t->destination->host) ||
-               FIND(ft_method_name((enum ft_method)t->method)) ||
+               FIND(t->path) || FIND(t->remote_text) || names_match(t->names, needle, n) ||
+               FIND(t->destination->host) || FIND(ft_method_name((enum ft_method)t->method)) ||
                FIND(ft_confidence_name((enum ft_confidence)t->confidence));
     }
     case FT_TOP_ROW_PROCESS: {
