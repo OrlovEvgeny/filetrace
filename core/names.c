@@ -1,5 +1,6 @@
 #include "filetrace/names.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -66,6 +67,66 @@ enum ft_name_kind ft_name_normalise(const char *text, char out[static FT_NAME_MA
         return FT_NAME_ADDRESS;
     }
     return FT_NAME_HOST;
+}
+
+const char *ft_name_source_name(enum ft_name_source source)
+{
+    switch (source) {
+    case FT_NAME_SOURCE_LOOKUP:
+        return "lookup";
+    case FT_NAME_SOURCE_TLS:
+        return "tls";
+    case FT_NAME_SOURCE_LOOKUP_TLS:
+        return "lookup+tls";
+    default:
+        return "";
+    }
+}
+
+const char *ft_remote_name(const struct ft_remote_names *n)
+{
+    if (n->tls[0])
+        return n->tls;
+    return n->listed ? n->resolved[0] : "";
+}
+
+enum ft_name_source ft_remote_name_source(const struct ft_remote_names *n)
+{
+    if (!n->tls[0])
+        return n->listed ? FT_NAME_SOURCE_LOOKUP : FT_NAME_SOURCE_NONE;
+    for (uint32_t i = 0; i < n->listed; i++) {
+        if (strcmp(n->resolved[i], n->tls) == 0)
+            return FT_NAME_SOURCE_LOOKUP_TLS;
+    }
+    return FT_NAME_SOURCE_TLS;
+}
+
+void ft_remote_name_format(const struct ft_remote_names *n, char *buf, size_t size)
+{
+    uint32_t others = n->count > 1 ? n->count - 1 : 0;
+
+    switch (ft_remote_name_source(n)) {
+    case FT_NAME_SOURCE_LOOKUP:
+        if (others)
+            snprintf(buf, size, "%s (+%u)", n->resolved[0], others);
+        else
+            snprintf(buf, size, "%s", n->resolved[0]);
+        break;
+    case FT_NAME_SOURCE_TLS:
+        if (!n->listed)
+            snprintf(buf, size, "%s", n->tls);
+        else if (others)
+            snprintf(buf, size, "%s via %s (+%u)", n->tls, n->resolved[0], others);
+        else
+            snprintf(buf, size, "%s via %s", n->tls, n->resolved[0]);
+        break;
+    case FT_NAME_SOURCE_LOOKUP_TLS:
+        snprintf(buf, size, "%s", n->tls);
+        break;
+    default:
+        snprintf(buf, size, "%s", "");
+        break;
+    }
 }
 
 /* Ids count from 1, so that 0 can stand for no name and for the end of a list. */
@@ -245,6 +306,11 @@ void ft_names_release(struct ft_names *n, uint32_t id)
 const char *ft_names_text(const struct ft_names *n, uint32_t id)
 {
     return entry_of(n, id)->text;
+}
+
+uint64_t ft_names_hash(const struct ft_names *n, uint32_t id)
+{
+    return entry_of(n, id)->hash;
 }
 
 size_t ft_names_count(const struct ft_names *n)
