@@ -33,6 +33,7 @@ struct seen {
     struct ft_endpoint remote;
     char script[32];
     char path[32];
+    char remote_name[32];
 };
 
 struct fake {
@@ -191,6 +192,7 @@ static void note(struct fake *fake, const struct ft_query *q)
                            .remote = q->remote};
         memcpy(s->script, q->script, sizeof(s->script) - 1);
         memcpy(s->path, q->path, sizeof(s->path) - 1);
+        memcpy(s->remote_name, q->remote_name, sizeof(s->remote_name) - 1);
     }
     fake->logged++;
     pthread_mutex_unlock(&fake->lock);
@@ -417,6 +419,7 @@ static void check_rows_and_order(void)
     req.scope.pid = 77;
     req.scope.method = FT_METHOD_SENDFILE;
     ft_strlcpy(req.scope.script, "pool:*", sizeof(req.scope.script));
+    ft_strlcpy(req.scope.remote_name, "*.example.com", sizeof(req.scope.remote_name));
 
     CHECK(rig_start(&rig, &req));
     CHECK(rig_take(&rig, 2000));
@@ -464,6 +467,7 @@ static void check_rows_and_order(void)
     CHECK_U64(transfers.pid, 77);
     CHECK_U64(transfers.method, FT_METHOD_SENDFILE);
     CHECK_STR(transfers.script, "pool:*");
+    CHECK_STR(transfers.remote_name, "*.example.com");
 
     struct seen processes = fake_seen(&rig.fake, 2);
     CHECK_U64(processes.limit, 0);

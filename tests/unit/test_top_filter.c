@@ -118,6 +118,29 @@ static void keys(void)
     CHECK(matches("rate:=1800K", &s));
 }
 
+static void names(void)
+{
+    struct ft_endpoint remote = address("10.0.8.40", 3128);
+    struct ft_remote_names proxied = {
+        .tls = "s3.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+    struct ft_top_subject s = invoice(&remote);
+
+    s.remote_text = "10.0.8.40:3128";
+    s.host = nullptr;
+    s.names = &proxied;
+    CHECK(matches("dest:s3.example", &s));
+    CHECK(matches("dest:proxy.corp", &s));
+    CHECK(matches("dest:*.corp.example", &s));
+    CHECK(!matches("dest:*.example.net", &s));
+    CHECK(!matches("!dest:proxy", &s));
+    CHECK(matches("S3.EXAMPLE", &s));
+    CHECK(matches("proxy.corp", &s));
+    CHECK(!matches("*.corp.example", &s));
+    s.names = nullptr;
+    CHECK(!matches("dest:proxy.corp", &s));
+    CHECK(!matches("proxy.corp", &s));
+}
+
 static void words(void)
 {
     struct ft_endpoint remote = address("92.68.14.201", 52110);
@@ -249,6 +272,38 @@ static void pushdown(void)
     CHECK_U64(q.remote.family, 0);
 }
 
+static const char *pushed_name(const char *expression)
+{
+    static struct ft_query q;
+    struct ft_error err = {0};
+    struct ft_top_filter *f = ft_top_filter_compile(expression, &err);
+
+    ft_query_init(&q, FT_Q_TRANSFERS);
+    CHECK(f != nullptr);
+    ft_top_filter_pushdown(f, &q);
+    CHECK_STR(q.remote_name, "");
+    ft_top_filter_pushdown_name(f, &q);
+    ft_top_filter_free(f);
+    return q.remote_name;
+}
+
+static void name_pushdown(void)
+{
+    /* A substring of a name is a pattern with a star on each side. */
+    CHECK_STR(pushed_name("dest:files.example.com pid:7"), "*files.example.com*");
+    CHECK_STR(pushed_name("dest:*.Example.COM"), "*.example.com");
+
+    /* What an address text may hold, a test of another kind, or more than one stays here. */
+    CHECK_STR(pushed_name("dest:10.0.5"), "");
+    CHECK_STR(pushed_name("dest:cafe.de"), "");
+    CHECK_STR(pushed_name("dest:public"), "");
+    CHECK_STR(pushed_name("dest:10.0.0.0/8"), "");
+    CHECK_STR(pushed_name("!dest:files.example.com"), "");
+    CHECK_STR(pushed_name("dest:files.example.com dest:cdn.example.com"), "");
+    CHECK_STR(pushed_name("dest:files.ex?mple.com"), "");
+    CHECK_STR(pushed_name("dest:\"my host\""), "");
+}
+
 static void needles(void)
 {
     struct ft_error err = {0};
@@ -275,8 +330,10 @@ static void needles(void)
 void test_top_filter(void)
 {
     keys();
+    names();
     words();
     errors();
     pushdown();
+    name_pushdown();
     needles();
 }

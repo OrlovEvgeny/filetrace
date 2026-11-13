@@ -68,7 +68,8 @@ constexpr size_t SCRIPT_MAX = sizeof(((struct ft_query *)nullptr)->script);
 struct top_args {
     struct ft_top_options opt;
     const char *expression;   /* --filter */
-    const char *remote;       /* --remote */
+    const char *remote;       /* --remote as given, or name */
+    char name[FT_NAME_MAX];   /* a --remote that is no address, as names are kept */
     const char *script;       /* --script */
     const char *leaders_only; /* the first of --window, --by and --limit that was given */
     bool mode_given;
@@ -115,9 +116,15 @@ static int set_remote(struct top_args *t, const char *value)
     struct ft_endpoint net;
     uint8_t bits;
 
-    if (!ft_prefix_parse(value, &net, &bits))
-        return bad_value("--remote", value, "an IP address or CIDR network");
-    t->remote = value;
+    if (ft_prefix_parse(value, &net, &bits)) {
+        t->remote = value;
+        return 1;
+    }
+    /* What is no address is a name; it is matched as given, never looked up. */
+    if (!ft_name_pattern(value, t->name))
+        return bad_value("--remote", value,
+                         "an IP address, a CIDR network or a host name; '*' wildcards in a name");
+    t->remote = t->name;
     return 1;
 }
 

@@ -1988,7 +1988,10 @@ void ft_top_control_request(const struct ft_top_controller *c, struct ft_top_req
                                   sizeof(req->leader_path));
     } else {
         /* One scope narrows every mode, so only the mode on screen may set it. */
-        ft_top_filter_pushdown(ft_top_filter_get(c->model, ui->mode), &req->scope);
+        const struct ft_top_filter *filter = ft_top_filter_get(c->model, ui->mode);
+        ft_top_filter_pushdown(filter, &req->scope);
+        if (!ft_top_resolve_of(c->model))
+            ft_top_filter_pushdown_name(filter, &req->scope);
     }
     if (ui->overlay == FT_TOP_OVERLAY_EVENTS) {
         req->events = true;

@@ -75,9 +75,15 @@ says "half an address is not taken for a name" 2 \
 says "an address with a wildcard is not taken for a name" 2 \
     "filetrace: invalid value '10.0.*' for --remote (expected an IP address, a CIDR network or a host name; '*' wildcards in a name)" \
     connections --remote '10.0.*'
-says "top refuses a remote that is not an address" 2 \
-    "filetrace: invalid value 'example.org' for --remote (expected an IP address or CIDR network)" \
-    top --remote example.org
+says "top takes a name for --remote" 2 \
+    "filetrace: --window does not apply to the transfers mode (use --leaders)" \
+    top --remote example.org --window 5m
+says "top refuses a remote that is neither an address nor a name" 2 \
+    "filetrace: invalid value 'x y' for --remote (expected an IP address, a CIDR network or a host name; '*' wildcards in a name)" \
+    top --remote 'x y'
+says "top takes half an address for no name either" 2 \
+    "filetrace: invalid value '10.0.0' for --remote (expected an IP address, a CIDR network or a host name; '*' wildcards in a name)" \
+    top --remote 10.0.0
 says "top asks for leaders with --window" 2 \
     "filetrace: --window does not apply to the transfers mode (use --leaders)" top --window 5m
 says "top asks for processes with --tree" 2 \

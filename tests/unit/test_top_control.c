@@ -711,6 +711,30 @@ static void requests(void)
     free(req);
 }
 
+static void name_scope(void)
+{
+    struct rig r;
+    struct ft_top_request *req = malloc(sizeof(*req));
+
+    CHECK(req != nullptr);
+    if (!req)
+        return;
+    CHECK(rig_open(&r, FT_TOP_TRANSFERS));
+    press(&r, FT_KEY_F4);
+    type(&r, "dest:files.example.com");
+    press(&r, FT_KEY_ENTER);
+    ft_top_control_request(r.c, req);
+    CHECK_STR(req->scope.remote_name, "*files.example.com*");
+    sent(&r);
+
+    /* A reverse lookup can name what the agent knows no name of, so the term stays here. */
+    CHECK(type(&r, "n") & FT_TOP_DO_REQUEST);
+    ft_top_control_request(r.c, req);
+    CHECK_STR(req->scope.remote_name, "");
+    rig_close(&r);
+    free(req);
+}
+
 static void presets(void)
 {
     char dir[] = "/tmp/ft_top_presets.XXXXXX";
@@ -851,5 +875,6 @@ void test_top_control(void)
     filter_that_does_not_parse();
     clicks_act_as_keys();
     requests();
+    name_scope();
     presets();
 }
