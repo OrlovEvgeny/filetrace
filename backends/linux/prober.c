@@ -250,12 +250,25 @@ static void detach(struct probed *f)
     }
 }
 
+/* A path as a log line can carry it: bytes other than printable ASCII as \xNN. */
+static void printable(const char *path, char *out, size_t size)
+{
+    size_t n = 0;
+    for (const unsigned char *c = (const unsigned char *)path; *c && n + 5 < size; c++) {
+        if (*c >= 0x20 && *c < 0x7f && *c != '\\')
+            out[n++] = (char)*c;
+        else
+            n += (size_t)snprintf(out + n, size - n, "\\x%02x", *c);
+    }
+    out[n] = '\0';
+}
+
 /*
- * Probes the file that path leads to for one kind, once per file; name is how the process knows
- * it. path is a /proc link to the file the process runs or has mapped, never a name it could
+ * Probes the file that path leads to for one kind, once per file; mapped_as is how the process
+ * knows it. path is a /proc link to the file the process runs or has mapped, never a name it could
  * replace, and the open does not wait on anything that is not a regular file.
  */
-static void consider(struct kind *k, const char *path, const char *name, uint32_t pid)
+static void consider(struct kind *k, const char *path, const char *mapped_as, uint32_t pid)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY);
     if (fd < 0)
@@ -282,6 +295,8 @@ static void consider(struct kind *k, const char *path, const char *name, uint32_
         close(fd);
         return;
     }
+    char name[512];
+    printable(mapped_as, name, sizeof(name));
     struct probed *slot = place(k);
     bool full = k->count == k->def.capacity;
     if (full && now - slot->found_ns < IDLE_NS) {
