@@ -759,6 +759,8 @@ static bool apply_process(struct ft_config *cfg, const char *key, struct value *
         return want_bool(v, &cfg->agent.state_cfg.command_line_arguments, why, size);
     if (strcmp(key, "php_scripts") == 0)
         return want_bool(v, &cfg->agent.backend_cfg.php_scripts, why, size);
+    if (strcmp(key, "force_return_probes") == 0)
+        return want_bool(v, &cfg->agent.backend_cfg.force_return_probes, why, size);
     *known = false;
     return false;
 }
@@ -1210,6 +1212,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fputs("\n[process]\n", o);
     fprintf(o, "arguments = %s\n", yes_no(state->command_line_arguments));
     fprintf(o, "php_scripts = %s\n", yes_no(backend->php_scripts));
+    fprintf(o, "force_return_probes = %s\n", yes_no(backend->force_return_probes));
 
     fputs("\n[names]\n", o);
     fputs("# Standard mode only.\n", o);

@@ -4,6 +4,7 @@
 
 #include "common.bpf.h"
 #include "lookups.bpf.h"
+#include "returns.bpf.h"
 
 /* Sends are counted as they return, so a window is always up to date. */
 static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)

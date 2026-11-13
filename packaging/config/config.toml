@@ -105,6 +105,12 @@
 # of each request: a PHP-FPM or mod_php worker's transfers name the request's
 # script instead of the pool. About a microsecond per request.
 # php_scripts = true
+# The PHP probes and those of name lookups follow functions to their return. A
+# test at start runs a process under a seccomp filter through such a probe; where
+# it is killed, as on x86-64 kernels 6.11 to 6.12.13 and 6.13 to 6.13.2 under the
+# filter of a container runtime, none of those probes is attached. true attaches
+# them anyway, for a host whose processes run under no seccomp filter.
+# force_return_probes = false
 
 # Names of the remote ends of the connections processes open, as the processes
 # used them: a name a process looked up and got the address for, and the server

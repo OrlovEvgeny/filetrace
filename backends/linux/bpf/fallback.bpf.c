@@ -4,6 +4,7 @@
 
 #include "common.bpf.h"
 #include "lookups.bpf.h"
+#include "returns.bpf.h"
 
 #define IPPROTO_UDP 17
 

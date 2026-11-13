@@ -71,6 +71,10 @@ static void name_capability(const struct ft_linux_probes *p, const struct ft_bac
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_UNAVAILABLE,
                           "the kernel refused the probes of getaddrinfo: %s",
                           error_text(p->lookups_error));
+    } else if (!ft_linux_returns_allowed(p, cfg)) {
+        char why[192];
+        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_UNAVAILABLE, "%s",
+                          ft_linux_returns_refusal(p, why, sizeof(why)));
     } else if (!libraries) {
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL,
                           "lookups are probed in the C libraries processes map; %s", tls);
@@ -86,14 +90,20 @@ static void name_capability(const struct ft_linux_probes *p, const struct ft_bac
     }
 }
 
-static void php_capability(const struct ft_backend_config *cfg, struct ft_capabilities *out)
+static void php_capability(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
+                           struct ft_capabilities *out)
 {
+    char why[192];
+
     if (cfg->mode < FT_MODE_STANDARD)
         ft_capability_set(out, FT_FEAT_PHP_SCRIPTS, FT_CAP_DISABLED, "%s",
                           "disabled in minimal mode");
     else if (!cfg->php_scripts)
         ft_capability_set(out, FT_FEAT_PHP_SCRIPTS, FT_CAP_DISABLED, "%s",
                           "turned off in the configuration");
+    else if (!ft_linux_returns_allowed(p, cfg))
+        ft_capability_set(out, FT_FEAT_PHP_SCRIPTS, FT_CAP_UNAVAILABLE, "%s",
+                          ft_linux_returns_refusal(p, why, sizeof(why)));
     else
         ft_capability_set(out, FT_FEAT_PHP_SCRIPTS, FT_CAP_FULL, "%s", "");
 }
@@ -211,7 +221,7 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_back
                       "cgroup and namespace identifiers are recorded per process; "
                       "container names are not resolved");
     name_capability(p, cfg, libraries, out);
-    php_capability(cfg, out);
+    php_capability(p, cfg, out);
 }
 
 static bool lockdown_blocks_reads(void)
@@ -362,6 +372,18 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     }
     ft_diagnosis_add(out, FT_CHECK_OK, false, "BPF programs",
                      "loaded; every kernel field they read was found");
+    if (probes.returns == FT_RETURNS_NO_SYSCALL) {
+        ft_diagnosis_add(out, FT_CHECK_OK, true, "Return probes",
+                         "this architecture returns from them without a system call");
+    } else if (probes.returns == FT_RETURNS_SAFE) {
+        ft_diagnosis_add(out, FT_CHECK_OK, true, "Return probes",
+                         "a process whose seccomp filter refuses the uretprobe system call "
+                         "survived one");
+    } else if (probes.returns != FT_RETURNS_NOT_TESTED) {
+        char why[192];
+        ft_diagnosis_add(out, FT_CHECK_WARN, true, "Return probes", "%s",
+                         ft_linux_returns_refusal(&probes, why, sizeof(why)));
+    }
 
     size_t failed_groups = report_probes(out, &probes);
     if (probes.aging) {
@@ -373,6 +395,8 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
                                error_text(probes.aging_error));
         failed_groups++;
     }
+    if (!ft_linux_returns_allowed(&probes, &cfg) && probes.returns != FT_RETURNS_NOT_TESTED)
+        failed_groups++;
     bool have_network = ft_linux_network_attached(&probes);
     bool kprobes = probes.set->kind == FT_PROBES_KPROBE;
 

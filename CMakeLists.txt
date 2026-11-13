@@ -138,6 +138,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 ${FT_BPF_DIR}/${name}.bpf.c
                 ${FT_BPF_DIR}/common.bpf.h
                 ${FT_BPF_DIR}/lookups.bpf.h
+                ${FT_BPF_DIR}/returns.bpf.h
                 ${FT_BPF_DIR}/abi.h
                 ${FT_BPF_DIR}/kernel_types.h
             COMMENT "Compiling BPF probes: ${name}"
@@ -153,6 +154,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         backends/linux/background.c
         backends/linux/php.c
         backends/linux/prober.c
+        backends/linux/returns.c
         backends/linux/diagnose.c
         backends/linux/procfs.c
     )

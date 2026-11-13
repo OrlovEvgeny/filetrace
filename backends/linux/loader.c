@@ -221,6 +221,15 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
     bpf_program__set_autoload(lookup, lookups);
     bpf_program__set_autoload(lookup_return, lookups);
     bpf_map__set_autocreate(calls, lookups);
+    struct bpf_program *check = bpf_object__find_program_by_name(obj, "ft_return_check");
+    struct bpf_map *checks = bpf_object__find_map_by_name(obj, "return_checks");
+    if (!check || !checks) {
+        bpf_object__close(obj);
+        errno = EINVAL;
+        return nullptr;
+    }
+    bpf_program__set_autoload(check, ft_linux_returns_tested(cfg));
+    bpf_map__set_autocreate(checks, ft_linux_returns_tested(cfg));
 
     uint32_t queue = round_up_pow2(cfg->queue_bytes, (uint32_t)sysconf(_SC_PAGESIZE));
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
@@ -405,10 +414,8 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     return 0;
 }
 
-int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
+static int load_probes(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
 {
-    libbpf_set_print(on_libbpf_print);
-
     if (cfg->probes == FT_PROBES_KPROBE)
         return load_set(&kprobe_set, cfg, out);
 
@@ -428,6 +435,15 @@ int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_pr
         ft_linux_probes_unload(out);
     *out = fallback;
     return 0;
+}
+
+int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
+{
+    libbpf_set_print(on_libbpf_print);
+    int err = load_probes(cfg, out);
+    if (!err)
+        ft_linux_returns_test(out, cfg);
+    return err;
 }
 
 void ft_linux_probes_unload(struct ft_linux_probes *p)
@@ -1090,12 +1106,21 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
             FT_LOG_WARN,
             "[correlation] background_paths and strict_paths name more than %d files; %zu are kept",
             FT_BPF_BACKGROUND_MAX, b->probes.listed_files);
-    bool php = cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD;
-    if (php || b->probes.lookups)
+    /* The PHP probes go as a whole: without its end, a request's script would stay with the
+     * thread. */
+    bool returns = ft_linux_returns_allowed(&b->probes, cfg);
+    bool php = cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD && returns;
+    bool lookups = b->probes.lookups && returns;
+    if (!returns && b->probes.returns != FT_RETURNS_NOT_TESTED) {
+        char why[192];
+        ft_log(FT_LOG_WARN, "%s; neither the PHP probes nor those of name lookups are attached",
+               ft_linux_returns_refusal(&b->probes, why, sizeof(why)));
+    }
+    if (php || lookups)
         b->prober = ft_linux_prober_create();
     if (b->prober && php)
         b->php = ft_linux_php_open(obj, b->prober);
-    if (b->prober && b->probes.lookups) {
+    if (b->prober && lookups) {
         b->lookup_wanted = cfg->name_libraries;
         b->lookup_capacity = libraries_within(open_files, cfg->name_libraries, b->php != nullptr);
         if (b->lookup_capacity < b->lookup_wanted)

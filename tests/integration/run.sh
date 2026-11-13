@@ -1370,6 +1370,22 @@ if [ $? -ne 2 ]; then
     dynamic=
 fi
 
+# Return probes, which the PHP probes and those of name lookups use, are tested at start in a
+# process under a seccomp filter that refuses the uretprobe system call. An architecture whose
+# kernel returns from them without a system call needs no test; on request it runs anyway.
+seccomp_survived='AVAILABLE \(a process whose seccomp filter refuses the uretprobe system call survived one\)'
+seccomp_killed='LIMITED \(return probes kill processes under seccomp on this kernel'
+if [ "$(uname -m)" = x86_64 ]; then
+    expect_match "return probes: doctor" "$(grep 'Return probes:' "$work/doctor.txt")" \
+        "Return probes: +($seccomp_survived|$seccomp_killed)"
+else
+    expect_match "return probes: doctor" "$(grep 'Return probes:' "$work/doctor.txt")" \
+        'Return probes: +AVAILABLE \(this architecture returns from them without a system call\)'
+    expect_match "return probes: the test where none is needed" \
+        "$(FILETRACE_TEST_RETURN_PROBES=run "$bin/filetrace" doctor --probes "$probes" |
+            grep 'Return probes:')" "Return probes: +$seccomp_survived"
+fi
+
 if [ -n "$dynamic" ]; then
     expect_match "names: doctor lists the feature" "$(grep 'Destination names' "$work/doctor.txt")" \
         '\[WARN\] Destination names: lookups are probed in the C libraries processes map'
@@ -1901,6 +1917,53 @@ if [ -n "$dynamic" ]; then
         "of $held, not the 4,096 configured: the agent's open file limit holds no more"
     stop_agent
     expect "names: small open file limit agent exit code" "$?" 0
+
+    # Where return probes kill processes under seccomp, neither the PHP probes nor those of name
+    # lookups are attached, and the capabilities and doctor say why; the setting forces them on.
+    FILETRACE_TEST_RETURN_PROBES=unsafe
+    export FILETRACE_TEST_RETURN_PROBES
+    "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms --log-level info \
+        --probes "$probes" 2>"$work/unsafe.err" &
+    agent_pid=$!
+    wait_for_socket
+    named "$dynamic" lookupsend alone.ft.test "$data/unsafe.bin" tcp >/dev/null
+    if [ -n "$fpm" ] && command -v cgi-fcgi >/dev/null 2>&1; then
+        head -c 300000 /dev/urandom >"$data/php-unsafe.bin"
+        php_fpm_start || { echo "FAIL: php-fpm did not start"; exit 1; }
+        php_request upload.php "$data/php-unsafe.bin"
+        settle
+        expect "unsafe return probes: the PHP worker's pool" \
+            "$(ft files --path "$data/php-unsafe.bin" --format csv | column process.script)" pool:ft
+        php_fpm_stop
+    fi
+    settle
+    expect "unsafe return probes: no name" "$(name_of unsafe.bin)" ""
+    expect "unsafe return probes: nothing probed" "$(grep -c 'probing' "$work/unsafe.err")" 0
+    expect_match "unsafe return probes: logged" "$(cat "$work/unsafe.err")" \
+        'neither the PHP probes nor those of name lookups are attached'
+    expect_match "unsafe return probes: names" "$(ft capabilities | grep '^Destination names')" \
+        'UNAVAILABLE +return probes kill processes under seccomp on this kernel.*update the kernel'
+    expect_match "unsafe return probes: PHP" "$(ft capabilities | grep '^PHP request scripts')" \
+        'UNAVAILABLE +return probes kill processes under seccomp on this kernel'
+    expect_match "unsafe return probes: doctor" "$(ft doctor | grep 'Return probes:')" \
+        "Return probes: +$seccomp_killed"
+    stop_agent
+    expect "unsafe return probes: agent exit code" "$?" 0
+
+    printf '[process]\nforce_return_probes = true\n' >"$work/forced.toml"
+    "$bin/filetrace-agent" --socket "$sock" --flush-interval 100ms --log-level info \
+        --probes "$probes" --config "$work/forced.toml" 2>"$work/forced.err" &
+    agent_pid=$!
+    wait_for_socket
+    named "$dynamic" lookupsend alone.ft.test "$data/forced.bin" tcp >/dev/null
+    settle
+    expect "forced return probes: named" "$(name_of forced.bin)" alone.ft.test
+    expect_match "forced return probes: probed" "$(cat "$work/forced.err")" 'probing name lookups in'
+    expect_match "forced return probes: names" "$(ft capabilities | grep '^Destination names')" \
+        'PARTIAL'
+    stop_agent
+    expect "forced return probes: agent exit code" "$?" 0
+    unset FILETRACE_TEST_RETURN_PROBES
 fi
 
 # Without an agent, watch collects for as long as it runs.
