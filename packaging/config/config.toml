@@ -78,7 +78,9 @@
 # names = 4096
 # Lookups kept: one per process and address.
 # name_lookups = 16384
-# Library files probed for names; each container image can bring its own.
+# Library files probed for names; each container image can bring its own. Each
+# holds four open files; the agent raises its soft open file limit to the hard
+# one and probes no more files than that holds.
 # name_libraries = 256
 # The rankings of the most sent files and destinations that top shows; the least
 # sent go first. 0 turns the rankings off.

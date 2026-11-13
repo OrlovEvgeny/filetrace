@@ -124,6 +124,9 @@ struct ft_linux_prober;
 struct bpf_program;
 
 #define FT_LINUX_KIND_PROBES 2
+/* Descriptors a probed file holds: a perf event and a BPF link for each of its probes. */
+#define FT_LINUX_FILE_DESCRIPTORS (2 * FT_LINUX_KIND_PROBES)
+#define FT_LINUX_PHP_FILES 64
 
 /* A program attached to a function of each file of a kind. */
 struct ft_linux_uprobe {

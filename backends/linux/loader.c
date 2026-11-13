@@ -7,11 +7,13 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <linux/types.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
@@ -491,6 +493,7 @@ struct ft_backend {
     struct ft_linux_php *php;
     int lookup_kind; /* the prober's kind for C libraries, or -1 */
     size_t lookup_capacity;
+    size_t lookup_wanted; /* [limits] name_libraries, which the open file limit may cut */
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
 
@@ -948,10 +951,9 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
         out->listed_files = ft_linux_background_count(b->background_fd, &out->listed_refused);
         out->listed_capacity = FT_BPF_BACKGROUND_MAX;
     }
-    if (b->lookup_kind >= 0) {
-        out->name_libraries = ft_linux_prober_count(b->prober, b->lookup_kind);
-        out->name_library_capacity = b->lookup_capacity;
-    }
+    out->name_libraries = ft_linux_prober_count(b->prober, b->lookup_kind);
+    out->name_library_capacity = b->lookup_capacity;
+    out->name_libraries_configured = b->lookup_wanted;
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
@@ -972,6 +974,34 @@ static void backend_close(struct ft_backend *b)
     free(b->vals);
     free(b->transfers);
     free(b);
+}
+
+/* Descriptors kept for what the agent opens besides probes: clients, exporters, /proc. */
+#define RESERVED_DESCRIPTORS 128
+
+/* Raises the soft limit on open files to the hard one, as a service starts at 1024. */
+static uint64_t raise_open_file_limit(void)
+{
+    struct rlimit lim;
+    if (getrlimit(RLIMIT_NOFILE, &lim) != 0)
+        return 1024;
+    if (lim.rlim_cur < lim.rlim_max) {
+        struct rlimit raised = {.rlim_cur = lim.rlim_max, .rlim_max = lim.rlim_max};
+        if (setrlimit(RLIMIT_NOFILE, &raised) == 0)
+            lim.rlim_cur = raised.rlim_cur;
+    }
+    return lim.rlim_cur == RLIM_INFINITY ? UINT64_MAX : (uint64_t)lim.rlim_cur;
+}
+
+/* How many C library files the limit leaves descriptors to probe, once PHP's are counted. */
+static size_t libraries_within(uint64_t limit, size_t wanted, bool php)
+{
+    struct ft_self_usage self;
+    ft_sysinfo_self(&self);
+    uint64_t held = self.open_fds + RESERVED_DESCRIPTORS +
+                    (php ? FT_LINUX_PHP_FILES * FT_LINUX_FILE_DESCRIPTORS : 0);
+    uint64_t fits = limit > held ? (limit - held) / FT_LINUX_FILE_DESCRIPTORS : 0;
+    return fits < wanted ? (size_t)fits : wanted;
 }
 
 static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
@@ -999,6 +1029,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         b->cfg.drain_batch = 512;
     b->sink = *sink;
     b->lookup_kind = -1;
+    uint64_t open_files = raise_open_file_limit();
 
     int rc = ft_linux_probes_load(cfg, &b->probes);
     if (rc) {
@@ -1063,7 +1094,14 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     if (b->prober && php)
         b->php = ft_linux_php_open(obj, b->prober);
     if (b->prober && b->probes.lookups) {
-        b->lookup_capacity = cfg->name_libraries;
+        b->lookup_wanted = cfg->name_libraries;
+        b->lookup_capacity = libraries_within(open_files, cfg->name_libraries, b->php != nullptr);
+        if (b->lookup_capacity < b->lookup_wanted)
+            ft_log(FT_LOG_WARN,
+                   "the open file limit of %" PRIu64 " leaves room to probe %zu of the %zu C "
+                   "libraries [limits] name_libraries allows; processes that use the others "
+                   "show no looked-up names",
+                   open_files, b->lookup_capacity, b->lookup_wanted);
         b->lookup_kind = ft_linux_lookups_open(obj, b->prober, b->lookup_capacity);
     }
     ft_linux_prober_rescan(b->prober);
