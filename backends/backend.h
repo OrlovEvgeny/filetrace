@@ -29,6 +29,8 @@ struct ft_backend_config {
     bool lookup_names;       /* probe C libraries for the names processes look up */
     bool tls_names;          /* probe TLS libraries for the server names clients ask for */
     uint32_t name_libraries; /* library files probed for either, at most */
+    /* Attach return probes where the test of them at start found them unsafe. */
+    bool force_return_probes;
     /* Borrowed patterns: files that are never taken as sent from a read and a send. */
     const char *const *background_paths;
     size_t background_path_count;
