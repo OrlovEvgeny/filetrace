@@ -126,6 +126,11 @@ static void print_text(FILE *o, const struct ft_row_event *e, bool timestamps)
         }
         endpoint_text(&e->remote, buf, sizeof(buf));
         fprintf(o, "  remote=%s\n", buf);
+        if (e->name_source) {
+            fprintf(o, "  remote_name=%s\n", ft_row_event_name(e));
+            fprintf(o, "  remote_name_source=%s\n",
+                    ft_name_source_name((enum ft_name_source)e->name_source));
+        }
     }
     switch (e->type) {
     case FT_REC_NETWORK_SEND:
@@ -245,6 +250,11 @@ static void print_json(FILE *o, const struct ft_row_event *e)
                 ft_proto_name(e->proto, proto), e->sock_id);
         json_endpoint(o, "local", &e->local);
         json_endpoint(o, "remote", &e->remote);
+        if (e->name_source) {
+            json_member(o, "remote_name", ft_row_event_name(e));
+            json_member(o, "remote_name_source",
+                        ft_name_source_name((enum ft_name_source)e->name_source));
+        }
         if (e->type == FT_REC_NETWORK_SEND)
             fprintf(o, ",\"bytes_sent\":%" PRIu64, e->bytes);
         if (e->type == FT_REC_NETWORK_RECEIVE)
