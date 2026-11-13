@@ -201,6 +201,81 @@ void ft_remote_name_cell(const struct ft_remote_names *n, uint16_t port, char *b
         snprintf(buf, size, "%s%s", ft_remote_name(n), suffix);
 }
 
+static void address_name_add(struct ft_address_names *a, const char *name, uint64_t bytes,
+                             const struct ft_remote_names *used_by)
+{
+    for (size_t i = 0; i < a->count; i++) {
+        struct ft_name_use *u = &a->names[i];
+        if (strcmp(u->name, name) != 0)
+            continue;
+        u->bytes += bytes;
+        if (!u->used_by)
+            u->used_by = used_by;
+        return;
+    }
+    if (a->count == FT_ADDRESS_NAMES) {
+        a->more++;
+        return;
+    }
+    a->names[a->count] = (struct ft_name_use){
+        .name = name, .bytes = bytes, .used_by = used_by, .met = (uint32_t)a->count};
+    a->count++;
+}
+
+void ft_address_names_add(struct ft_address_names *a, const struct ft_remote_names *n,
+                          uint64_t bytes)
+{
+    const char *used = ft_remote_name(n);
+
+    if (n->tls[0])
+        address_name_add(a, n->tls, n->tls == used ? bytes : 0, n->tls == used ? n : nullptr);
+    for (uint32_t i = 0; i < n->listed; i++) {
+        const char *name = n->resolved[i];
+        address_name_add(a, name, name == used ? bytes : 0, name == used ? n : nullptr);
+    }
+}
+
+static int by_bytes_then_met(const void *x, const void *y)
+{
+    const struct ft_name_use *a = x;
+    const struct ft_name_use *b = y;
+
+    if (a->bytes != b->bytes)
+        return a->bytes > b->bytes ? -1 : 1;
+    return (a->met > b->met) - (a->met < b->met);
+}
+
+void ft_address_names_sort(struct ft_address_names *a)
+{
+    qsort(a->names, a->count, sizeof(a->names[0]), by_bytes_then_met);
+}
+
+static bool says(const struct ft_remote_names *n, const char *name)
+{
+    if (strcmp(n->tls, name) == 0)
+        return true;
+    for (uint32_t i = 0; i < n->listed; i++) {
+        if (strcmp(n->resolved[i], name) == 0)
+            return true;
+    }
+    return false;
+}
+
+void ft_address_names_format(const struct ft_address_names *a, char *buf, size_t size)
+{
+    const struct ft_remote_names *lead = a->count ? a->names[0].used_by : nullptr;
+    bool all = lead && a->more == 0;
+
+    for (size_t i = 0; all && i < a->count; i++)
+        all = says(lead, a->names[i].name);
+    if (all)
+        ft_remote_name_format(lead, buf, size);
+    else if (a->count + a->more > 1)
+        snprintf(buf, size, "%s (+%zu)", a->names[0].name, a->count + a->more - 1);
+    else
+        snprintf(buf, size, "%s", a->count ? a->names[0].name : "");
+}
+
 /* Ids count from 1, so that 0 can stand for no name and for the end of a list. */
 struct entry {
     uint64_t hash;

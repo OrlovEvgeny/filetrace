@@ -311,8 +311,74 @@ static void patterns(void)
     CHECK(!ft_name_matches("", "files.example.com"));
 }
 
+static void check_behind(struct ft_address_names *a, const char *shown, const char *first)
+{
+    char buf[3 * FT_NAME_MAX];
+
+    ft_address_names_sort(a);
+    ft_address_names_format(a, buf, sizeof(buf));
+    CHECK_STR(buf, shown);
+    CHECK_STR(a->count ? a->names[0].name : "", first);
+}
+
+static void names_behind_an_address(void)
+{
+    static const struct ft_remote_names files = {
+        .tls = "files.example.com", .resolved = {"files.example.com"}, .listed = 1, .count = 1};
+    static const struct ft_remote_names two = {
+        .tls = "", .resolved = {"cdn.example.com", "static.example.com"}, .listed = 2, .count = 2};
+    static const struct ft_remote_names proxied = {
+        .tls = "s3.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+    static const struct ft_remote_names other = {
+        .tls = "registry.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+    struct ft_address_names a = {0};
+    char numbered[FT_ADDRESS_NAMES + 4][24];
+    struct ft_remote_names many[FT_ADDRESS_NAMES + 4];
+
+    check_behind(&a, "", "");
+
+    /* One connection: what it shows itself. */
+    ft_address_names_add(&a, &proxied, 100);
+    check_behind(&a, "s3.example.com via proxy.corp.example", "s3.example.com");
+    CHECK_U64(a.count, 2);
+
+    /* Connections that say the same names stay one line; the bytes add up. */
+    a = (struct ft_address_names){0};
+    ft_address_names_add(&a, &two, 10);
+    ft_address_names_add(&a, &two, 30);
+    check_behind(&a, "cdn.example.com (+1)", "cdn.example.com");
+    CHECK_U64(a.names[0].bytes, 40);
+
+    /* The name with the most bytes leads, whichever was met first; the others are counted. */
+    a = (struct ft_address_names){0};
+    ft_address_names_add(&a, &two, 644);
+    ft_address_names_add(&a, &files, 2120);
+    check_behind(&a, "files.example.com (+2)", "files.example.com");
+    CHECK_STR(a.names[1].name, "cdn.example.com");
+    CHECK_STR(a.names[2].name, "static.example.com");
+
+    /* Two targets through one proxy: neither says the other's name. */
+    a = (struct ft_address_names){0};
+    ft_address_names_add(&a, &proxied, 500);
+    ft_address_names_add(&a, &other, 400);
+    check_behind(&a, "s3.example.com (+2)", "s3.example.com");
+
+    /* Past the room for them names are only counted. */
+    a = (struct ft_address_names){0};
+    for (size_t i = 0; i < FT_ARRAY_LEN(many); i++) {
+        snprintf(numbered[i], sizeof(numbered[i]), "n%zu.example.com", i);
+        many[i] =
+            (struct ft_remote_names){.tls = "", .resolved = {numbered[i]}, .listed = 1, .count = 1};
+        ft_address_names_add(&a, &many[i], 1000 - i);
+    }
+    check_behind(&a, "n0.example.com (+19)", "n0.example.com");
+    CHECK_U64(a.count, FT_ADDRESS_NAMES);
+    CHECK_U64(a.more, 4);
+}
+
 void test_names(void)
 {
+    names_behind_an_address();
     patterns();
     shown_by_what_is_known();
     in_place_of_an_address();

@@ -57,6 +57,38 @@ void ft_remote_name_format(const struct ft_remote_names *n, char *buf, size_t si
  */
 void ft_remote_name_cell(const struct ft_remote_names *n, uint16_t port, char *buf, size_t size);
 
+#define FT_ADDRESS_NAMES 16 /* distinct names kept for one address */
+
+struct ft_name_use {
+    const char *name;
+    uint64_t bytes;                        /* carried by the connections opened for it */
+    const struct ft_remote_names *used_by; /* the first of them; nullptr when none was */
+    uint32_t met;                          /* its place in the order the names were met */
+};
+
+/*
+ * The names behind one address, gathered from the connections to it: each distinct name a
+ * connection was opened for or its process looked up to the address. Start from a zeroed one.
+ * The names and connections given stay the caller's and must outlive it.
+ */
+struct ft_address_names {
+    struct ft_name_use names[FT_ADDRESS_NAMES];
+    size_t count;
+    size_t more; /* names met after the room was taken; one name may be counted twice here */
+};
+
+void ft_address_names_add(struct ft_address_names *a, const struct ft_remote_names *n,
+                          uint64_t bytes);
+
+/* Puts the name whose connections carried the most bytes first, the rest after it likewise. */
+void ft_address_names_sort(struct ft_address_names *a);
+
+/*
+ * What a view of the address shows, once sorted: what the connection that used the first name
+ * shows when that says every name, else "first (+N)" for the N other names. "" for none.
+ */
+void ft_address_names_format(const struct ft_address_names *a, char *buf, size_t size);
+
 /*
  * Host names in a fixed number of slots. A held name keeps its slot. A name nobody holds stays
  * until a new name needs the slot of the one unused the longest; a reference to it then no
