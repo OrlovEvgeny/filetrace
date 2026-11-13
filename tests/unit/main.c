@@ -22,6 +22,7 @@ int main(void)
         {"process", test_process},
         {"scripts", test_scripts},
         {"leaders", test_leaders},
+        {"names", test_names},
         {"top_model", test_top_model},
         {"top_filter", test_top_filter},
         {"tui", test_tui},

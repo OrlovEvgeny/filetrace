@@ -188,6 +188,7 @@ add_library(ft_core STATIC
     core/leaders.c
     core/metrics.c
     core/model.c
+    core/names.c
     core/net.c
     core/poller.c
     core/process.c

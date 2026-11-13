@@ -13,6 +13,7 @@ add_executable(ft_unit_tests
     unit/test_metrics.c
     unit/test_views.c
     unit/test_leaders.c
+    unit/test_names.c
     unit/test_top_model.c
     unit/test_top_filter.c
     unit/test_tui.c
