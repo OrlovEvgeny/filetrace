@@ -2,6 +2,37 @@
 
 Every release of Filetrace, newest first. A version reads year.month.patch.build.
 
+## 26.11.9.33 (2026-11-13)
+
+### New Feature
+
+- Show how full the table of listed files is in stats ([b28a318](https://github.com/OrlovEvgeny/filetrace/commit/b28a3184157c2f767f5d054a4349dcef3fb9fd1a))
+- Name the command to run with sudo when a session is denied ([c7fcde7](https://github.com/OrlovEvgeny/filetrace/commit/c7fcde7ac26830d86879f90973f9b9503fd5fc39))
+- Show whether top reads an agent or collects by itself ([5d8306d](https://github.com/OrlovEvgeny/filetrace/commit/5d8306d45e36d3bad4722955a68aa1ea49f8f713))
+- Say under an empty table that a session is watching ([717650b](https://github.com/OrlovEvgeny/filetrace/commit/717650bf00d39b84a4bf7ce554c90e717ceaed0d))
+- Show what share of all outbound traffic is files in top ([319be6b](https://github.com/OrlovEvgeny/filetrace/commit/319be6b15d79dc5f5dabe32d89f88a62a4193c08))
+- Return to the prompt at once when top quits with a collector ([8efb8c3](https://github.com/OrlovEvgeny/filetrace/commit/8efb8c365c0bc2783f9ce10272502b6ee1b8e555))
+- Run a session collector in standard mode whatever the file says ([f23f4b7](https://github.com/OrlovEvgeny/filetrace/commit/f23f4b7c64c62e29c99c3011a32714e112950731))
+
+### Bug Fix
+
+- Leave a first flight to its next send when the thread reads again ([1f0af87](https://github.com/OrlovEvgeny/filetrace/commit/1f0af87dc91724347954b3e202a263a6c4b3cf33))
+- Count what a kprobe send was given as its bytes are settled ([e1fc9ce](https://github.com/OrlovEvgeny/filetrace/commit/e1fc9ced2350e0b5483c5b2984f87bbe3bebaa94))
+- Judge a window by as many copies of its file as went ([aa9ac8b](https://github.com/OrlovEvgeny/filetrace/commit/aa9ac8bf884fa6425725b3c799eb0fc0faab3f32))
+- Hold a kprobe window only while a claiming send waits for room ([00c3239](https://github.com/OrlovEvgeny/filetrace/commit/00c32396d89a50be578f7d11860cf89692a0e8bb))
+- Drop a small first flight that its peer hung up on unanswered ([bfbf453](https://github.com/OrlovEvgeny/filetrace/commit/bfbf45376a1fa140afcf60b9f73b05d7f55e0779))
+- Give each CPU a second path buffer and count a busy one as a loss ([24ac8fd](https://github.com/OrlovEvgeny/filetrace/commit/24ac8fd097b253e9970b0fe0d19f513af492985f))
+- Let the kernel match a listed name by a part of it ([52be350](https://github.com/OrlovEvgeny/filetrace/commit/52be35048296e1e1f7f2018efe5160c70110ca67))
+- Say that nothing can be collected on macOS and where to run ([50806bb](https://github.com/OrlovEvgeny/filetrace/commit/50806bbddd7c2876e48e109ae24bf9baf5867a4a))
+- Let the collector of a top session stop by itself once it answered ([62910ae](https://github.com/OrlovEvgeny/filetrace/commit/62910ae380e5dd34f3d25814df6f19c392b9a009))
+- Keep the log of a session collector off the screen of top ([b605825](https://github.com/OrlovEvgeny/filetrace/commit/b6058259909ea5f9413e4cdd5ba5dbab15982ba7))
+- Keep the last character of a watch row as wide as the terminal ([ef18137](https://github.com/OrlovEvgeny/filetrace/commit/ef1813794a0b78305ba1998a7eedb75f2c5d3678))
+- Keep the rankings windows moving after a sample from the future ([f833a3d](https://github.com/OrlovEvgeny/filetrace/commit/f833a3d4f7b8815cb92c5604679647787ab7c011))
+- Hold a window while a send on its socket waits for room ([fca3913](https://github.com/OrlovEvgeny/filetrace/commit/fca3913ee78367ac491fd7917a9b57d7b5d41cea))
+- Count another copy of a file only once a send took the one before ([1ff31bc](https://github.com/OrlovEvgeny/filetrace/commit/1ff31bc5c10736aafd1405b658908f3cc2bde894))
+- Start a window's read count over when it takes another file ([2953591](https://github.com/OrlovEvgeny/filetrace/commit/2953591f88d265c1f9d29d9f4b22f40685ac650e))
+- Take a read as a re-read only when it starts at the file's start ([225ab58](https://github.com/OrlovEvgeny/filetrace/commit/225ab588a7e562e0e7d5e8b97598266ec22aa3e5))
+
 ## 26.11.8.191 (2026-11-12)
 
 ### New Feature
