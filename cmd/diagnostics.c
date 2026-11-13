@@ -229,8 +229,10 @@ static void doctor_json(const struct ft_diagnosis *d, const struct ft_host_info 
                (unsigned long long)stats->name_libraries.count,
                (unsigned long long)stats->name_libraries.capacity,
                (unsigned long long)stats->name_libraries_configured);
-    if (agent == FT_AGENT_RUNNING && stats->tls_libraries)
-        printf(",\"tls_libraries\":%llu", (unsigned long long)stats->tls_libraries);
+    if (agent == FT_AGENT_RUNNING && stats->tls_library_capacity)
+        printf(",\"tls_libraries\":%llu,\"tls_library_capacity\":%llu",
+               (unsigned long long)stats->tls_libraries,
+               (unsigned long long)stats->tls_library_capacity);
     printf("}}\n");
 }
 

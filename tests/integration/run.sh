@@ -1684,6 +1684,8 @@ TMPL
         "$(ft stats | grep 'TLS libraries:')" 'TLS libraries: +[1-9]'
     expect_match "names: doctor shows the TLS library count" \
         "$(ft doctor | grep 'TLS libraries:')" 'TLS libraries: +[1-9]'
+    expect_match "names: stats shows the TLS library capacity" "$(ft stats --json)" \
+        '"tls_library_capacity":[1-9]'
 
     stop_agent
     expect "TLS server names agent exit code" "$?" 0
@@ -1705,6 +1707,10 @@ TMPL
     expect_match "names: lookups off, capability names the halves" \
         "$(ft capabilities | grep '^Destination names')" \
         'PARTIAL +lookups are turned off in the configuration; TLS server names (in [1-9][0-9]* librar|are read where)'
+    expect_match "names: lookups off still reports the configured limit" "$(ft stats --json)" \
+        '"name_libraries_configured":[1-9]'
+    expect_match "names: lookups off reports the TLS capacity" "$(ft stats --json)" \
+        '"tls_library_capacity":[1-9]'
     stop_agent
     expect "TLS-only agent exit code" "$?" 0
 
