@@ -145,6 +145,18 @@ static int take_snapshot(struct ft_session *s, const struct ft_watch_options *op
     return code;
 }
 
+constexpr size_t PROCESS_LEAST = 10;
+constexpr size_t PATH_LEAST = 16;
+constexpr size_t ADDRESS_LEAST = sizeof("255.255.255.255") - 1;
+constexpr size_t ADDRESS_PORT_LEAST = sizeof("255.255.255.255:65535") - 1;
+constexpr size_t RATE_WIDEST = sizeof("100.0 MB/s") - 1;
+
+/* The files table at its narrowest, the widest of the views at theirs: four columns, three gaps. */
+constexpr size_t LEAST_COLUMNS = PROCESS_LEAST + PATH_LEAST + ADDRESS_LEAST + RATE_WIDEST + 3 * 2;
+
+/* Snapshots appended to a pipe or file have no width to fit; their paths keep this many bytes. */
+constexpr size_t PLAIN_PATH_WIDTH = 128;
+
 struct transfer_table {
     const struct ft_rows *rows;
     struct ft_row_transfer *row;
@@ -221,24 +233,32 @@ static const char *transfer_cell(void *ctx, size_t r, size_t c, char *buf, size_
     return buf;
 }
 
-static void transfers_table(FILE *o, const struct ft_rows *rows, int cols, bool resolve)
+static void transfers_table(FILE *o, const struct ft_rows *rows, size_t width, bool resolve)
 {
     static const struct ft_column_spec columns[] = {
         {"PROCESS", false}, {"FILE", false}, {"DESTINATION", false},
         {"METHOD", false},  {"RATE", true},  {"CONFIDENCE", false},
+    };
+    static const struct ft_column_fit fit[] = {
+        {.cut = 3, .least = PROCESS_LEAST},
+        {.cut = 1, .least = PATH_LEAST, .keep_end = true},
+        {.cut = 2, .least = ADDRESS_LEAST},
+        {.leave = 2},
+        {0},
+        {.leave = 1},
     };
     struct ft_row_transfer *row = malloc(sizeof(*row));
     struct transfer_table table = {
         .rows = rows,
         .row = row,
         .loaded = SIZE_MAX,
-        .path_width = cols > 100 ? (size_t)cols - 72 : 28,
+        .path_width = width == SIZE_MAX ? PLAIN_PATH_WIDTH : SIZE_MAX,
         .resolve = resolve,
     };
 
     if (row && rows->count)
-        ft_table_print(o, columns, FT_ARRAY_LEN(columns), rows->count, transfer_cell, &table,
-                       false);
+        ft_table_print_fit(o, columns, fit, FT_ARRAY_LEN(columns), rows->count, transfer_cell,
+                           &table, false, width);
     else
         fputs("No file transfers in progress.\n", o);
     free(row);
@@ -285,7 +305,8 @@ static const char *process_cell(void *ctx, size_t r, size_t c, char *buf, size_t
     return buf;
 }
 
-static void processes_table(FILE *o, const struct ft_rows *rows, enum ft_watch_direction direction)
+static void processes_table(FILE *o, const struct ft_rows *rows, enum ft_watch_direction direction,
+                            size_t width)
 {
     static const struct ft_column_spec outbound[] = {
         {"PID", false},  {"PROCESS", false},    {"OUTBOUND", true},
@@ -299,15 +320,22 @@ static void processes_table(FILE *o, const struct ft_rows *rows, enum ft_watch_d
         {"PID", false},        {"PROCESS", false}, {"OUTBOUND", true}, {"FILES", true},
         {"CONNECTIONS", true}, {"INBOUND", true},  {"TOTAL", true},
     };
+    static const struct ft_column_fit one_way_fit[] = {
+        {0}, {.cut = 1, .least = PROCESS_LEAST}, {0}, {.leave = 3}, {.leave = 2}, {.leave = 1},
+    };
+    static const struct ft_column_fit both_fit[] = {
+        {0}, {.cut = 1, .least = PROCESS_LEAST}, {0}, {.leave = 3}, {.leave = 2}, {0}, {.leave = 1},
+    };
     struct process_table table = {rows, direction};
 
     if (rows->count == 0)
         fputs("No network activity observed yet.\n", o);
     else if (direction == FT_WATCH_BOTH)
-        ft_table_print(o, both, FT_ARRAY_LEN(both), rows->count, process_cell, &table, false);
+        ft_table_print_fit(o, both, both_fit, FT_ARRAY_LEN(both), rows->count, process_cell, &table,
+                           false, width);
     else
-        ft_table_print(o, direction == FT_WATCH_INBOUND ? inbound : outbound,
-                       FT_ARRAY_LEN(outbound), rows->count, process_cell, &table, false);
+        ft_table_print_fit(o, direction == FT_WATCH_INBOUND ? inbound : outbound, one_way_fit,
+                           FT_ARRAY_LEN(outbound), rows->count, process_cell, &table, false, width);
 }
 
 static const char *connection_cell(void *ctx, size_t r, size_t c, char *buf, size_t size)
@@ -353,16 +381,21 @@ static const char *connection_cell(void *ctx, size_t r, size_t c, char *buf, siz
     return buf;
 }
 
-static void connections_table(FILE *o, const struct ft_rows *rows)
+static void connections_table(FILE *o, const struct ft_rows *rows, size_t width)
 {
     static const struct ft_column_spec columns[] = {
         {"PID", false},    {"PROCESS", false}, {"PROTOCOL", false}, {"LOCAL", false},
         {"REMOTE", false}, {"OUTBOUND", true}, {"INBOUND", true},
     };
+    static const struct ft_column_fit fit[] = {
+        {0},          {.cut = 2, .least = PROCESS_LEAST},      {.leave = 1},
+        {.leave = 3}, {.cut = 1, .least = ADDRESS_PORT_LEAST}, {0},
+        {.leave = 2},
+    };
 
     if (rows->count)
-        ft_table_print(o, columns, FT_ARRAY_LEN(columns), rows->count, connection_cell,
-                       (void *)(uintptr_t)rows, false);
+        ft_table_print_fit(o, columns, fit, FT_ARRAY_LEN(columns), rows->count, connection_cell,
+                           (void *)(uintptr_t)rows, false, width);
     else
         fputs("No open connections.\n", o);
 }
@@ -409,12 +442,57 @@ static void confidence_line(FILE *o, const struct ft_row_stats *st)
         fprintf(o, "LOST: %s\n", lost);
 }
 
-static void key(FILE *o, const char *label, const char *name, bool current)
+struct key_hint {
+    const char *label;
+    const char *name;
+    bool current;
+};
+
+static size_t hint_width(const struct key_hint *k)
 {
-    if (current)
-        fprintf(o, "%c[%s] %s%c  ", BOLD, label, name, PLAIN);
+    return strlen(k->label) + strlen(k->name) + 3;
+}
+
+static void key(FILE *o, const struct key_hint *k)
+{
+    if (k->current)
+        fprintf(o, "%c[%s] %s%c", BOLD, k->label, k->name, PLAIN);
     else
-        fprintf(o, "[%s] %s  ", label, name);
+        fprintf(o, "[%s] %s", k->label, k->name);
+}
+
+/* Hints that do not fit are left out, the least needed first. */
+static void key_row(FILE *o, enum view view, bool paused, size_t width)
+{
+    const struct key_hint hints[] = {
+        {"F", "Files", view == VIEW_FILES},
+        {"P", "Processes", view == VIEW_PROCESSES},
+        {"N", "Network", view == VIEW_NETWORK},
+        {"Space", "Pause", paused},
+        {"?", "Help", false},
+        {"Q", "Quit", false},
+    };
+    static const size_t leave[] = {3, 2, 1, 0};
+    bool shown[FT_ARRAY_LEN(hints)];
+    size_t total = 0;
+
+    for (size_t i = 0; i < FT_ARRAY_LEN(hints); i++) {
+        shown[i] = true;
+        total += hint_width(&hints[i]) + (i ? 2 : 0);
+    }
+    for (size_t i = 0; i < FT_ARRAY_LEN(leave) && total > width; i++) {
+        shown[leave[i]] = false;
+        total -= hint_width(&hints[leave[i]]) + 2;
+    }
+    const char *gap = "";
+    for (size_t i = 0; i < FT_ARRAY_LEN(hints); i++) {
+        if (shown[i]) {
+            fputs(gap, o);
+            key(o, &hints[i]);
+            gap = "  ";
+        }
+    }
+    fputc('\n', o);
 }
 
 static void help_screen(FILE *o)
@@ -442,13 +520,17 @@ static void help_screen(FILE *o)
 }
 
 static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_options *opt,
-                    const struct ft_host_info *host, enum view view, bool every_view, int cols,
+                    const struct ft_host_info *host, enum view view, bool every_view, size_t width,
                     bool paused, bool help)
 {
     const struct ft_row_stats *st = &snap->stats;
     unsigned major = 0;
     unsigned minor = 0;
 
+    if (width < LEAST_COLUMNS) {
+        fprintf(o, "Terminal too narrow: needs %zu columns\n", LEAST_COLUMNS);
+        return;
+    }
     sscanf(host->release, "%u.%u", &major, &minor);
     fprintf(o, "%cFILETRACE%c  %s · %s %u.%u  ", BOLD, PLAIN, host->hostname,
             strcmp(host->system, "Darwin") == 0 ? "macOS" : host->system, major, minor);
@@ -467,27 +549,21 @@ static void compose(FILE *o, const struct snapshot *snap, const struct ft_watch_
 
     if (every_view || view == VIEW_FILES) {
         fprintf(o, "\n%cACTIVE FILE TRANSFERS\n", HEADING);
-        transfers_table(o, &snap->transfers, cols, opt->resolve);
+        transfers_table(o, &snap->transfers, width, opt->resolve);
     }
     if (every_view || view == VIEW_PROCESSES) {
         fprintf(o, "\n%cPROCESSES\n", HEADING);
-        processes_table(o, &snap->processes, opt->direction);
+        processes_table(o, &snap->processes, opt->direction, width);
     }
     if (!every_view && view == VIEW_NETWORK) {
         fprintf(o, "\n%cCONNECTIONS\n", HEADING);
-        connections_table(o, &snap->connections);
+        connections_table(o, &snap->connections, width);
     }
 
     confidence_line(o, st);
     if (every_view)
         return;
-    key(o, "F", "Files", view == VIEW_FILES);
-    key(o, "P", "Processes", view == VIEW_PROCESSES);
-    key(o, "N", "Network", view == VIEW_NETWORK);
-    key(o, "Space", "Pause", paused);
-    key(o, "?", "Help", false);
-    key(o, "Q", "Quit", false);
-    fputc('\n', o);
+    key_row(o, view, paused, width);
 }
 
 static void frame_free(struct frame *f)
@@ -645,7 +721,8 @@ int ft_watch_run(struct ft_session *s, const struct ft_watch_options *given)
             code = FT_EXIT_ERROR;
             break;
         }
-        compose(mem, &snap, &opt, &host, view, !dashboard, cols, paused, help);
+        compose(mem, &snap, &opt, &host, view, !dashboard, dashboard ? (size_t)cols : SIZE_MAX,
+                paused, help);
         fclose(mem);
 
         if (dashboard) {
