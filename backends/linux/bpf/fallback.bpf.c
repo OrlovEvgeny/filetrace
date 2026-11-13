@@ -362,7 +362,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     if (t->carrying) {
         carry_left_behind(map, (__u64)sk, t->id);
         carry_send_starts(map, (__u64)sk, 0, now);
-        carry_send_counted((__u64)sk, 0, 0, now);
+        carry_send_counted((__u64)sk, 0, 0, size, now);
     }
     struct thread_state *ts = thread_now(false);
     claim_release(t, ts, (__u32)ids);
@@ -382,7 +382,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     }
     bool skip;
     struct carry *c =
-        carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, 0, now, true, &skip);
+        carry_window(ts, (__u64)sk, t->id, (__u32)(ids >> 32), 0, 0, size, now, true, &skip);
     if (c) {
         t->carrying = 1;
         if (c->read_seen < ts->file_read)

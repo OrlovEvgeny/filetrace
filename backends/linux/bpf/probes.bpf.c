@@ -204,7 +204,7 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
         if (!spliced)
             correlate_send(map, tcp ? (__u64)sk : 0, key.cookie, key.tgid, (__u64)ret, asked, now);
         if (tcp)
-            carry_send_counted((__u64)sk, bytes, spliced ? 0 : asked, now);
+            carry_send_counted((__u64)sk, bytes, spliced ? 0 : asked, spliced ? 0 : asked, now);
         return 0;
     }
     if (tcp)
