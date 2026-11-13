@@ -564,6 +564,38 @@ static void tls_server_name(void)
     /* A server name for a socket nobody has seen is dropped. */
     tls_name(&f, SOCK + 9, CURL, "files.ft.test");
     CHECK(ft_table_find(f.st->sockets, &(uint64_t){SOCK + 9}) == nullptr);
+
+    /* The handshake may come from another process than the one that connected. */
+    connect_to(&f, SOCK + 3, CURL, CURL, shared);
+    tls_name(&f, SOCK + 3, NGINX, "files.ft.test.");
+    CHECK_STR(connection(&f, SOCK + 3), "files.ft.test");
+    CHECK_U64(ft_remote_name_source(&got.names), FT_NAME_SOURCE_LOOKUP_TLS);
+
+    /* An address given as the server name is no name, and is not held against anyone. */
+    connect_to(&f, SOCK + 4, CURL, CURL, shared);
+    tls_name(&f, SOCK + 4, CURL, "127.0.0.2");
+    CHECK_STR(connection(&f, SOCK + 4), "other.ft.test (+1)");
+    CHECK_U64(ft_remote_name_source(&got.names), FT_NAME_SOURCE_LOOKUP);
+    connect_to(&f, SOCK + 5, CURL, CURL, address(127, 0, 0, 4, 4433));
+    tls_name(&f, SOCK + 5, CURL, "::1");
+    CHECK_STR(connection(&f, SOCK + 5), "");
+    CHECK_U64(ft_names_invalid(f.st->names), 0);
+    fixture_close(&f);
+
+    /* The same name sent again for a socket, as a retried handshake does, holds it once. */
+    struct ft_state_config cfg;
+    ft_state_config_defaults(&cfg);
+    cfg.max_names = 1;
+    fixture_open(&f, &cfg);
+    exec(&f, CURL);
+    connect_to(&f, SOCK, CURL, CURL, shared);
+    tls_name(&f, SOCK, CURL, "files.ft.test");
+    tls_name(&f, SOCK, CURL, "files.ft.test");
+    CHECK_STR(connection(&f, SOCK), "files.ft.test");
+    socket_state(&f, SOCK, CURL, CURL, FT_SOCK_CONNECTING, shared);
+    tls_name(&f, SOCK, CURL, "other.ft.test");
+    CHECK_STR(connection(&f, SOCK), "other.ft.test");
+    CHECK_U64(ft_names_refused(f.st->names), 0);
     fixture_close(&f);
 }
 
