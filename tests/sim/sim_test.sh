@@ -165,6 +165,12 @@ ok "a process lists the names it used" grep -q '"bytes_sent_per_second":[0-9]*,"
 ok "an address nobody named is inspected" query bare-address.txt inspect ip 10.0.5.22
 ok "it has no line of names" exits 1 grep -q '^Names:' bare-address.txt
 ok "its processes have no column of names" grep -Eq '^PID +PROCESS +OUTBOUND +SENT +RECEIVED$' bare-address.txt
+rsync=$("$cli" --socket sim.sock processes --process rsync --format quiet 2>/dev/null | head -n 1)
+ok "a process is inspected" query process.txt inspect process "$rsync"
+ok "its destinations have a column of names" grep -Eq '^DESTINATION +NAME +OUTBOUND +SENT +RECEIVED$' process.txt
+ok "a destination has its name" grep -Eq '^10\.0\.7\.31 +mirror-1\.internal +[0-9]' process.txt
+ok "a process is inspected as JSON" query process.json inspect process "$rsync" --json
+ok "a destination lists its names" grep -q '{"remote_ip":"10.0.7.31",[^}]*,"remote_names":\["mirror-1.internal"\]}' process.json
 
 ok "flows are grouped by remote" query by-remote.txt flows --group-by remote
 ok "the groups have a column of names" grep -Eq '^REMOTE +NAME +SENT +RECEIVED +FLOWS$' by-remote.txt
