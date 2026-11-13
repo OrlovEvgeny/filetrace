@@ -208,6 +208,8 @@ struct ft_sim_engine {
     uint64_t next_loss_ns;
     bool loss_due;
     struct ft_ev_loss loss;
+    bool lookup_names;
+    bool tls_names;
 
     struct {
         struct ring_event *items;
@@ -320,6 +322,40 @@ static void ring_process(struct ft_sim_engine *e, enum ft_event_type type, const
     }
 }
 
+/* The names are the scenario's own strings, which outlive the event. */
+static void ring_lookup(struct ft_sim_engine *e, uint64_t ts, uint32_t pid, uint32_t tid,
+                        const char *name, const struct ft_endpoint *remote)
+{
+    struct ring_event *r = e->lookup_names && name ? next_ring(e) : nullptr;
+    if (!r)
+        return;
+
+    r->key = make_key(e, ts);
+    r->path_off = NO_PATH;
+    r->ev = (struct ft_event){
+        .type = FT_EVENT_NAME_LOOKUP,
+        .ts_ns = ts,
+        .lookup = {.pid = pid, .tid = tid, .name = name, .addr_count = 1, .addrs = {*remote}},
+    };
+    r->ev.lookup.addrs[0].port = 0;
+}
+
+static void ring_tls_name(struct ft_sim_engine *e, uint64_t ts, uint64_t sock_id, uint32_t pid,
+                          const char *name)
+{
+    struct ring_event *r = e->tls_names && name ? next_ring(e) : nullptr;
+    if (!r)
+        return;
+
+    r->key = make_key(e, ts);
+    r->path_off = NO_PATH;
+    r->ev = (struct ft_event){
+        .type = FT_EVENT_TLS_NAME,
+        .ts_ns = ts,
+        .tls_name = {.sock_id = sock_id, .pid = pid, .name = name},
+    };
+}
+
 static void ring_socket(struct ft_sim_engine *e, uint64_t ts, uint64_t sock_id, uint32_t pid,
                         enum ft_sock_state state, const struct ft_endpoint *local,
                         const struct ft_endpoint *remote)
@@ -341,6 +377,7 @@ static void ring_socket(struct ft_sim_engine *e, uint64_t ts, uint64_t sock_id, 
                 .state = state,
                 .local = *local,
                 .remote = *remote,
+                .tid = state == FT_SOCK_CONNECTING ? pid : 0,
             },
     };
 }
@@ -651,8 +688,10 @@ static void recycle_due(struct ft_sim_engine *e, uint64_t t0, uint64_t t1)
     e->next_recycle_ns = at + rng_range(&e->rng, r->min_s, r->max_s) * FT_NS_PER_SEC;
 }
 
-static void pick_destination(struct ft_sim_engine *e, const struct ft_sim_generator *g,
-                             const struct slot *s, struct ft_endpoint *remote)
+/* Returns the destination's definition when the generator has a list of its own. */
+static const struct ft_sim_dest *pick_destination(struct ft_sim_engine *e,
+                                                  const struct ft_sim_generator *g,
+                                                  const struct slot *s, struct ft_endpoint *remote)
 {
     switch (g->dest_kind) {
     case FT_SIM_DEST_LIST: {
@@ -664,7 +703,7 @@ static void pick_destination(struct ft_sim_engine *e, const struct ft_sim_genera
             memset(remote, 0, sizeof(*remote));
         if (remote->port == 0)
             remote->port = ephemeral_port(e);
-        return;
+        return d;
     }
     case FT_SIM_DEST_PUBLIC: {
         double u = rng_unit(&e->rng);
@@ -685,14 +724,15 @@ static void pick_destination(struct ft_sim_engine *e, const struct ft_sim_genera
         break;
     }
     remote->port = ephemeral_port(e);
+    return nullptr;
 }
 
 static void open_socket(struct ft_sim_engine *e, struct slot *s, const struct gen_rt *g,
                         const struct proc_rt *p, uint64_t at)
 {
     struct ft_endpoint remote;
+    const struct ft_sim_dest *dest = pick_destination(e, g->def, s, &remote);
 
-    pick_destination(e, g->def, s, &remote);
     bool v6 = remote.family == 6;
     bool pub = !ft_addr_is_private(&remote);
     s->remote = remote;
@@ -702,9 +742,16 @@ static void open_socket(struct ft_sim_engine *e, struct slot *s, const struct ge
     s->has_socket = true;
     s->fresh = true;
 
+    if (g->def->outbound && dest) {
+        /* A resolver thread asked for the other name; the connecting thread for its own. */
+        ring_lookup(e, at, p->pid, p->pid + 1, dest->also, &s->remote);
+        ring_lookup(e, at, p->pid, p->pid, dest->name, &s->remote);
+    }
     if (g->def->outbound)
         ring_socket(e, at, s->sock_id, p->pid, FT_SOCK_CONNECTING, &s->local, &s->remote);
     ring_socket(e, at + 100 * 1000, s->sock_id, p->pid, FT_SOCK_ESTABLISHED, &s->local, &s->remote);
+    if (g->def->outbound && dest)
+        ring_tls_name(e, at + 300 * 1000, s->sock_id, p->pid, dest->tls);
 }
 
 static uint64_t flavor_number(struct ft_sim_engine *e, const struct ft_sim_flavor *f,
@@ -1216,6 +1263,12 @@ struct ft_sim_engine *ft_sim_engine_create(const struct ft_sim_scenario *sc, uin
     e->next_loss_ns = start_ns + rng_range(&e->rng, 25, 50) * FT_NS_PER_SEC;
     deliver_step(e);
     return e;
+}
+
+void ft_sim_engine_names(struct ft_sim_engine *e, bool lookups, bool tls)
+{
+    e->lookup_names = lookups;
+    e->tls_names = tls;
 }
 
 void ft_sim_engine_lose_nothing(struct ft_sim_engine *e)

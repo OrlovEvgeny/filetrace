@@ -56,6 +56,9 @@ enum ft_sim_dest_kind : uint8_t {
 struct ft_sim_dest {
     const char *addr; /* nullptr ends a list */
     uint16_t port;    /* 0: an ephemeral port */
+    const char *name; /* what the process looks up to get the address; nullptr: nothing */
+    const char *also; /* another name it has looked up to the same address */
+    const char *tls;  /* the server name of its TLS handshake; nullptr: no TLS */
 };
 
 /*

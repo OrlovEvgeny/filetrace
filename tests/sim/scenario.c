@@ -146,7 +146,11 @@ static const struct ft_sim_flavor php_requests[] = {
     {0},
 };
 
-static const struct ft_sim_dest kafka_dests[] = {{"10.0.5.22", 45910}, {"10.0.5.23", 45122}, {}};
+static const struct ft_sim_dest kafka_dests[] = {
+    {.addr = "10.0.5.22", .port = 45910},
+    {.addr = "10.0.5.23", .port = 45122},
+    {},
+};
 
 static const struct ft_sim_flavor kafka_segments[] = {
     {.weight = 1, .path = "/var/lib/kafka/data/events-7/%020llu.log", .fs_type = "xfs",
@@ -158,7 +162,11 @@ static const struct ft_sim_flavor kafka_segments[] = {
     {0},
 };
 
-static const struct ft_sim_dest s3_dests[] = {{"52.219.170.52", 443}, {}};
+static const struct ft_sim_dest s3_dests[] = {
+    {.addr = "52.219.170.52", .port = 443, .name = "pg-backups.s3.example.com",
+     .tls = "pg-backups.s3.example.com"},
+    {},
+};
 
 static const struct ft_sim_flavor pg_backups[] = {
     {.weight = 7, .path = "/srv/backups/pg/base-2026-11-12.tar.zst", .size_min = MIB(42100),
@@ -170,7 +178,11 @@ static const struct ft_sim_flavor pg_backups[] = {
     {0},
 };
 
-static const struct ft_sim_dest rsync_dests[] = {{"10.0.7.31", 873}, {"10.0.7.32", 873}, {}};
+static const struct ft_sim_dest rsync_dests[] = {
+    {.addr = "10.0.7.31", .port = 873, .name = "mirror-1.internal"},
+    {.addr = "10.0.7.32", .port = 873, .name = "mirror-2.internal"},
+    {},
+};
 
 static const struct ft_sim_flavor release_archives[] = {
     {.weight = 1, .path = "/srv/releases/api-v4.18.%llu.tar.gz", .numbering = FT_SIM_NUMBER_EPOCH,
@@ -179,7 +191,7 @@ static const struct ft_sim_flavor release_archives[] = {
     {0},
 };
 
-static const struct ft_sim_dest replica_dests[] = {{"10.0.4.12", 41870}, {}};
+static const struct ft_sim_dest replica_dests[] = {{.addr = "10.0.4.12", .port = 41870}, {}};
 
 static const struct ft_sim_flavor wal_segments[] = {
     {.weight = 1, .path = "/var/lib/postgresql/16/main/pg_wal/0000000100000A2B%08llX",
@@ -188,8 +200,12 @@ static const struct ft_sim_flavor wal_segments[] = {
     {0},
 };
 
+/* The first replica is also reached by the name of the whole cluster. */
 static const struct ft_sim_dest clickhouse_dests[] = {
-    {"10.0.6.14", 9009}, {"fd00:10:6::15", 9009}, {},
+    {.addr = "10.0.6.14", .port = 9009, .name = "ch-replica-2.internal",
+     .also = "clickhouse.internal"},
+    {.addr = "fd00:10:6::15", .port = 9009, .name = "ch-replica-3.internal"},
+    {},
 };
 
 static const struct ft_sim_flavor clickhouse_parts[] = {
@@ -199,7 +215,12 @@ static const struct ft_sim_flavor clickhouse_parts[] = {
     {0},
 };
 
-static const struct ft_sim_dest registry_dests[] = {{"10.0.8.40", 443}, {}};
+/* The registry is outside; the address is the proxy the upload goes through. */
+static const struct ft_sim_dest registry_dests[] = {
+    {.addr = "10.0.8.40", .port = 443, .name = "proxy.corp.internal",
+     .tls = "registry.ml.example.com"},
+    {},
+};
 
 static const struct ft_sim_flavor models[] = {
     {.weight = 7, .path = "/srv/ml/models/brand-ner-v3.safetensors", .size_min = MIB(4480),
@@ -228,7 +249,7 @@ static const struct ft_sim_flavor media_requests[] = {
     {0},
 };
 
-static const struct ft_sim_dest logstash_dests[] = {{"10.0.9.4", 5044}, {}};
+static const struct ft_sim_dest logstash_dests[] = {{.addr = "10.0.9.4", .port = 5044}, {}};
 
 static const struct ft_sim_flavor access_log[] = {
     {.weight = 1, .path = "/var/log/nginx/access.log", .size_min = MIB(15872),
