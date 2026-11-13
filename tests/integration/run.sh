@@ -654,6 +654,35 @@ for how in hangup reset abort; do
         "$(ft files --path "$data/flight-$how.json" --format csv | rows)" 0
 done
 
+# A copy of a file counts only once a send took the one before: a file read twice is not a send
+# near twice its size, as a request or as a reply, and a reply of the file and a head still is the
+# file; one sent whole and then again in pieces is two copies.
+"$workload" readtwice "$data/twice-settings.json" 20000 47000 fresh >/dev/null
+for reply in 3000 3600 5000; do
+    "$workload" readtwice "$data/twice-config-$reply.json" 2000 "$reply" heard >/dev/null
+done
+"$workload" twocopies "$data/two-copies.txt" 20000 >/dev/null
+# A send that fails before taking anything leaves no read count behind for the next file.
+"$workload" failedsend "$data/failed-data.bin" 300000 "$data/failed-app.cfg" 2000 >/dev/null
+# A reply the peer stops taking for a while is held until it went: a small template read before
+# a page of a megabyte is not the page.
+"$workload" stalledpage "$data/stalled-page.tpl" >/dev/null
+settle
+expect "file read twice, a request near twice its size: not reported" \
+    "$(ft files --path "$data/twice-settings.json" --format csv | rows)" 0
+expect "file read twice, a reply of the file and a head: bytes" \
+    "$(ft files --path "$data/twice-config-3000.json" --format csv | column transfer.bytes_sent)" 2000
+for reply in 3600 5000; do
+    expect "file read twice, a reply of $reply bytes: not reported" \
+        "$(ft files --path "$data/twice-config-$reply.json" --format csv | rows)" 0
+done
+expect "file sent whole, then again in pieces: bytes" \
+    "$(ft files --path "$data/two-copies.txt" --format csv | column transfer.bytes_sent)" 40000
+expect "send that failed before taking anything, then another file: not reported" \
+    "$(ft files --path "$data/failed-app.cfg" --format csv | rows)" 0
+expect "reply held while the peer stopped taking it: template not reported" \
+    "$(ft files --path "$data/stalled-page.tpl" --format csv | rows)" 0
+
 # A thread that reads its file again leaves its first flights to their own connections: a hello
 # sent after each read is not the file, and a small file put to one connection after another,
 # each answered and kept open, is reported for each once they close.

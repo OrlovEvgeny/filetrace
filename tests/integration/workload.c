@@ -79,6 +79,7 @@ enum sink_mode {
     SINK_LATE,    /* answers each read, from half a second after the peer connected */
     SINK_HANGUP,  /* closes after its first read, saying nothing */
     SINK_RESET,   /* resets the connection after its first read */
+    SINK_HOLD,    /* greets each peer and reads nothing for four seconds, into a small buffer */
 };
 
 static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
@@ -95,6 +96,9 @@ static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
         die("getsockname");
     s.port = ntohs(ipv6 ? ((struct sockaddr_in6 *)&s.addr)->sin6_port
                         : ((struct sockaddr_in *)&s.addr)->sin_port);
+    int small = 2048;
+    if (mode == SINK_HOLD && setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small)) != 0)
+        die("setsockopt");
     if (type == SOCK_STREAM && listen(fd, 64) != 0)
         die("listen");
 
@@ -118,10 +122,13 @@ static struct sink start_sink(int type, bool ipv6, enum sink_mode mode)
             int c = accept(fd, nullptr, nullptr);
             if (c < 0)
                 _exit(0);
-            if ((mode == SINK_GREET || mode == SINK_STALL) && write(c, "hello\n", 6) != 6)
+            if ((mode == SINK_GREET || mode == SINK_STALL || mode == SINK_HOLD) &&
+                write(c, "hello\n", 6) != 6)
                 _exit(1);
             if (mode == SINK_STALL)
                 sleep(2);
+            if (mode == SINK_HOLD)
+                sleep(4);
             if (mode == SINK_LATE)
                 usleep(500 * 1000);
             if (mode == SINK_HANGUP || mode == SINK_RESET) {
@@ -2037,6 +2044,119 @@ static void scenario_flight_end(const char *path, size_t size, const char *how)
 }
 
 /*
+ * readtwice <path> <bytes> <send bytes> <fresh|heard>: reads the file twice, then sends that much
+ * from memory, as a request over a fresh connection, or as a reply over one that heard a request
+ * first and hears the answer after.
+ */
+static void scenario_read_twice(const char *path, size_t size, size_t send, bool heard)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, heard ? SINK_ANSWER : SINK_DISCARD);
+    int sock = connect_sink(&sink);
+    if (heard) {
+        send_all(sock, "hello\n", 6);
+        hear(sock);
+    }
+    free(read_whole_file(path, size));
+    free(read_whole_file(path, size));
+    char *out = calloc(1, send);
+    if (!out)
+        die("malloc");
+    send_all(sock, out, send);
+    if (heard)
+        hear(sock);
+    usleep(200 * 1000);
+    close(sock);
+    free(out);
+    report("readtwice", path, size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * twocopies <path> <bytes>: over a fresh connection, sends the file whole, then reads it again
+ * from its start and sends it in pieces, and closes.
+ */
+static void scenario_two_copies(const char *path, size_t size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    int sock = connect_sink(&sink);
+    char *contents = read_whole_file(path, size);
+    send_all(sock, contents, size);
+    int file = open_file(path);
+    read_send(sock, file, 16384);
+    close(file);
+    usleep(200 * 1000);
+    close(sock);
+    free(contents);
+    report("twocopies", path, 2 * size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * failedsend <path> <bytes> <other> <other bytes>: over a fresh connection, reads the file and
+ * gives a send of it that fails before taking anything; then reads the other file and sends
+ * 30000 bytes from memory, and closes.
+ */
+static void scenario_failed_send(const char *path, size_t size, const char *other,
+                                 size_t other_size)
+{
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_DISCARD);
+    int sock = connect_sink(&sink);
+    free(read_whole_file(path, size));
+    /* An address the process does not map: the kernel copies nothing and fails the send. */
+    if (send(sock, (const void *)8, size, 0) >= 0)
+        die("the send did not fail");
+    free(read_whole_file(other, other_size));
+    char *out = calloc(1, 30000);
+    if (!out)
+        die("malloc");
+    send_all(sock, out, 30000);
+    usleep(200 * 1000);
+    close(sock);
+    free(out);
+    report("failedsend", other, other_size, sink.port);
+    stop_sink(&sink);
+}
+
+/*
+ * stalledpage <path>: over a connection that heard from its peer, reads a template about the size
+ * of what the socket takes before the peer stops reading, then sends a page of a megabyte from
+ * memory in one blocking send, which the peer leaves untaken for four seconds; then closes.
+ */
+static void scenario_stalled_page(const char *path)
+{
+    struct sink measure = start_sink(SOCK_STREAM, false, SINK_HOLD);
+    struct sink sink = start_sink(SOCK_STREAM, false, SINK_HOLD);
+    int small = 4096;
+    size_t page = 1048576;
+    char *out = calloc(1, page);
+    if (!out)
+        die("malloc");
+
+    int probe = connect_sink(&measure);
+    setsockopt(probe, SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+    fcntl(probe, F_SETFL, fcntl(probe, F_GETFL) | O_NONBLOCK);
+    usleep(100 * 1000);
+    size_t taken = 0;
+    for (ssize_t n; (n = send(probe, out + taken, page - taken, 0)) > 0;)
+        taken += (size_t)n;
+    close(probe);
+    if (taken < 4000 || taken > 40000)
+        die("the socket took an unexpected amount before blocking");
+
+    int sock = connect_sink(&sink);
+    hear(sock);
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+    size_t size = taken - 1000;
+    free(read_whole_file(path, size));
+    send_all(sock, out, page);
+    close(sock);
+    free(out);
+    report("stalledpage", path, size, sink.port);
+    stop_sink(&sink);
+    stop_sink(&measure);
+}
+
+/*
  * rereadhello <path> <bytes>: reads the file and sends a hello the size of a TLS ClientHello on a
  * connection whose peer answers late; reads the file again and does the same on a second one.
  * Each connection then hears its answer and sends a request, as a client reads its CA file per
@@ -3020,6 +3140,15 @@ int main(int argc, char **argv)
         scenario_pieces(argv[2], arg_size(argv[3]), arg_size(argv[4]), arg_size(argv[5]));
     else if (strcmp(name, "flightend") == 0 && argc == 5)
         scenario_flight_end(argv[2], arg_size(argv[3]), argv[4]);
+    else if (strcmp(name, "readtwice") == 0 && argc == 6)
+        scenario_read_twice(argv[2], arg_size(argv[3]), arg_size(argv[4]),
+                            strcmp(argv[5], "heard") == 0);
+    else if (strcmp(name, "twocopies") == 0 && argc == 4)
+        scenario_two_copies(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "failedsend") == 0 && argc == 6)
+        scenario_failed_send(argv[2], arg_size(argv[3]), argv[4], arg_size(argv[5]));
+    else if (strcmp(name, "stalledpage") == 0 && argc == 3)
+        scenario_stalled_page(argv[2]);
     else if (strcmp(name, "rereadhello") == 0 && argc == 4)
         scenario_reread_hello(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "rereadput") == 0 && argc == 4)
