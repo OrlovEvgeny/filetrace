@@ -143,6 +143,7 @@ struct ft_otlp_logs {
     size_t max_records;
     bool file_paths;
     bool command_line;
+    bool names;
     unsigned char *rows; /* struct ft_row_event up to its text's end, each aligned */
     size_t rows_len;
     size_t rows_cap;
@@ -151,7 +152,8 @@ struct ft_otlp_logs {
     struct ft_table *merged; /* key: struct merge_key, value: size_t offset into rows */
 };
 
-struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths, bool command_line)
+struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths, bool command_line,
+                                      bool names)
 {
     struct ft_otlp_logs *b = calloc(1, sizeof(*b));
     if (!b)
@@ -159,6 +161,7 @@ struct ft_otlp_logs *ft_otlp_logs_new(size_t max_records, bool file_paths, bool 
     b->max_records = max_records;
     b->file_paths = file_paths;
     b->command_line = command_line;
+    b->names = names;
     b->merged = ft_table_create(max_records, sizeof(struct merge_key), sizeof(size_t));
     if (!b->merged) {
         free(b);
@@ -225,6 +228,14 @@ static struct ft_row_event *row_at(const struct ft_otlp_logs *b, size_t offset)
     return (struct ft_row_event *)(void *)(b->rows + offset);
 }
 
+/* Whether a record in the batch has the name that a record taken now would keep. */
+static bool same_name(const struct ft_row_event *kept, const char *name, uint8_t source)
+{
+    if (!name[0])
+        return kept->name_source == FT_NAME_SOURCE_NONE;
+    return kept->name_source == source && strcmp(ft_row_event_name(kept), name) == 0;
+}
+
 bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
 {
     bool keep_text = b->file_paths || !about_file(row);
@@ -234,7 +245,9 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
     size_t strings_size = with_strings ? strlen(strings.command_line) + strlen(strings.cwd) +
                                              strlen(strings.script) + 3
                                        : 0;
-    size_t size = stored_size(text_len + 1 + strings_size);
+    const char *name = b->names ? ft_row_event_name(row) : "";
+    size_t name_size = name[0] ? strlen(name) + 1 : 0;
+    size_t size = stored_size(text_len + 1 + strings_size + name_size);
     struct merge_key key;
 
     if (carries_bytes(row)) {
@@ -248,7 +261,8 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
         key.remote = row->remote;
 
         const size_t *offset = ft_table_find(b->merged, &key);
-        if (offset) {
+        /* Bytes sent under another name of the remote end are a record of their own. */
+        if (offset && same_name(row_at(b, *offset), name, row->name_source)) {
             struct ft_row_event *sum = row_at(b, *offset);
             sum->bytes += row->bytes;
             sum->read_bytes += row->read_bytes;
@@ -277,12 +291,11 @@ bool ft_otlp_logs_add(struct ft_otlp_logs *b, const struct ft_row_event *row)
     memset(stored, 0, size);
     memcpy(stored, row, offsetof(struct ft_row_event, text) + text_len);
     stored->flags &= (uint8_t)~FT_EVENT_PROCESS_TEXT;
-    /* The copy has no room for the name, which its size would otherwise count. */
-    stored->name_source = FT_NAME_SOURCE_NONE;
     if (with_strings) {
         ft_process_strings_pack(stored->text + text_len + 1, strings_size, &strings);
         stored->flags |= FT_EVENT_PROCESS_TEXT;
     }
+    ft_row_event_set_name(stored, (enum ft_name_source)row->name_source, name);
 
     if (carries_bytes(row)) {
         size_t *offset = ft_table_insert(b->merged, &key, nullptr);
@@ -362,6 +375,13 @@ static void describe(struct attrs *l, const struct ft_row_event *e)
             attr_string(l, FT_ATTR_NETWORK_TYPE, family == 6 ? "ipv6" : "ipv4");
         attr_endpoint(l, FT_ATTR_NETWORK_LOCAL_ADDRESS, FT_ATTR_NETWORK_LOCAL_PORT, &e->local);
         attr_endpoint(l, FT_ATTR_NETWORK_PEER_ADDRESS, FT_ATTR_NETWORK_PEER_PORT, &e->remote);
+
+        const char *name = ft_row_event_name(e);
+        if (name[0]) {
+            attr_string(l, FT_ATTR_SERVER_ADDRESS, name);
+            attr_string(l, FT_ATTR_SERVER_ADDRESS_SOURCE,
+                        ft_name_source_name((enum ft_name_source)e->name_source));
+        }
     }
 
     switch (e->type) {

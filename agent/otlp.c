@@ -228,7 +228,8 @@ struct ft_otlp *ft_otlp_open(const struct ft_otlp_config *cfg,
         o->src = *src;
         o->client =
             ft_grpc_client_new(&addr, ft_net_addr_is_unix(&addr) ? "localhost" : cfg->endpoint);
-        o->batch = ft_otlp_logs_new(cfg->batch_size, cfg->file_paths, cfg->command_line);
+        o->batch =
+            ft_otlp_logs_new(cfg->batch_size, cfg->file_paths, cfg->command_line, cfg->names);
         o->row = malloc(sizeof(*o->row));
     }
     if (!o || !o->client || !o->batch || !o->row) {

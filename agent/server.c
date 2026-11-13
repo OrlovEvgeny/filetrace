@@ -83,6 +83,7 @@ void ft_agent_config_defaults(struct ft_agent_config *cfg)
     cfg->otlp.logs = true;
     cfg->otlp.metrics = true;
     cfg->otlp.file_paths = true;
+    cfg->otlp.names = true;
     cfg->otlp.event_types = 1u << FT_REC_FILE_TRANSFER | 1u << FT_REC_EVENT_LOSS;
     cfg->otlp.batch_size = 1024;
     cfg->otlp.flush_interval_ns = 5 * FT_NS_PER_SEC;

@@ -16,6 +16,7 @@ struct ft_otlp_config {
     bool metrics;
     bool file_paths;      /* false: files leave as device and inode only */
     bool command_line;    /* false: process arguments stay on this host */
+    bool names;           /* false: names of remote ends stay on this host */
     uint32_t event_types; /* bit per enum ft_record_type exported as a log record */
     uint32_t batch_size;
     uint64_t flush_interval_ns;

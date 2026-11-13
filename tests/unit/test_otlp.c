@@ -94,7 +94,7 @@ static void release(LogsRequest *request)
 
 static void describes_a_transfer_with_standard_names(void)
 {
-    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false);
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false, true);
     struct ft_row_event *row = transfer_row(8192, 1000);
 
     CHECK(ft_otlp_logs_add(batch, row));
@@ -144,7 +144,7 @@ static void describes_a_transfer_with_standard_names(void)
 
 static void sums_the_parts_of_one_transfer(void)
 {
-    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false);
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false, true);
     struct ft_row_event *row = transfer_row(1000, 100);
 
     row->method = FT_METHOD_READ_SEND;
@@ -200,8 +200,8 @@ static void sums_the_parts_of_one_transfer(void)
 
 static void leaves_paths_out_on_request_and_keeps_text_valid(void)
 {
-    struct ft_otlp_logs *hidden = ft_otlp_logs_new(16, false, false);
-    struct ft_otlp_logs *shown = ft_otlp_logs_new(16, true, false);
+    struct ft_otlp_logs *hidden = ft_otlp_logs_new(16, false, false, true);
+    struct ft_otlp_logs *shown = ft_otlp_logs_new(16, true, false, true);
     struct ft_row_event *row = transfer_row(10, 1);
 
     ft_strlcpy(row->text, "/data/caf\xe9.pdf", sizeof(row->text));
@@ -227,7 +227,7 @@ static void leaves_paths_out_on_request_and_keeps_text_valid(void)
 
 static void refuses_more_than_a_batch_holds(void)
 {
-    struct ft_otlp_logs *batch = ft_otlp_logs_new(2, true, false);
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(2, true, false, true);
     struct ft_row_event *row = transfer_row(10, 1);
 
     CHECK(ft_otlp_logs_add(batch, row));
@@ -341,9 +341,9 @@ static const LogRecord *only_record(LogsRequest *request)
 /* Arguments leave only when asked for; the directory and script stay with the paths. */
 static void says_what_a_process_runs(void)
 {
-    struct ft_otlp_logs *quiet = ft_otlp_logs_new(16, true, false);
-    struct ft_otlp_logs *full = ft_otlp_logs_new(16, true, true);
-    struct ft_otlp_logs *pathless = ft_otlp_logs_new(16, false, true);
+    struct ft_otlp_logs *quiet = ft_otlp_logs_new(16, true, false, true);
+    struct ft_otlp_logs *full = ft_otlp_logs_new(16, true, true, true);
+    struct ft_otlp_logs *pathless = ft_otlp_logs_new(16, false, true, true);
     struct ft_row_event *row = transfer_row(10, 1);
 
     set_strings(row, "python3 export.py --token=abc", "/srv/app", "/srv/app/export.py");
@@ -390,7 +390,7 @@ static void says_what_a_process_runs(void)
 /* The parts of a transfer are summed into the record that came first, strings and all. */
 static void sums_keep_the_first_strings(void)
 {
-    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, true);
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, true, true);
     struct ft_row_event *bare = transfer_row(10, 1);
     struct ft_row_event *described = transfer_row(20, 2);
 
@@ -424,8 +424,10 @@ static void sums_keep_the_first_strings(void)
 /* Whatever the length of the strings before it, a record's name does not run into the next. */
 static void keeps_named_records_apart(void)
 {
-    for (size_t len = 1; len <= 16; len++) {
-        struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false);
+    for (size_t at = 0; at < 32; at++) {
+        bool names = at >= 16;
+        size_t len = at % 16 + 1;
+        struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false, names);
         struct ft_row_event *row = transfer_row(10, 1);
 
         row->seq = 0x4141414141414141;
@@ -441,13 +443,132 @@ static void keeps_named_records_apart(void)
             request->resource_logs[0]->scope_logs[0];
         CHECK_U64(scope->n_log_records, 3);
         for (size_t i = 0; i < scope->n_log_records; i++) {
-            CHECK_STR(scope->log_records[i]->event_name, "filetrace.file_transfer");
-            CHECK_U64(number(scope->log_records[i], "filetrace.socket.id"), i + 1);
+            const LogRecord *r = scope->log_records[i];
+            CHECK_STR(r->event_name, "filetrace.file_transfer");
+            CHECK_U64(number(r, "filetrace.socket.id"), i + 1);
+            CHECK_STR(text(r, "server.address"), names ? "files.example.com" : "(absent)");
         }
         release(request);
         ft_otlp_logs_free(batch);
         free(row);
     }
+}
+
+/* The name the process used goes with its socket, network and transfer records. */
+static void names_the_remote_end(void)
+{
+    static const enum ft_record_type types[] = {FT_REC_SOCKET_CONNECT, FT_REC_NETWORK_SEND,
+                                                FT_REC_FILE_TRANSFER};
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false, true);
+    struct ft_row_event *row = transfer_row(10, 1);
+
+    ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP_TLS, "files.example.com");
+    for (size_t i = 0; i < FT_ARRAY_LEN(types); i++) {
+        row->type = (uint8_t)types[i];
+        CHECK(ft_otlp_logs_add(batch, row));
+    }
+    LogsRequest *request = encode(batch);
+    const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
+        request->resource_logs[0]->scope_logs[0];
+    CHECK_U64(scope->n_log_records, FT_ARRAY_LEN(types));
+    for (size_t i = 0; i < scope->n_log_records; i++) {
+        const LogRecord *r = scope->log_records[i];
+        CHECK_STR(text(r, "server.address"), "files.example.com");
+        CHECK_STR(text(r, "filetrace.server.address.source"), "lookup+tls");
+        CHECK_STR(text(r, "network.peer.address"), "203.0.113.25");
+        CHECK_U64(number(r, "server.port"), -1);
+    }
+    release(request);
+
+    /* Each source by its name; without a name, no attribute. */
+    ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP, "files.example.com");
+    CHECK(ft_otlp_logs_add(batch, row));
+    request = encode(batch);
+    CHECK_STR(text(only_record(request), "filetrace.server.address.source"), "lookup");
+    release(request);
+    ft_row_event_set_name(row, FT_NAME_SOURCE_TLS, "files.example.com");
+    CHECK(ft_otlp_logs_add(batch, row));
+    request = encode(batch);
+    CHECK_STR(text(only_record(request), "filetrace.server.address.source"), "tls");
+    release(request);
+    ft_row_event_set_name(row, FT_NAME_SOURCE_NONE, "");
+    CHECK(ft_otlp_logs_add(batch, row));
+    request = encode(batch);
+    CHECK_STR(text(only_record(request), "server.address"), "(absent)");
+    CHECK_STR(text(only_record(request), "filetrace.server.address.source"), "(absent)");
+    release(request);
+
+    ft_otlp_logs_free(batch);
+    free(row);
+}
+
+static uint8_t *encode_one(struct ft_otlp_logs *batch, const struct ft_row_event *row, size_t *size)
+{
+    CHECK(ft_otlp_logs_add(batch, row));
+    uint8_t *bytes = ft_otlp_logs_encode(batch, resource, FT_ARRAY_LEN(resource), 9000, size);
+    CHECK(bytes != nullptr);
+    return bytes;
+}
+
+/* Without names a record is encoded as one whose remote end has none. */
+static void leaves_names_out_on_request(void)
+{
+    struct ft_otlp_logs *off = ft_otlp_logs_new(16, true, false, false);
+    struct ft_otlp_logs *on = ft_otlp_logs_new(16, true, false, true);
+    struct ft_row_event *named = transfer_row(10, 1);
+    struct ft_row_event *bare = transfer_row(10, 1);
+    size_t named_size = 0;
+    size_t bare_size = 0;
+
+    ft_row_event_set_name(named, FT_NAME_SOURCE_LOOKUP, "files.example.com");
+    uint8_t *left_out = encode_one(off, named, &named_size);
+    uint8_t *nameless = encode_one(on, bare, &bare_size);
+    CHECK(named_size == bare_size && memcmp(left_out, nameless, bare_size) == 0);
+    CHECK(memmem(left_out, named_size, "files.example.com", 17) == nullptr);
+    free(left_out);
+    free(nameless);
+
+    ft_otlp_logs_free(off);
+    ft_otlp_logs_free(on);
+    free(named);
+    free(bare);
+}
+
+/* Bytes sent once the remote end has another name are a record of their own. */
+static void sums_under_one_name(void)
+{
+    struct ft_otlp_logs *batch = ft_otlp_logs_new(16, true, false, true);
+    struct ft_otlp_logs *off = ft_otlp_logs_new(16, true, false, false);
+    struct ft_row_event *row = transfer_row(10, 1);
+
+    ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP, "files.example.com");
+    for (int i = 0; i < 4; i++) {
+        if (i == 2)
+            ft_row_event_set_name(row, FT_NAME_SOURCE_LOOKUP_TLS, "files.example.com");
+        CHECK(ft_otlp_logs_add(batch, row));
+        CHECK(ft_otlp_logs_add(off, row));
+    }
+    CHECK_U64(ft_otlp_logs_count(batch), 2);
+    CHECK_U64(ft_otlp_logs_count(off), 1);
+
+    LogsRequest *request = encode(batch);
+    const Opentelemetry__Proto__Logs__V1__ScopeLogs *scope =
+        request->resource_logs[0]->scope_logs[0];
+    CHECK_U64(scope->n_log_records, 2);
+    if (scope->n_log_records == 2) {
+        CHECK_U64(number(scope->log_records[0], "filetrace.transfer.bytes"), 20);
+        CHECK_STR(text(scope->log_records[0], "filetrace.server.address.source"), "lookup");
+        CHECK_U64(number(scope->log_records[1], "filetrace.transfer.bytes"), 20);
+        CHECK_STR(text(scope->log_records[1], "filetrace.server.address.source"), "lookup+tls");
+    }
+    release(request);
+    request = encode(off);
+    CHECK_U64(number(only_record(request), "filetrace.transfer.bytes"), 40);
+    release(request);
+
+    ft_otlp_logs_free(batch);
+    ft_otlp_logs_free(off);
+    free(row);
 }
 
 void test_otlp(void)
@@ -460,4 +581,7 @@ void test_otlp(void)
     says_what_a_process_runs();
     sums_keep_the_first_strings();
     keeps_named_records_apart();
+    names_the_remote_end();
+    leaves_names_out_on_request();
+    sums_under_one_name();
 }
