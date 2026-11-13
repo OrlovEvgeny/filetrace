@@ -99,6 +99,7 @@ typedef struct {
 
 struct ns_common {
     unsigned int inum;
+    u64 ns_id;
 };
 
 struct pid_namespace {
