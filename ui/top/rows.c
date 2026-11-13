@@ -972,6 +972,115 @@ static void destination_label(struct ft_top_destination *d, uint16_t port)
         snprintf(d->label, sizeof(d->label), "%s%s%s:*", open, d->text, close);
 }
 
+struct named {
+    const char *text;
+    uint64_t bytes; /* of the transfers that used it */
+    uint32_t first; /* the order in which the names were met */
+};
+
+static void meet_name(struct ft_top_mode_state *ms, uint64_t destination, struct named *met,
+                      size_t *n, const char *text, uint64_t bytes)
+{
+    size_t len = strlen(text);
+    struct ft_top_key key = {ft_top_hash(text, len, destination),
+                             ft_top_hash(text, len, destination + 1), FT_TOP_KEY_TEXT};
+    uint32_t *at = ft_top_map_find(&ms->scratch, key);
+
+    if (at && strcmp(met[*at].text, text) == 0) {
+        met[*at].bytes += bytes;
+        return;
+    }
+    met[*n] = (struct named){.text = text, .bytes = bytes, .first = (uint32_t)*n};
+    ft_top_map_put(&ms->scratch, key, (uint32_t)*n);
+    (*n)++;
+}
+
+static int by_bytes(const void *a, const void *b)
+{
+    const struct named *x = a;
+    const struct named *y = b;
+    if (x->bytes != y->bytes)
+        return x->bytes > y->bytes ? -1 : 1;
+    return (x->first > y->first) - (x->first < y->first);
+}
+
+static bool has_name(const struct ft_remote_names *n, const char *name)
+{
+    if (strcmp(n->tls, name) == 0)
+        return true;
+    for (uint32_t i = 0; i < n->listed; i++) {
+        if (strcmp(n->resolved[i], name) == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool has_all(const struct ft_remote_names *n, const char *const *names, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (!has_name(n, names[i]))
+            return false;
+    }
+    return true;
+}
+
+static const char *destination_name(struct ft_top_pool *pool, const struct ft_top_transfer *lead,
+                                    const char *const *names, size_t count)
+{
+    char text[FT_NAMES_TEXT_MAX];
+
+    if (has_all(lead->names, names, count))
+        ft_remote_name_format(lead->names, text, sizeof(text));
+    else
+        snprintf(text, sizeof(text), "%s (+%zu)", names[0], count - 1);
+    return ft_top_pool_text(pool, text, strlen(text));
+}
+
+/* The names behind a destination, most bytes first, and what its NAME column shows of them. */
+static void name_destination(struct ft_top_mode_state *ms, struct ft_top_destination *d,
+                             uint64_t index)
+{
+    size_t most = 0;
+
+    d->name = "";
+    d->names = nullptr;
+    d->nnames = 0;
+    for (size_t k = 0; k < d->ntransfers; k++)
+        most += d->transfers[k]->names ? 1 + FT_RESOLVED_NAMES : 0;
+    if (most == 0)
+        return;
+    struct named *met = ft_top_pool_alloc(&ms->pool, most * sizeof(*met));
+    const char **names = ft_top_pool_alloc(&ms->pool, most * sizeof(*names));
+    if (!met || !names)
+        return;
+
+    size_t n = 0;
+    for (size_t k = 0; k < d->ntransfers; k++) {
+        const struct ft_remote_names *rn = d->transfers[k]->names;
+        if (!rn)
+            continue;
+        const char *used = ft_remote_name(rn);
+        uint64_t bytes = d->transfers[k]->bytes;
+        if (rn->tls[0])
+            meet_name(ms, index, met, &n, rn->tls, rn->tls == used ? bytes : 0);
+        for (uint32_t i = 0; i < rn->listed; i++)
+            meet_name(ms, index, met, &n, rn->resolved[i], rn->resolved[i] == used ? bytes : 0);
+    }
+    qsort(met, n, sizeof(*met), by_bytes);
+    for (size_t i = 0; i < n; i++)
+        names[i] = met[i].text;
+
+    const struct ft_top_transfer *lead = nullptr;
+    for (size_t k = 0; k < d->ntransfers && !lead; k++) {
+        const struct ft_remote_names *rn = d->transfers[k]->names;
+        if (rn && strcmp(ft_remote_name(rn), names[0]) == 0)
+            lead = d->transfers[k];
+    }
+    d->names = names;
+    d->nnames = n;
+    d->name = destination_name(&ms->pool, lead, names, n);
+}
+
 static bool build_destinations(struct ft_top_model *m, struct ft_top_mode_state *ms)
 {
     size_t n = m->ndestinations;
@@ -1005,6 +1114,7 @@ static bool build_destinations(struct ft_top_model *m, struct ft_top_mode_state 
         d->transfers = list;
         d->ntransfers = e->count;
         d->top = list[0];
+        name_destination(ms, d, i);
 
         uint64_t bytes = 0;
         uint32_t mark = ft_top_next_mark(m);
@@ -1702,8 +1812,11 @@ static bool row_matches(const struct ft_top_row *r, const char *needle, size_t n
     }
     case FT_TOP_ROW_DESTINATION: {
         const struct ft_top_destination *d = r->destination;
-        return FIND(d->label) || FIND(d->host) || (d->top_process && FIND(d->top_process->title)) ||
-               (d->top && FIND(d->top->path));
+        bool named = false;
+        for (size_t k = 0; k < d->nnames && !named; k++)
+            named = FIND(d->names[k]);
+        return FIND(d->label) || named || FIND(d->host) ||
+               (d->top_process && FIND(d->top_process->title)) || (d->top && FIND(d->top->path));
     }
     case FT_TOP_ROW_FILE:
         return FIND(r->file->path) || FIND(r->file->senders);

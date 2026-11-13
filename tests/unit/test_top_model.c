@@ -548,6 +548,80 @@ static void aggregates(void)
     fixture_free(&f);
 }
 
+static const struct ft_top_destination *destination_of(struct fixture *f, const char *address)
+{
+    static const struct ft_top_destination none;
+    const struct ft_top_destination *found = nullptr;
+
+    for (size_t i = 0; i < ft_top_row_count(f->m, FT_TOP_DESTINATIONS) && !found; i++) {
+        const struct ft_top_row *r = row_at(f, FT_TOP_DESTINATIONS, i);
+        if (r->kind == FT_TOP_ROW_DESTINATION && strcmp(r->destination->text, address) == 0)
+            found = r->destination;
+    }
+    CHECK(found != nullptr);
+    return found ? found : &none;
+}
+
+static void destination_names(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    /* The name the most bytes went to first, though a faster transfer used another. */
+    transfer(&f, (struct xfer){.id = 1,
+                               .pid = 7,
+                               .rate = 100,
+                               .bytes = 300,
+                               .remote = "198.51.100.4",
+                               .resolved = {"files.example.com", "cdn.example.com"}});
+    transfer(&f, (struct xfer){.id = 2,
+                               .pid = 7,
+                               .rate = 500,
+                               .bytes = 100,
+                               .remote = "198.51.100.4",
+                               .resolved = {"dl.example.com"}});
+    transfer(&f, (struct xfer){.id = 3,
+                               .pid = 7,
+                               .rate = 50,
+                               .bytes = 200,
+                               .remote = "198.51.100.4",
+                               .resolved = {"files.example.com"}});
+    transfer(&f, (struct xfer){.id = 4, .pid = 7, .rate = 900, .remote = "198.51.100.4"});
+    /* One proxied connection, and two that looked up the same two names. */
+    transfer(&f, (struct xfer){.id = 5,
+                               .pid = 7,
+                               .rate = 100,
+                               .remote = "10.0.8.40",
+                               .tls = "s3.example.com",
+                               .resolved = {"proxy.corp.example"}});
+    for (uint64_t id = 6; id <= 7; id++)
+        transfer(&f, (struct xfer){.id = id,
+                                   .pid = 7,
+                                   .rate = 100,
+                                   .bytes = id,
+                                   .remote = "10.0.6.14",
+                                   .resolved = {"ch-replica-2.internal", "clickhouse.internal"}});
+    transfer(&f, (struct xfer){.id = 8, .pid = 7, .rate = 100, .remote = "10.0.0.5"});
+    sample(&f, 0);
+
+    const struct ft_top_destination *d = destination_of(&f, "198.51.100.4");
+    CHECK_STR(d->name, "files.example.com (+2)");
+    CHECK_U64(d->nnames, 3);
+    if (d->nnames == 3) {
+        CHECK_STR(d->names[0], "files.example.com");
+        CHECK_STR(d->names[1], "dl.example.com");
+        CHECK_STR(d->names[2], "cdn.example.com");
+    }
+    d = destination_of(&f, "10.0.8.40");
+    CHECK_STR(d->name, "s3.example.com via proxy.corp.example");
+    CHECK_U64(d->nnames, 2);
+    CHECK_STR(destination_of(&f, "10.0.6.14")->name, "ch-replica-2.internal (+1)");
+    CHECK_STR(destination_of(&f, "10.0.0.5")->name, "");
+    CHECK_U64(destination_of(&f, "10.0.0.5")->nnames, 0);
+    CHECK_U64(ft_top_view_of(f.m, FT_TOP_DESTINATIONS)->named, 6);
+    fixture_free(&f);
+}
+
 static void tree(void)
 {
     struct fixture f;
@@ -923,6 +997,7 @@ void test_top_model(void)
     remote_names();
     tags();
     aggregates();
+    destination_names();
     tree();
     deep_tree();
     groups();

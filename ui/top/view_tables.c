@@ -30,6 +30,7 @@ enum column_id : uint8_t {
     COL_DESTS,
     COL_COMMAND,
     COL_KIND,
+    COL_NAME,
     COL_RDNS,
     COL_PROCS,
     COL_TOP_PROCESS,
@@ -135,6 +136,25 @@ static const struct squeeze destination_squeezes[] = {
     {COL_TOP_FILE, 20},
 };
 
+/* With names on the screen; rDNS then shows only while reverse lookups are on. */
+static const struct column_spec named_destination_columns[] = {
+    {COL_DESTINATION, "DESTINATION", 20, false, FT_TOP_SORT_DESTINATION, FT_TOP_SORT_DEFAULT},
+    {COL_KIND, "KIND", 9, false, FT_TOP_SORT_KIND, FT_TOP_SORT_DEFAULT},
+    {COL_NAME, "NAME", 0, false, FT_TOP_SORT_DEFAULT, FT_TOP_SORT_DEFAULT},
+    {COL_RDNS, "rDNS", 20, false, FT_TOP_SORT_HOSTNAME, FT_TOP_SORT_DEFAULT},
+    {COL_RATE, "RATE", 10, true, FT_TOP_SORT_RATE, FT_TOP_SORT_DEFAULT},
+    {COL_TOTAL, "TOTAL", 9, true, FT_TOP_SORT_TOTAL, FT_TOP_SORT_DEFAULT},
+    {COL_FILES, "FILES", 6, true, FT_TOP_SORT_FILES, FT_TOP_SORT_DEFAULT},
+    {COL_PROCS, "PROCS", 6, true, FT_TOP_SORT_PROCESSES, FT_TOP_SORT_DEFAULT},
+    {COL_TOP_PROCESS, "TOP PROCESS", 20, false, FT_TOP_SORT_PROCESS, FT_TOP_SORT_DEFAULT},
+    {COL_TOP_FILE, "TOP FILE", 30, false, FT_TOP_SORT_FILE, FT_TOP_SORT_DEFAULT},
+    {COL_TREND, "TREND 5m", 12, false, FT_TOP_SORT_DEFAULT, FT_TOP_SORT_DEFAULT},
+};
+
+static const struct squeeze named_destination_squeezes[] = {
+    {COL_TREND, 0}, {COL_TOP_PROCESS, 0}, {COL_PROCS, 0}, {COL_RDNS, 0}, {COL_TOP_FILE, 20},
+};
+
 static const struct column_spec file_columns[] = {
     {COL_FILE, "FILE", 0, false, FT_TOP_SORT_FILE, FT_TOP_SORT_DEFAULT},
     {COL_SIZE, "SIZE", 8, true, FT_TOP_SORT_SIZE, FT_TOP_SORT_DEFAULT},
@@ -162,7 +182,29 @@ static const struct table_spec tables[] = {
                       FT_ARRAY_LEN(file_squeezes)},
 };
 
-static void fit_columns(const struct table_spec *t, const struct ft_top_ui *ui, int width,
+static const struct table_spec named_destinations = {
+    named_destination_columns,  FT_ARRAY_LEN(named_destination_columns),  COL_NAME, 16, 30,
+    named_destination_squeezes, FT_ARRAY_LEN(named_destination_squeezes),
+};
+
+static const struct table_spec *table_of(const struct ft_top_draw *d, enum ft_top_mode mode)
+{
+    if (mode == FT_TOP_DESTINATIONS && !d->ui->addresses && ft_top_view_of(d->model, mode)->named)
+        return &named_destinations;
+    return &tables[mode];
+}
+
+static bool column_shown(const struct ft_top_draw *d, const struct table_spec *t,
+                         const struct column_spec *c)
+{
+    if (c->id == COL_SCRIPT)
+        return d->ui->script_column;
+    if (c->id == COL_RDNS && t->flex != COL_RDNS)
+        return ft_top_resolve_of(d->model);
+    return true;
+}
+
+static void fit_columns(const struct table_spec *t, const struct ft_top_draw *d, int width,
                         struct columns *out)
 {
     int widths[COLUMNS_MAX];
@@ -171,7 +213,7 @@ static void fit_columns(const struct table_spec *t, const struct ft_top_ui *ui, 
 
     for (size_t i = 0; i < n; i++) {
         const struct column_spec *c = &t->columns[i];
-        widths[i] = c->id == COL_SCRIPT && !ui->script_column ? 0 : c->width;
+        widths[i] = column_shown(d, t, c) ? c->width : 0;
         fixed += widths[i];
     }
     for (size_t s = 0; s < t->nsqueezes && fixed + t->flex_min > width; s++) {
@@ -814,6 +856,9 @@ static void destination_cells(struct row_draw *rd, const struct columns *cols,
                  FT_TOP_FIELD_COUNT);
             break;
         }
+        case COL_NAME:
+            cell(rd, c, style(rd, FT_COLOR_TEXT, false), dst->name, FT_TOP_FIELD_DEST);
+            break;
         case COL_RDNS: {
             const char *name = dst->host_state == FT_TOP_HOST_NAMED && dst->host ? dst->host
                                : dst->host_state == FT_TOP_HOST_NAMELESS         ? "(no PTR)"
@@ -1112,7 +1157,7 @@ void ft_top_draw_table(struct ft_top_draw *d, enum ft_top_mode mode, struct ft_r
         return;
     struct ft_rect previous = ft_canvas_clip(d->canvas, area);
 
-    fit_columns(&tables[mode], d->ui, area.w, &cols);
+    fit_columns(table_of(d, mode), d, area.w, &cols);
     for (size_t i = 0; i < cols.count; i++)
         cols.list[i].x += area.x;
     if (header.h > 0)
