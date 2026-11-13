@@ -867,6 +867,12 @@ static __always_inline enum carry_end carry_end_of(const struct carry *c, enum c
     return c->closed && !carry_evicted(c) ? (enum carry_end)(c->closed - 1) : end;
 }
 
+/* How a window whose socket is gone ends: as it was marked, else as aged out. */
+static __always_inline enum carry_end carry_end_gone(const struct carry *c)
+{
+    return c->closed ? (enum carry_end)(c->closed - 1) : CARRY_AGED;
+}
+
 /* Closes a thread's window at the address and judges it, unless the iterator got there first. */
 static __always_inline void carry_close(void *map, __u64 sk, __u32 tid, enum carry_end end,
                                         __u64 now)
@@ -883,8 +889,8 @@ static __always_inline void carry_close(void *map, __u64 sk, __u32 tid, enum car
 }
 
 /*
- * Judges the thread's window at the address when another socket had the address before, as that
- * socket's close ended it, before the socket there now reaches the window. Nothing the socket
+ * Judges the thread's window at the address when another socket had the address before, as it
+ * ended with that socket, before the socket there now reaches the window. Nothing the socket
  * there now took is the window's, so nothing is settled.
  */
 static __always_inline void carry_left_behind(void *map, __u64 sk, __u64 cookie)
@@ -894,7 +900,7 @@ static __always_inline void carry_left_behind(void *map, __u64 sk, __u64 cookie)
     if (!c || c->cookie == cookie ||
         __sync_val_compare_and_swap(&c->judged, CARRY_OPEN, CARRY_BUSY) != CARRY_OPEN)
         return;
-    carry_judge(map, sk, c, carry_end_of(c, CARRY_NEXT));
+    carry_judge(map, sk, c, carry_end_gone(c));
     bpf_map_delete_elem(&carries, &key);
 }
 
@@ -1058,8 +1064,7 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
         return 0;
     enum carry_end end = CARRY_AGED;
     if (gone || (c->closed && !carry_evicted(c))) {
-        if (c->closed)
-            end = (enum carry_end)(c->closed - 1);
+        end = carry_end_gone(c);
     } else if (carry_settle(map, sk, now) || (moved && !carry_evicted(c))) {
         /* A send the socket took since the last visit, or one waiting for room, keeps it open. */
         c->last_ns = now;
@@ -1467,7 +1472,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         return c;
     }
     if (c && !reuse)
-        carry_close(map, sk, tid, carry_end_of(c, CARRY_NEXT), now);
+        carry_close(map, sk, tid, stale ? carry_end_gone(c) : CARRY_NEXT, now);
     __u8 kind = 0;
     if (!sock_heard(sk) && !sock_flown(sk, sending))
         kind = CARRY_FLIGHT;
