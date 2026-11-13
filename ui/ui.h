@@ -65,4 +65,8 @@ struct ft_watch_options {
 
 int ft_watch_run(struct ft_session *s, const struct ft_watch_options *opt);
 
+/* What the network view asks the agent for: the open connections the filters leave. */
+void ft_watch_connections_query(const struct ft_watch_options *opt, uint32_t limit,
+                                struct ft_query *q);
+
 #endif
