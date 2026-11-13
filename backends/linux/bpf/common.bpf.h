@@ -197,6 +197,7 @@ struct carry {
     __u8 held;       /* a strict file read whole, judged by what went at any size */
     __u64 asked;     /* the most one send of the window's thread was given */
     __u32 seq_seen;  /* the socket's write_seq at the iterator's last visit */
+    __u32 copies;    /* of the file a send earned: one, and one more for each a send took first */
     __u32 judged;    /* the iterator reported it, and removes it on its next visit */
 };
 
@@ -746,6 +747,8 @@ static __always_inline __u64 carry_whole(const struct carry *c)
     __u64 copies = (c->wire + c->size / 2) / c->size;
     if (copies > read / c->size)
         copies = read / c->size;
+    if (copies > c->copies)
+        copies = c->copies;
     return (copies ? copies : 1) * c->size;
 }
 
@@ -1228,6 +1231,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
             c->file = ts->file;
             c->size = ts->file_size;
             c->held = thread_held(ts);
+            c->copies = 1;
         }
         /* A first flight turns into a reply as it is sent, and the reply ends as it is heard. */
         if (c->kind == CARRY_EPISODE && ts->episode_sock != sk) {
@@ -1270,6 +1274,7 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
         c->held = thread_held(ts);
     }
     c->asked = asked;
+    c->copies = 1;
     c->kind = kind;
     if (kind == CARRY_EPISODE)
         ts->episode_sock = sk;
@@ -1280,6 +1285,13 @@ static __always_inline struct carry *carry_window(struct thread_state *ts, __u64
 static __always_inline void carry_add(struct carry *c, __u64 sent, __u64 read, __u8 fresh,
                                       __u32 script, __u64 now)
 {
+    /* A file read again counts as another copy once a send took the ones before; a read alone not.
+     */
+    if (fresh && c->size) {
+        __u32 earned = (__u32)(c->sent / c->size) + 1;
+        if (earned > c->copies)
+            c->copies = earned;
+    }
     __sync_fetch_and_add(&c->sent, sent);
     __sync_fetch_and_add(&c->read, read);
     __sync_fetch_and_add(&c->sends, 1);
