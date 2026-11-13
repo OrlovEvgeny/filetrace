@@ -2,10 +2,11 @@
 #define FILETRACE_WIRE_H
 
 #include "filetrace/model.h"
+#include "filetrace/names.h"
 
 /* Frames use host byte order: both ends of the socket run on the same host. */
 #define FT_WIRE_MAGIC 0x43525446u /* "FTRC" */
-#define FT_WIRE_VERSION 6
+#define FT_WIRE_VERSION 7
 #define FT_WIRE_MAX_PAYLOAD (64u * 1024u)
 
 enum ft_msg_type : uint16_t {
@@ -168,6 +169,16 @@ struct ft_row_process {
     char text[FT_PROCESS_TEXT_MAX]; /* sent up to its last terminator */
 };
 
+/* A TLS server name and the looked-up names, each followed by its terminator. */
+#define FT_NAMES_TEXT_MAX ((FT_RESOLVED_NAMES + 1) * FT_NAME_MAX)
+
+/* Which names of the remote end follow a row's other strings. */
+struct ft_row_names {
+    uint16_t count; /* names the process looked up to the remote address: listed or more */
+    uint8_t listed; /* of them, in the row: the connecting thread's latest first */
+    uint8_t tls;    /* 1: the TLS server name precedes them */
+};
+
 struct ft_row_connection {
     uint64_t sock_id;
     uint64_t first_wall_ns;
@@ -184,6 +195,8 @@ struct ft_row_connection {
     struct ft_endpoint local;
     struct ft_endpoint remote;
     char comm[FT_COMM_MAX];
+    struct ft_row_names names;
+    char text[FT_NAMES_TEXT_MAX]; /* the names; sent up to the last one's terminator */
 };
 
 struct ft_row_flow {
@@ -203,6 +216,8 @@ struct ft_row_flow {
     struct ft_endpoint local;
     struct ft_endpoint remote;
     char comm[FT_COMM_MAX];
+    struct ft_row_names names;
+    char text[FT_NAMES_TEXT_MAX]; /* the names; sent up to the last one's terminator */
 };
 
 #define FT_XFER_ACTIVE 0x01u
@@ -237,10 +252,12 @@ struct ft_row_transfer {
     uint32_t flags;
     struct ft_endpoint local;
     struct ft_endpoint remote;
+    struct ft_row_names names;
     char comm[FT_COMM_MAX];
     char exe[FT_EXE_MAX];
     char fs_type[FT_FS_TYPE_MAX];
-    char path[FT_PATH_MAX + FT_PROCESS_TEXT_MAX]; /* sent up to its last terminator */
+    /* The path, any process strings, then any names; sent up to its last terminator. */
+    char path[FT_PATH_MAX + FT_PROCESS_TEXT_MAX + FT_NAMES_TEXT_MAX];
 };
 
 struct ft_table_usage {
@@ -344,12 +361,15 @@ struct ft_row_event {
     uint8_t method;
     uint8_t loss_kind;
     uint8_t flags;
-    uint8_t pad;
+    uint8_t name_source; /* enum ft_name_source; unless none, the remote end's name is last */
     struct ft_endpoint local;
     struct ft_endpoint remote;
     char comm[FT_COMM_MAX];
-    /* A file path or an executable, then any process strings; sent up to its last terminator. */
-    char text[FT_PATH_MAX + FT_PROCESS_TEXT_MAX];
+    /*
+     * A file path or an executable, then any process strings, then the name the remote end had
+     * when the record was made; sent up to its last terminator.
+     */
+    char text[FT_PATH_MAX + FT_PROCESS_TEXT_MAX + FT_NAME_MAX];
 };
 
 #define FT_LEADER_SLOTS 12  /* trend points of a window */
@@ -431,6 +451,8 @@ struct ft_msg_error {
 
 /* Payload size of the row: everything up to its last string's terminator. */
 size_t ft_row_process_size(const struct ft_row_process *row);
+size_t ft_row_connection_size(const struct ft_row_connection *row);
+size_t ft_row_flow_size(const struct ft_row_flow *row);
 size_t ft_row_transfer_size(const struct ft_row_transfer *row);
 size_t ft_row_event_size(const struct ft_row_event *row);
 size_t ft_row_leader_size(const struct ft_row_leader *row);
@@ -441,6 +463,21 @@ size_t ft_process_strings_pack(char *buf, size_t size, const struct ft_process_s
 void ft_row_process_strings(const struct ft_row_process *row, struct ft_process_strings *out);
 void ft_row_transfer_strings(const struct ft_row_transfer *row, struct ft_process_strings *out);
 void ft_row_event_strings(const struct ft_row_event *row, struct ft_process_strings *out);
+
+/* Writes the names one after another and says in fixed which they are; returns the bytes used. */
+size_t ft_remote_names_pack(const struct ft_remote_names *names, struct ft_row_names *fixed,
+                            char *buf, size_t size);
+
+/* A row without names gives "" for the TLS name and lists none. */
+void ft_row_connection_names(const struct ft_row_connection *row, struct ft_remote_names *out);
+void ft_row_flow_names(const struct ft_row_flow *row, struct ft_remote_names *out);
+void ft_row_transfer_names(const struct ft_row_transfer *row, struct ft_remote_names *out);
+
+/* Puts the name after the record's other strings; none leaves the record without one. */
+void ft_row_event_set_name(struct ft_row_event *row, enum ft_name_source source, const char *name);
+
+/* "" when the record has no name. */
+const char *ft_row_event_name(const struct ft_row_event *row);
 
 const char *ft_record_type_name(enum ft_record_type type);
 bool ft_record_type_parse(const char *text, enum ft_record_type *type);
