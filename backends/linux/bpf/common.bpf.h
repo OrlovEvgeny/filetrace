@@ -939,20 +939,22 @@ static long own_step(__u32 i, void *arg)
 }
 
 /*
- * Closes every window on a socket that is closing: the closing thread's at once, the others at the
- * iterator's next visit, by what the socket took until now.
+ * Closes every window on a socket that is closing: the closing thread's at once, also when the
+ * socket's owners were lost, the others at the iterator's next visit, by what the socket took.
  */
 static __always_inline void carry_close_all(void *map, __u64 sk, enum carry_end end, __u64 now)
 {
-    struct carry_owners *o = bpf_map_lookup_elem(&carry_owners, &sk);
-    if (!o)
-        return;
-    carry_settle(map, sk, now);
     struct owners_walk w = {.sk = sk, .self = current_tid(), .end = end};
-    __builtin_memcpy(w.tid, o->tid, sizeof(w.tid));
-    bpf_map_delete_elem(&carry_owners, &sk);
-    bpf_loop(CARRY_OWNERS, end_later_step, &w, 0);
-    carry_close(map, sk, w.self, end, now);
+    struct carry_owners *o = bpf_map_lookup_elem(&carry_owners, &sk);
+    if (o) {
+        carry_settle(map, sk, now);
+        __builtin_memcpy(w.tid, o->tid, sizeof(w.tid));
+        bpf_map_delete_elem(&carry_owners, &sk);
+        bpf_loop(CARRY_OWNERS, end_later_step, &w, 0);
+    }
+    struct carry_key own = {.sk = sk, .tid = w.self};
+    struct carry *c = bpf_map_lookup_elem(&carries, &own);
+    carry_close(map, sk, w.self, c ? carry_end_of(c, end) : end, now);
 }
 
 /* Drops every window on a socket that is going away. */
