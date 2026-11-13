@@ -66,4 +66,7 @@ x86-64 and arm64 and on macOS, runs the unit tests under the sanitizers,
 builds the static release binaries and the packages from them, and installs
 those packages in containers. The check named `CI` passes when all of that
 did.
-The integration tests also run nightly on the oldest supported kernels.
+The integration tests also run nightly on the oldest supported kernels, and so
+does `mise run test:returns`, which checks on x86-64 kernels without and with
+the uretprobe fix that the agent attaches return probes only where they kill
+no process under seccomp.
