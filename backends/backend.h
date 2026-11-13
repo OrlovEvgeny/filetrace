@@ -26,8 +26,6 @@ struct ft_backend_config {
     uint32_t drain_batch;    /* counters read from the kernel per call */
     uint64_t corr_window_ns; /* longest read-to-send gap that still correlates */
     bool php_scripts;        /* probe PHP binaries for the script of each request */
-    /* Attach the PHP probes where the test of return probes at start found them unsafe. */
-    bool force_return_probes;
     /* Borrowed patterns: files that are never taken as sent from a read and a send. */
     const char *const *background_paths;
     size_t background_path_count;

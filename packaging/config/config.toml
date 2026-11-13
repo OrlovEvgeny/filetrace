@@ -48,14 +48,13 @@
 # no_minimum_paths = []
 # Files that programs read on their way to a connection and that nobody sends by
 # reading them: trust stores, resolver files, time zones, locale data, interpreter
-# configuration, compiled modules, data files libraries load as they start, and
-# what a JVM loads from its JDK. Reading one does not change what the thread is
-# sending, and it is never taken as sent from a read and a send; sendfile of one
-# is still reported.
+# configuration, compiled modules, data files libraries load as they start. Reading
+# one does not change what the thread is sending, and it is never taken as sent
+# from a read and a send; sendfile of one is still reported.
 # "*/name" and "*.ext" name such files wherever they are, from their first read.
 # A file counts once a pattern names it: when the agent starts, every 30 seconds,
 # and after the first read of its path, also inside a container. [] turns this off.
-# background_paths = ["/etc/ssl/certs/*", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/*", "/etc/pki/ca-trust/extracted/*", "/etc/ca-certificates/extracted/*", "/usr/share/ca-certificates/*", "/usr/local/share/ca-certificates/*", "/etc/pki/ca-trust/source/*", "/usr/share/pki/ca-trust-source/*", "/etc/pki/trust/*", "/usr/share/pki/trust/*", "/etc/ca-certificates/trust-source/*", "/etc/ssl/openssl.cnf", "/etc/pki/tls/openssl.cnf", "/usr/lib/ssl/openssl.cnf", "/etc/php/*", "*/php.ini", "/etc/hosts", "/etc/host.conf", "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/mime.types", "/usr/share/zoneinfo/*", "/etc/localtime", "/usr/lib/locale/*", "*.mo", "*.pyc", "*/cacert.pem", "*/cacerts", "*/ca-bundle.crt", "*/ca-certificates.crt", "*/endpoints.json", "*/partitions.json", "*/sdk-default-configuration.json", "*/service-2.json", "*/service-2.json.gz", "*/endpoint-rule-set-1.json", "*/endpoint-rule-set-1.json.gz", "/usr/lib/jvm/*", "/usr/lib64/jvm/*", "/usr/java/*", "/usr/local/openjdk-*", "/opt/java/*", "/etc/java*", "*/modules", "*/libnet.so", "*/libnio.so", "*/libextnet.so", "*/libjimage.so", "*/net.properties", "*/java.security", "*.policy", "*.jsa"]
+# background_paths = ["/etc/ssl/certs/*", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/*", "/etc/pki/ca-trust/extracted/*", "/etc/ca-certificates/extracted/*", "/usr/share/ca-certificates/*", "/usr/local/share/ca-certificates/*", "/etc/pki/ca-trust/source/*", "/usr/share/pki/ca-trust-source/*", "/etc/pki/trust/*", "/usr/share/pki/trust/*", "/etc/ca-certificates/trust-source/*", "/etc/ssl/openssl.cnf", "/etc/pki/tls/openssl.cnf", "/usr/lib/ssl/openssl.cnf", "/etc/php/*", "*/php.ini", "/etc/hosts", "/etc/host.conf", "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/mime.types", "/usr/share/zoneinfo/*", "/etc/localtime", "/usr/lib/locale/*", "*.mo", "*.pyc", "*/cacert.pem", "*/cacerts", "*/ca-bundle.crt", "*/ca-certificates.crt", "*/endpoints.json", "*/partitions.json", "*/sdk-default-configuration.json", "*/service-2.json", "*/service-2.json.gz", "*/endpoint-rule-set-1.json", "*/endpoint-rule-set-1.json.gz"]
 # Files that programs load as they run and that people also send: account
 # databases, modules, shared libraries. Reading one does not change what the thread
 # is sending either; it is taken as sent only when what a connection took matches
@@ -94,12 +93,6 @@
 # of each request: a PHP-FPM or mod_php worker's transfers name the request's
 # script instead of the pool. About a microsecond per request.
 # php_scripts = true
-# The PHP probes follow each request to its end with a return probe. A test at
-# start runs a process under a seccomp filter through one; where it is killed,
-# as on x86-64 kernels 6.11 to 6.12.13 and 6.13 to 6.13.2 under the filter of a
-# container runtime, the PHP probes are not attached. true attaches them anyway,
-# for a host whose PHP processes run under no seccomp filter.
-# force_return_probes = false
 
 # A page of metrics for Prometheus to scrape, served without authentication.
 [prometheus]

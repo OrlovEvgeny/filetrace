@@ -314,18 +314,6 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     }
     ft_diagnosis_add(out, FT_CHECK_OK, false, "BPF programs",
                      "loaded; every kernel field they read was found");
-    if (probes.returns == FT_RETURNS_NO_SYSCALL) {
-        ft_diagnosis_add(out, FT_CHECK_OK, true, "Return probes",
-                         "this architecture returns from them without a system call");
-    } else if (probes.returns == FT_RETURNS_SAFE) {
-        ft_diagnosis_add(out, FT_CHECK_OK, true, "Return probes",
-                         "a process whose seccomp filter refuses the uretprobe system call "
-                         "survived one");
-    } else if (probes.returns != FT_RETURNS_NOT_TESTED) {
-        char why[320];
-        ft_diagnosis_add(out, FT_CHECK_WARN, true, "Return probes", "%s",
-                         ft_linux_returns_row(&probes, why, sizeof(why)));
-    }
 
     size_t failed_groups = report_probes(out, &probes);
     if (probes.aging) {

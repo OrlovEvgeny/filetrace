@@ -3,7 +3,6 @@
 #define FT_COPY16(dst, ptr, field) bpf_core_read(dst, 16, &(ptr)->field)
 
 #include "common.bpf.h"
-#include "returns.bpf.h"
 
 #define IPPROTO_UDP 17
 
