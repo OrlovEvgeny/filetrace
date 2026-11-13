@@ -93,6 +93,12 @@ const char *ft_linux_returns_row(const struct ft_linux_probes *p, char *buf, siz
 int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out);
 void ft_linux_probes_unload(struct ft_linux_probes *p);
 
+/*
+ * Attaches an empty program, by itself, as the first trampoline the network needs, named in
+ * *tried: the errno with which the kernel refuses it, or 0 when it attaches or cannot be tried.
+ */
+int ft_linux_trampoline_refusal(const struct ft_probe_def **tried);
+
 const char *ft_linux_last_libbpf_message(void);
 
 bool ft_linux_group_attached(const struct ft_linux_probes *p, enum ft_probe_group group);

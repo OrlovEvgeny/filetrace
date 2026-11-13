@@ -355,9 +355,16 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     cfg.known_files = 64;
 
     /* Trampolines are tried on their own first, to be able to say why they are not used. */
-    cfg.probes = wanted == FT_PROBES_KPROBE ? FT_PROBES_KPROBE : FT_PROBES_TRAMPOLINE;
+    const struct ft_probe_def *tried = nullptr;
+    int refused = wanted == FT_PROBES_AUTO ? ft_linux_trampoline_refusal(&tried) : 0;
+    cfg.probes = wanted == FT_PROBES_KPROBE || refused ? FT_PROBES_KPROBE : FT_PROBES_TRAMPOLINE;
     int rc = ft_linux_probes_load(&cfg, &probes);
-    if (wanted == FT_PROBES_AUTO && (rc || !ft_linux_network_attached(&probes))) {
+    if (refused) {
+        ft_diagnosis_add(out, FT_CHECK_WARN, false, "BPF trampolines",
+                         "%s %s: cannot attach: %s; kernel functions are traced with kprobes "
+                         "instead",
+                         tried->kind, tried->target, error_text(refused));
+    } else if (wanted == FT_PROBES_AUTO && (rc || !ft_linux_network_attached(&probes))) {
         char why[240] = "";
         const char *problem =
             rc ? strerror(-rc) : group_problem(&probes, FT_PG_NET, why, sizeof(why));
