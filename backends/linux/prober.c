@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <elf.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -18,6 +19,7 @@
 
 #define MAX_KINDS 4
 #define MAX_SKIPPED 256
+#define MAX_WARNED 64
 #define MAX_SYMBOL_BYTES (2u << 20) /* libphp's take a tenth of it, the C libraries' less */
 #define PENDING_MAX 4096
 #define PID_LIMIT_MAX (4u << 20) /* the kernel's PID_MAX_LIMIT on 64-bit */
@@ -54,6 +56,8 @@ struct kind {
     bool full_logged;
     struct identity skipped[MAX_SKIPPED]; /* not of the kind, or refused the probe */
     size_t skipped_count;
+    struct identity warned[MAX_WARNED]; /* attaching to it failed, which was logged */
+    size_t warned_count;
 };
 
 /* A process that started, to be looked at once its program has had a moment to load. */
@@ -200,8 +204,26 @@ static void skip(struct kind *k, const struct identity *id)
     k->skipped[slot] = *id;
 }
 
+/* Whether a failure to attach to the file is the first one to log. */
+static bool first_warning(struct kind *k, const struct identity *id)
+{
+    for (size_t i = 0; i < k->warned_count; i++) {
+        if (same(&k->warned[i], id))
+            return false;
+    }
+    size_t slot = k->warned_count < MAX_WARNED ? k->warned_count++ : (size_t)(id->ino % MAX_WARNED);
+    k->warned[slot] = *id;
+    return true;
+}
+
+/* A shortage of descriptors or memory passes; the file is tried again at its next look. */
+static bool transient(int error)
+{
+    return error == EMFILE || error == ENFILE || error == ENOMEM || error == EAGAIN;
+}
+
 static struct bpf_link *attach(const struct ft_linux_uprobe *probe, const char *path,
-                               uint64_t cookie)
+                               uint64_t cookie, int *error)
 {
     /* libbpf refuses options whose padding is not zero, which an initializer leaves open. */
     struct bpf_uprobe_opts opts;
@@ -211,7 +233,8 @@ static struct bpf_link *attach(const struct ft_linux_uprobe *probe, const char *
     opts.retprobe = probe->retprobe;
     opts.bpf_cookie = cookie;
     struct bpf_link *link = bpf_program__attach_uprobe_opts(probe->prog, -1, path, 0, &opts);
-    return libbpf_get_error(link) ? nullptr : link;
+    *error = -(int)libbpf_get_error(link);
+    return *error ? nullptr : link;
 }
 
 static void detach(struct probed *f)
@@ -275,17 +298,17 @@ static void consider(struct kind *k, const char *path, const char *name, uint32_
     char held[32];
     snprintf(held, sizeof(held), "/proc/self/fd/%d", fd);
     struct probed fresh = {.id = id, .found_ns = now};
-    bool attached = true;
-    for (size_t i = 0; i < FT_LINUX_KIND_PROBES && k->def.probes[i].prog && attached; i++) {
-        fresh.links[i] = attach(&k->def.probes[i], held, cookie);
-        attached = fresh.links[i] != nullptr;
-    }
+    int error = 0;
+    for (size_t i = 0; i < FT_LINUX_KIND_PROBES && k->def.probes[i].prog && !error; i++)
+        fresh.links[i] = attach(&k->def.probes[i], held, cookie, &error);
     close(fd);
-    if (!attached) {
-        ft_log(FT_LOG_WARN, "cannot probe %s %s: %s", k->def.one, name,
-               ft_linux_last_libbpf_message());
+    if (error) {
+        if (first_warning(k, &id))
+            ft_log(FT_LOG_WARN, "cannot probe %s %s: %s", k->def.one, name,
+                   ft_linux_last_libbpf_message());
         detach(&fresh);
-        skip(k, &id);
+        if (!transient(error))
+            skip(k, &id);
         return;
     }
     if (full) {
