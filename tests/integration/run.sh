@@ -1054,9 +1054,9 @@ expect "parent alone sent nothing" "$(ft processes --pid "$parent" --format csv 
 csv=$(ft processes --pid "$parent" --include-children --format csv)
 expect_match "parent with children" "$(printf '%s\n' "$csv" | column bytes_sent)" '^700000$'
 
-expect_match "table header" "$(ft files --limit 1 | head -1)" \
+expect_match "table header" "$(ft files --path "$data/child.bin" | head -1)" \
     '^FILE +PROCESS +DESTINATION +BYTES +METHOD +CONFIDENCE$'
-expect_match "json array" "$(ft files --limit 1 --format json | tr -d '\n')" \
+expect_match "json array" "$(ft files --path "$data/child.bin" --format json | tr -d '\n')" \
     '^\[ *\{"event":"file_transfer","transfer_id":"tr_[0-9a-f]+".*"confidence":"(exact|inferred)".*\}\]$'
 expect "jsonl lines" "$(ft files --path "$data/reuse-*" --format jsonl | wc -l | tr -d ' ')" 25
 expect "quiet prints paths" "$(ft files --path "$data/report.csv" --format quiet)" \
