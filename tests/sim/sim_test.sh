@@ -1,8 +1,8 @@
 #!/bin/sh
 # usage: sim_test.sh <ft_sim_agent> <filetrace>
 # Runs the simulated agent and checks what the commands see: transfers of both methods and both
-# confidences, workers under their master, the output of top without its screen, and a stop that
-# exits 0 and removes the socket.
+# confidences, workers under their master, the output of top and of watch without their screens,
+# and a stop that exits 0 and removes the socket.
 set -eu
 
 # absolute <path>: the path from the root, for the commands run in the temporary directory.
@@ -75,6 +75,21 @@ stream_two_lines()
 {
     ("$cli" --socket sim.sock top --json --delay 500ms 2>/dev/null; echo $? >stream.status) |
         head -n 2 >stream.ndjson
+}
+
+# watch_frame <file>: the first frame of watch, which is stopped once the frame is whole.
+watch_frame()
+{
+    "$cli" --socket sim.sock watch --no-ui --limit 100 >"$1" 2>/dev/null &
+    watcher=$!
+    waited=0
+    while ! grep -q 'LOST: ' "$1" && [ "$waited" -lt 50 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    grep -q 'LOST: ' "$1"
 }
 
 # A history of the stream makes the transfers and the processes known as soon as it serves.
@@ -161,6 +176,11 @@ head -n 1 stream.ndjson >stream-first.json
 ok "a line of the stream is a document" json_valid stream-first.json
 ok "top refuses a filter that does not parse" exits 2 "$cli" --socket sim.sock top --once --filter rate:abc
 ok "top refuses a sort its mode lacks" exits 2 "$cli" --socket sim.sock top --mode files --sort age --once
+
+ok "watch prints a frame" watch_frame watch.txt
+ok "watch shows a name in place of an address" grep -Eq '^rclone [0-9]+ +/srv/backups/pg/[^ ]+ +pg-backups\.s3\.example\.com +read-write ' watch.txt
+ok "watch leaves the address of a named end out" exits 1 grep -q '52\.219\.170\.52' watch.txt
+ok "watch shows the address of an end nobody named" grep -Eq '^java [0-9]+ +/var/lib/kafka/[^ ]+ +10\.0\.5\.2[23] +sendfile ' watch.txt
 
 kill -TERM "$pid"
 status=0

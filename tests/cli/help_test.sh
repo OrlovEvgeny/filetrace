@@ -50,6 +50,7 @@ has "top names --mode" "$work/top" "--mode <mode>"
 has "top names --leaders" "$work/top" "--leaders"
 has "watch says where --confidence applies" "$work/watch" \
     "--confidence to the files view; --min-bytes to the files and processes"
+has "watch lists the key for names and addresses" "$work/watch" "a names or addresses"
 has "agent run lists --event-log-size" "$work/agent" "--event-log-size <size>"
 has "doctor lists --format" "$work/doctor" "[--format table|json]"
 has "stats says --interval implies --watch" "$work/stats" \
