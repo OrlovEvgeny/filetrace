@@ -684,6 +684,16 @@ static bool apply_limits(struct ft_config *cfg, const char *key, struct value *v
     uint64_t max = 4 * 1024 * 1024;
     uint64_t n;
 
+    if (strcmp(key, "file_rankings") == 0) {
+        constexpr uint64_t MAX_RANKED = 1024 * 1024;
+        bool off = v->type == VALUE_INTEGER && v->integer == 0;
+        if (!off && !want_count(v, 64, MAX_RANKED, &n, why, size)) {
+            snprintf(why, size, "expected 0 or a whole number from 64 to %" PRIu64, MAX_RANKED);
+            return false;
+        }
+        state->leader_entries = off ? 0 : (size_t)n;
+        return true;
+    }
     if (strcmp(key, "names") == 0) {
         table = &state->max_names;
         min = 1;
@@ -1185,6 +1195,7 @@ void ft_config_print(const struct ft_config *cfg, FILE *o)
     fprintf(o, "names = %zu\n", state->max_names);
     fprintf(o, "name_lookups = %zu\n", state->max_name_lookups);
     fprintf(o, "name_libraries = %u\n", backend->name_libraries);
+    fprintf(o, "file_rankings = %zu\n", state->leader_entries);
 
     fputs("\n[output]\n", o);
     print_string(o, "format", cfg->format);

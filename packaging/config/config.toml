@@ -80,6 +80,9 @@
 # name_lookups = 16384
 # Library files probed for names; each container image can bring its own.
 # name_libraries = 256
+# The rankings of the most sent files and destinations that top shows; the least
+# sent go first. 0 turns the rankings off.
+# file_rankings = 512
 
 [output]
 # Default format of the listing commands.

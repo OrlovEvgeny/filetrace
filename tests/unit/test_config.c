@@ -79,6 +79,7 @@ static const char every_section[] = "[agent]\n"
                                     "\n"
                                     "[limits]\n"
                                     "metric_series = 512\n"
+                                    "file_rankings = 0\n"
                                     "\n"
                                     "[prometheus]\n"
                                     "enabled = true\n"
@@ -118,6 +119,7 @@ static void reads_every_section(void)
     CHECK_STR(cfg->agent.state_cfg.exclude_paths[1], "/sys/*");
     CHECK_STR(cfg->format, "table");
     CHECK_U64(cfg->agent.state_cfg.max_metric_series, 512);
+    CHECK_U64(cfg->agent.state_cfg.leader_entries, 0);
     CHECK(cfg->agent.prometheus.enabled);
     CHECK_STR(cfg->agent.prometheus.listen, "127.0.0.1:9900");
     CHECK(cfg->agent.otlp.enabled);
@@ -171,6 +173,7 @@ static void applies_every_kind_of_value(void)
                     "[limits]\n"
                     "transfers = 1_000\n"
                     "kernel_counters = 2048\n"
+                    "file_rankings = 4096\n"
                     "[output]\n"
                     "format = \"jsonl\"\n"
                     "timestamps = false\n"
@@ -199,6 +202,7 @@ static void applies_every_kind_of_value(void)
     CHECK_U64(cfg->agent.state_cfg.inferred_min_permille, 200);
     CHECK_U64(cfg->agent.state_cfg.max_transfers, 1000);
     CHECK_U64(cfg->agent.backend_cfg.agg_entries, 2048);
+    CHECK_U64(cfg->agent.state_cfg.leader_entries, 4096);
     CHECK_STR(cfg->format, "jsonl");
     CHECK(!cfg->timestamps);
     CHECK_U64(cfg->exclude_path_count, 2);
@@ -254,6 +258,9 @@ static void reports_what_is_wrong(void)
             "[names] max_age: expected a quoted duration from 1s to 3650d, such as \"10m\", or "
             "\"0\" for no limit");
     rejects("[names]\nresolve = true\n", "unknown setting 'resolve' in [names]");
+    rejects("[limits]\nfile_rankings = 32\n",
+            "[limits] file_rankings: expected 0 or a whole number from 64 to 1048576");
+    rejects("[limits]\nfile_rankings = false\n", "[limits] file_rankings: expected 0 or");
     rejects("[filters]\nexclude_paths = \"/proc/*\"\n", "expected a list of strings");
     rejects("[correlation]\nno_minimum_paths = \"/etc/*\"\n", "expected a list of strings");
     rejects("[correlation]\nbackground_paths = [\"\"]\n", "a pattern is empty");
@@ -318,6 +325,7 @@ static void prints_what_it_reads(void)
     CHECK(second->agent.otlp.command_line);
     CHECK(!second->agent.state_cfg.command_line_arguments);
     CHECK_STR(second->agent.api.listen, "127.0.0.1:9500");
+    CHECK_U64(second->agent.state_cfg.leader_entries, 0);
 
     /* Printing the defaults reads back without a warning. */
     free(text);
@@ -330,6 +338,7 @@ static void prints_what_it_reads(void)
     CHECK_U64(load(reread, text, &err), FT_EXIT_OK);
     CHECK_U64(reread->warning_count, 0);
     CHECK_U64(reread->agent.state_cfg.max_flows, defaults->agent.state_cfg.max_flows);
+    CHECK_U64(reread->agent.state_cfg.leader_entries, 512);
     CHECK_U64(reread->agent.backend_cfg.corr_window_ns, defaults->agent.backend_cfg.corr_window_ns);
     CHECK_U64(reread->background_path_count, defaults->background_path_count);
     CHECK_STR(reread->background_paths[0], defaults->background_paths[0]);

@@ -1578,6 +1578,20 @@ expect "config: sendfile still attributed" \
 stop_agent
 expect "config: second agent exit code" "$?" 0
 
+# With the rankings off the agent still collects, and the commands say that the rankings are off.
+printf '[limits]\nfile_rankings = 0\n' >"$work/no-rankings.toml"
+start_agent --config "$work/no-rankings.toml" ||
+    { echo "FAIL: the agent did not start without rankings"; exit 1; }
+"$workload" sendfile "$data/unranked.bin" 300000 >/dev/null
+settle
+expect "no rankings: transfer" "$(ft files --path "$data/unranked.bin" --format csv | rows)" 1
+expect_match "no rankings: stats" "$(ft stats)" '^File rankings: +off$'
+out=$(ft top --leaders --once 2>&1)
+expect "no rankings: top --leaders --once exit code" "$?" 5
+expect_match "no rankings: top --leaders --once" "$out" 'the agent keeps no rankings'
+stop_agent
+expect "no rankings: agent exit code" "$?" 0
+
 # Without an agent, watch collects for as long as it runs.
 out=$(timeout -s INT 3 "$bin/filetrace" --socket "$work/absent.sock" watch --no-ui \
     --interval 500ms 2>"$work/watch.err")
