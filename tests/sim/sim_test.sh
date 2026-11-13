@@ -104,6 +104,14 @@ ok "names are kept" grep -Eq '^Names: +[1-9][0-9]* of 4,096' stats.txt
 ok "lookups are kept" grep -Eq '^Name lookups: +[1-9][0-9]* of 16,384' stats.txt
 ok "libraries are probed" grep -Eq '^Name libraries: +9 of 256' stats.txt
 
+ok "connections are listed" query connections.txt connections --limit 4000
+ok "connections have a column of names" grep -Eq '^PID +PROCESS +PROTOCOL +LOCAL +REMOTE +NAME +STATE' connections.txt
+ok "a looked-up name is shown" grep -Eq ' 10\.0\.7\.3[12]:873 +mirror-[12]\.internal ' connections.txt
+ok "several looked-up names are counted" grep -q ' ch-replica-2\.internal (+1) ' connections.txt
+ok "a server name through a proxy says so" grep -q ' registry\.ml\.example\.com via proxy\.corp\.internal ' connections.txt
+ok "an accepted connection has no name" grep -Eq ' nginx +TCP +[^ ]+:443 +[^ ]+ +- ' connections.txt
+
+
 ok "top prints a snapshot" query top.txt top --once
 ok "the snapshot has its header" grep -q 'DESTINATION' top.txt
 ok "the snapshot has rows" grep -q 'nginx' top.txt
