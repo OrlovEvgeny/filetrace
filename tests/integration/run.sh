@@ -1818,6 +1818,75 @@ else
     echo "SKIP: no gnutls-cli, gnutls-serv or certtool here; the TLS server name check did not run"
 fi
 
+# An OpenSSL client binds its server name the same way. The workload is the client: it loads
+# libssl with dlopen and takes SSL_ctrl, SSL_connect and the rest, so no test binary links it and
+# the static musl build only has to tolerate dlopen. openssl s_server is the peer. The guest has
+# no openssl config, so the certificate comes from certtool and OPENSSL_CONF is emptied. Skipped
+# where openssl, certtool or the workload's dlopen is absent.
+if command -v openssl >/dev/null 2>&1 && command -v certtool >/dev/null 2>&1 && [ -n "$dynamic" ] &&
+    ! "$dynamic" tlsconnect 0 127.0.0.1 1 - - 2>&1 | grep -q loaded=unsupported; then
+    grep -q 'files\.ft\.test' /etc/hosts || echo "127.0.0.1 files.ft.test" >>/etc/hosts
+    grep -q '^hosts:' /etc/nsswitch.conf 2>/dev/null || printf 'hosts: files dns\n' >>/etc/nsswitch.conf
+    certtool --generate-privkey --outfile "$work/ssl-key.pem" >/dev/null 2>&1
+    cat >"$work/ssl.tmpl" <<'TMPL'
+cn = "files.ft.test"
+tls_www_server
+expiration_days = 1
+TMPL
+    certtool --generate-self-signed --load-privkey "$work/ssl-key.pem" \
+        --template "$work/ssl.tmpl" --outfile "$work/ssl-cert.pem" >/dev/null 2>&1
+    ssl_port=44401
+    OPENSSL_CONF=/dev/null openssl s_server -quiet -naccept 400 -port "$ssl_port" \
+        -key "$work/ssl-key.pem" -cert "$work/ssl-cert.pem" >/dev/null 2>&1 &
+    sserv_pid=$!
+    # The server holds libssl mapped before the agent starts, so it is probed at the first look.
+    start_agent_logged || { echo "FAIL: the agent did not start for OpenSSL server names"; exit 1; }
+    ssl_source_of() {
+        ft connections --port "$ssl_port" --format csv 2>/dev/null | awk -F, -v want="$1" '
+            NR == 1 { for (i = 1; i <= NF; i++) { if ($i == "remote_name") n = i;
+                if ($i == "remote_name_source") c = i }; next }
+            n && c && $n == want { print $c; exit }'
+    }
+    ssl_resolved_of() {
+        ft connections --port "$ssl_port" --format csv 2>/dev/null | awk -F, -v want="$1" '
+            NR == 1 { for (i = 1; i <= NF; i++) { if ($i == "remote_name") n = i;
+                if ($i == "resolved_name_count") r = i }; next }
+            n && r && $n == want { print $r; exit }'
+    }
+    # The client reads no openssl config either; an empty one keeps libssl off the missing file.
+    ssl_client() { OPENSSL_CONF=/dev/null "$dynamic" tlsconnect "$@" >/dev/null 2>&1; }
+    # A host name: the lookup names the connection and the OpenSSL handshake adds the server name.
+    i=0
+    while [ $i -lt 40 ]; do
+        ssl_client 0 files.ft.test "$ssl_port" files.ft.test -
+        settle
+        [ "$(ssl_source_of files.ft.test)" = lookup+tls ] && break
+        i=$((i + 1))
+    done
+    [ "$(ssl_source_of files.ft.test)" = lookup+tls ] || tls_dump libssl "$sserv_pid" "$ssl_port"
+    expect "names: an OpenSSL host name is looked up and read from the handshake" \
+        "$(ssl_source_of files.ft.test)" lookup+tls
+    # A literal address with a server name: the handshake names it, and no lookup does.
+    i=0
+    while [ $i -lt 40 ]; do
+        ssl_client 0 127.0.0.1 "$ssl_port" sharp.ft.test -
+        settle
+        [ "$(ssl_source_of sharp.ft.test)" = tls ] && break
+        i=$((i + 1))
+    done
+    [ "$(ssl_source_of sharp.ft.test)" = tls ] || tls_dump libssl "$sserv_pid" "$ssl_port"
+    expect "names: an OpenSSL server name to a literal address is read from the handshake" \
+        "$(ssl_source_of sharp.ft.test)" tls
+    expect "names: an OpenSSL server name to a literal address resolves no name" \
+        "$(ssl_resolved_of sharp.ft.test)" ""
+    stop_agent
+    expect "OpenSSL server names agent exit code" "$?" 0
+    kill "$sserv_pid" 2>/dev/null
+    wait "$sserv_pid" 2>/dev/null
+else
+    echo "SKIP: no openssl, certtool or workload dlopen; the OpenSSL server name check did not run"
+fi
+
 start_agent --mode minimal || { echo "FAIL: the agent did not start in minimal mode"; exit 1; }
 
 report=$("$workload" sendfile "$data/minimal.bin" 900000)
