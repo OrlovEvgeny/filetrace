@@ -134,12 +134,15 @@ struct xfer {
     uint64_t size;
     uint64_t ino; /* the id when 0 */
     const char *script;
+    const char *tls;
+    const char *resolved[FT_RESOLVED_NAMES];
 };
 
 static void transfer(struct fixture *f, struct xfer x)
 {
     struct ft_row_transfer *row = calloc(1, sizeof(*row));
     struct ft_process_strings text = {"", "/srv", x.script ? x.script : ""};
+    struct ft_remote_names names = {.tls = x.tls ? x.tls : ""};
 
     row->id = x.id;
     row->pid = x.pid;
@@ -157,7 +160,11 @@ static void transfer(struct fixture *f, struct xfer x)
     ft_strlcpy(row->comm, "worker", sizeof(row->comm));
     ft_strlcpy(row->path, x.path ? x.path : "/srv/data/file.bin", FT_PATH_MAX);
     size_t lead = strlen(row->path) + 1;
-    ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    lead += ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    for (; names.listed < FT_RESOLVED_NAMES && x.resolved[names.listed]; names.listed++)
+        names.resolved[names.listed] = x.resolved[names.listed];
+    names.count = names.listed;
+    ft_remote_names_pack(&names, &row->names, row->path + lead, sizeof(row->path) - lead);
     CHECK(ft_rows_append(&f->transfers, row, ft_row_transfer_size(row)));
     free(row);
 }
@@ -357,6 +364,54 @@ static void selection(void)
     CHECK_U64(ft_top_row_count(f.m, FT_TOP_TRANSFERS), 1);
     CHECK_U64(ft_top_selected(f.m, FT_TOP_TRANSFERS), 0);
     CHECK_U64(id_at(&f, 0), 2);
+    fixture_free(&f);
+}
+
+static const struct ft_top_transfer *transfer_by_id(struct fixture *f, uint64_t id)
+{
+    static const struct ft_top_transfer none;
+    const struct ft_top_transfer *found = nullptr;
+
+    for (size_t i = 0; i < ft_top_row_count(f->m, FT_TOP_TRANSFERS) && !found; i++) {
+        const struct ft_top_row *r = row_at(f, FT_TOP_TRANSFERS, i);
+        if (r->kind == FT_TOP_ROW_TRANSFER && r->transfer->id == id)
+            found = r->transfer;
+    }
+    CHECK(found != nullptr);
+    return found ? found : &none;
+}
+
+static void remote_names(void)
+{
+    struct fixture f;
+    fixture_init(&f);
+
+    transfer(&f, (struct xfer){.id = 1,
+                               .pid = 7,
+                               .rate = 2000,
+                               .tls = "s3.example.com",
+                               .resolved = {"proxy.corp.example"}});
+    transfer(&f, (struct xfer){.id = 2, .pid = 7, .rate = 1000});
+    sample(&f, 0);
+    CHECK(transfer_by_id(&f, 2)->names == nullptr);
+
+    /* A finished transfer that stays selected keeps its names while the pools are reused. */
+    for (int s = 0; s <= 2; s++) {
+        const struct ft_remote_names *n = transfer_by_id(&f, 1)->names;
+        CHECK(n != nullptr);
+        if (n) {
+            CHECK_STR(n->tls, "s3.example.com");
+            CHECK_U64(n->listed, 1);
+            CHECK_STR(n->resolved[0], "proxy.corp.example");
+            CHECK_U64(n->count, 1);
+        }
+        transfer(&f, (struct xfer){.id = 2,
+                                   .pid = 7,
+                                   .rate = 1000,
+                                   .path = "/srv/data/a/path/long/enough/to/reuse/the/pool/"});
+        sample(&f, 0.5 * (s + 1));
+    }
+    CHECK(transfer_by_id(&f, 1)->done);
     fixture_free(&f);
 }
 
@@ -865,6 +920,7 @@ void test_top_model(void)
     order();
     meters();
     selection();
+    remote_names();
     tags();
     aggregates();
     tree();

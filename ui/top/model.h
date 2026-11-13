@@ -148,7 +148,8 @@ struct ft_top_transfer {
     bool path_known;
     bool deleted;
     struct ft_endpoint remote;
-    char remote_text[56]; /* "10.0.5.22:45910", "[2001:db8::1]:443" */
+    char remote_text[56];                /* "10.0.5.22:45910", "[2001:db8::1]:443" */
+    const struct ft_remote_names *names; /* of the remote end; nullptr when it has none */
     bool is_public;
     uint64_t rate; /* bytes per second, smoothed; 0 once done */
     uint64_t bytes;
