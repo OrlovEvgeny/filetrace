@@ -320,7 +320,11 @@ static void help_flows(FILE *o)
           "\n",
           o);
     fputs(remote_names, o);
-    fputs("Options:\n"
+    fputs("With --group-by remote, NAME shows the names of the flows to each address,\n"
+          "the one that carried the most bytes first. --group-by name merges flows by\n"
+          "what NAME shows for each, so an uncertain name is a group of its own.\n"
+          "\n"
+          "Options:\n"
           "  --group-by <key>        Merge flows by process, remote, name, port or\n"
           "                          protocol\n"
           "  --direction <dir>       Order by inbound, outbound (default) or both\n"
@@ -346,6 +350,7 @@ static void help_inspect(FILE *o)
           "  filetrace inspect socket <id>\n"
           "  filetrace inspect flow <id>\n"
           "  filetrace inspect ip <address|cidr>\n"
+          "  filetrace inspect name <name|pattern>\n"
           "\n"
           "Everything known about one thing, from whichever side it is approached:\n"
           "\n"
@@ -355,10 +360,14 @@ static void help_inspect(FILE *o)
           "  flow     One process's traffic with one remote endpoint on a socket\n"
           "  ip       Which processes talk to this address or network, and which\n"
           "           files were sent to it\n"
+          "  name     Which processes talk to the remote ends known by this name, at\n"
+          "           which addresses, and which files were sent to them\n"
           "\n"
           "Socket and flow IDs are the SOCKET and FLOW columns of 'connections' and\n"
           "'flows'. A file is named by its path, with '*' wildcards if they match a\n"
-          "single file.\n"
+          "single file. A name may have '*' wildcards too; it matches a connection\n"
+          "by the name it was opened for, or by any other its process looked up for\n"
+          "the address.\n"
           "\n"
           "Options:\n"
           "  --since <when>          Only what was active at or after this time (10m,\n"
@@ -377,6 +386,7 @@ static void help_inspect(FILE *o)
           "  filetrace inspect file /data/backup.tar.gz\n"
           "  filetrace inspect process 1245\n"
           "  filetrace inspect ip 203.0.113.0/24 --since 1h\n"
+          "  filetrace inspect name '*.example.com'\n"
           "  filetrace inspect socket 928374 --json\n",
           o);
     fputs(confidence_levels, o);
@@ -601,7 +611,8 @@ static const struct command commands[] = {
     {"processes", "Process activity", ft_cmd_processes, help_processes},
     {"connections", "Network connections", ft_cmd_connections, help_connections},
     {"flows", "Network flow details", ft_cmd_flows, help_flows},
-    {"inspect", "Inspect a file, process, socket, flow or address", ft_cmd_inspect, help_inspect},
+    {"inspect", "Inspect a file, process, socket, flow, address or name", ft_cmd_inspect,
+     help_inspect},
     {"events", "Raw events", ft_cmd_events, help_events},
     {"stats", "Agent statistics", ft_cmd_stats, help_stats},
     {"doctor", "System diagnostics", ft_cmd_doctor, help_doctor},
