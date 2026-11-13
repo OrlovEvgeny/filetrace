@@ -4531,6 +4531,70 @@ static void scenario_wait_send(const char *go, const char *name, const char *pat
     send_to(&addr, path);
 }
 
+static long long elapsed_ns(const struct timespec *from)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (long long)(now.tv_sec - from->tv_sec) * 1000000000LL + (now.tv_nsec - from->tv_nsec);
+}
+
+/*
+ * mmaploop <count> <anon|read|exec> [<file>]: maps a page and unmaps it that many times, anonymous
+ * memory or the file readable or executable, and prints how long each took.
+ */
+static void scenario_mmap_loop(size_t count, const char *how, const char *path)
+{
+    int prot = PROT_READ;
+    int flags = MAP_PRIVATE;
+    int fd = -1;
+    if (strcmp(how, "anon") == 0) {
+        flags |= MAP_ANONYMOUS;
+    } else {
+        fd = open_file(path);
+        if (strcmp(how, "exec") == 0)
+            prot |= PROT_EXEC;
+    }
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (size_t i = 0; i < count; i++) {
+        void *m = mmap(nullptr, 4096, prot, flags, fd, 0);
+        if (m == MAP_FAILED)
+            die("mmap");
+        munmap(m, 4096);
+    }
+    long long ns = elapsed_ns(&start);
+    printf("scenario=mmaploop how=%s count=%zu ns_each=%lld\n", how, count,
+           count ? ns / (long long)count : 0);
+    if (fd >= 0)
+        close(fd);
+}
+
+/*
+ * mmapnew <dir> <count>: makes that many small files in dir and maps each executable once, the
+ * first mapping of each, and prints how long a mapping took.
+ */
+static void scenario_mmap_new(const char *dir, size_t count)
+{
+    char path[PATH_MAX];
+    for (size_t i = 0; i < count; i++) {
+        snprintf(path, sizeof(path), "%s/new%zu", dir, i);
+        make_file(path, 4096);
+    }
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (size_t i = 0; i < count; i++) {
+        snprintf(path, sizeof(path), "%s/new%zu", dir, i);
+        int fd = open_file(path);
+        void *m = mmap(nullptr, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0);
+        if (m == MAP_FAILED)
+            die("mmap");
+        munmap(m, 4096);
+        close(fd);
+    }
+    long long ns = elapsed_ns(&start);
+    printf("scenario=mmapnew count=%zu ns_each=%lld\n", count, count ? ns / (long long)count : 0);
+}
+
 static void pause_ms(size_t ms)
 {
     struct timespec pause = {.tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000};
@@ -4926,6 +4990,10 @@ int main(int argc, char **argv)
     else if (strcmp(name, "tlsconnect") == 0 && (argc == 7 || argc == 8))
         scenario_tls_connect(arg_size(argv[2]), argv[3], argv[4], argv[5], argv[6],
                              argc == 8 ? argv[7] : "libssl.so.3");
+    else if (strcmp(name, "mmaploop") == 0 && (argc == 4 || argc == 5))
+        scenario_mmap_loop(arg_size(argv[2]), argv[3], argc == 5 ? argv[4] : nullptr);
+    else if (strcmp(name, "mmapnew") == 0 && argc == 4)
+        scenario_mmap_new(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "sleepsend") == 0 && argc == 5)
         scenario_sleep_send(arg_size(argv[2]), argv[3], argv[4]);
     else if (strcmp(name, "lookupsend") == 0 && (argc == 5 || argc == 6))
