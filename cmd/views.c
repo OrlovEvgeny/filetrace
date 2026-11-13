@@ -130,6 +130,36 @@ static void set_host(struct value *v, const struct ft_endpoint *ep)
     v->absent = host == nullptr;
 }
 
+/* Which of the names of a row's remote end a field shows. */
+enum name_part : uint8_t {
+    NAME_USED,   /* the one the connection was opened for */
+    NAME_SOURCE, /* how the process came to use it */
+    NAME_RESOLVED,
+    NAME_RESOLVED_COUNT,
+};
+
+static void set_name(struct value *v, const struct ft_remote_names *n, enum name_part part)
+{
+    switch (part) {
+    case NAME_USED:
+        set_str(v, ft_remote_name(n));
+        break;
+    case NAME_SOURCE:
+        set_str(v, ft_name_source_name(ft_remote_name_source(n)));
+        break;
+    case NAME_RESOLVED:
+        v->type = V_LIST;
+        for (uint32_t i = 0; i < n->listed; i++)
+            v->list[v->nlist++] = n->resolved[i];
+        v->absent = n->listed == 0;
+        break;
+    case NAME_RESOLVED_COUNT:
+        set_uint(v, n->count);
+        v->absent = n->count == 0;
+        break;
+    }
+}
+
 static void set_remote(struct value *v, const struct ft_endpoint *ep, bool with_port)
 {
     const char *host = host_of(ep);
@@ -397,6 +427,34 @@ static void c_rhost(const void *row, struct value *v)
     set_host(v, &r->remote);
 }
 
+static void c_rname(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_connection_names(row, &names);
+    set_name(v, &names, NAME_USED);
+}
+
+static void c_rname_source(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_connection_names(row, &names);
+    set_name(v, &names, NAME_SOURCE);
+}
+
+static void c_resolved(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_connection_names(row, &names);
+    set_name(v, &names, NAME_RESOLVED);
+}
+
+static void c_resolved_count(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_connection_names(row, &names);
+    set_name(v, &names, NAME_RESOLVED_COUNT);
+}
+
 static void c_laddr(const void *row, struct value *v)
 {
     ROW(ft_row_connection);
@@ -481,6 +539,10 @@ static const struct field connection_fields[] = {
     {"remote_ip", 0, c_raddr},
     {"remote_port", 0, c_rport},
     {"remote_host", 0, c_rhost},
+    {"remote_name", 0, c_rname},
+    {"remote_name_source", 0, c_rname_source},
+    {"resolved_names", 0, c_resolved},
+    {"resolved_name_count", 0, c_resolved_count},
     {"state", F_UPPER, c_state},
     {"bytes_sent", 0, c_tx},
     {"bytes_received", 0, c_rx},
@@ -564,6 +626,34 @@ static void f_rhost(const void *row, struct value *v)
     set_host(v, &r->remote);
 }
 
+static void f_rname(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_flow_names(row, &names);
+    set_name(v, &names, NAME_USED);
+}
+
+static void f_rname_source(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_flow_names(row, &names);
+    set_name(v, &names, NAME_SOURCE);
+}
+
+static void f_resolved(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_flow_names(row, &names);
+    set_name(v, &names, NAME_RESOLVED);
+}
+
+static void f_resolved_count(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_flow_names(row, &names);
+    set_name(v, &names, NAME_RESOLVED_COUNT);
+}
+
 static void f_laddr(const void *row, struct value *v)
 {
     ROW(ft_row_flow);
@@ -625,6 +715,10 @@ static const struct field flow_fields[] = {
     {"remote_ip", 0, f_raddr},
     {"remote_port", 0, f_rport},
     {"remote_host", 0, f_rhost},
+    {"remote_name", 0, f_rname},
+    {"remote_name_source", 0, f_rname_source},
+    {"resolved_names", 0, f_resolved},
+    {"resolved_name_count", 0, f_resolved_count},
     {"bytes_sent", 0, f_tx},
     {"bytes_received", 0, f_rx},
     {"bytes_sent_per_second", 0, f_tx_rate},
@@ -841,6 +935,34 @@ static void t_rhost(const void *row, struct value *v)
     set_host(v, &r->remote);
 }
 
+static void t_rname(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_transfer_names(row, &names);
+    set_name(v, &names, NAME_USED);
+}
+
+static void t_rname_source(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_transfer_names(row, &names);
+    set_name(v, &names, NAME_SOURCE);
+}
+
+static void t_resolved(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_transfer_names(row, &names);
+    set_name(v, &names, NAME_RESOLVED);
+}
+
+static void t_resolved_count(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_transfer_names(row, &names);
+    set_name(v, &names, NAME_RESOLVED_COUNT);
+}
+
 static void t_destination(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
@@ -965,6 +1087,10 @@ static const struct field transfer_fields[] = {
     {"network.remote_ip", 0, t_raddr},
     {"network.remote_port", 0, t_rport},
     {"network.remote_host", 0, t_rhost},
+    {"network.remote_name", 0, t_rname},
+    {"network.remote_name_source", 0, t_rname_source},
+    {"network.resolved_names", 0, t_resolved},
+    {"network.resolved_name_count", 0, t_resolved_count},
     {"transfer.method", 0, t_method},
     {"transfer.bytes_sent", 0, t_bytes},
     {"transfer.bytes_read", 0, t_read_bytes},
