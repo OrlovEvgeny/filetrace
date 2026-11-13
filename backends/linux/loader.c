@@ -366,7 +366,7 @@ static int load_lookups(const struct ft_probe_set *set, const struct ft_backend_
 }
 
 static int load_set(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
-                    struct ft_linux_probes *out)
+                    const struct btf *vmlinux, struct ft_linux_probes *out)
 {
     bool enabled[FT_LINUX_MAX_PROBES] = {false};
     size_t wanted = 0;
@@ -376,7 +376,6 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     last_message[0] = '\0';
     failed_program[0] = '\0';
 
-    struct btf *vmlinux = btf__load_vmlinux_btf();
     for (size_t i = 0; i < set->count; i++) {
         const struct ft_probe_def *def = &set->defs[i];
 
@@ -402,7 +401,6 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
         }
         wanted++;
     }
-    btf__free(vmlinux);
 
     bool lookups = lookups_wanted(cfg);
     int err = wanted ? load_lookups(set, cfg, enabled, &lookups, out) : -ENOENT;
@@ -454,18 +452,67 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     return 0;
 }
 
-static int load_probes(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
+static const struct ft_probe_def *network_trampoline(void)
 {
-    if (cfg->probes == FT_PROBES_KPROBE)
-        return load_set(&kprobe_set, cfg, out);
+    for (size_t i = 0; i < FT_ARRAY_LEN(trampoline_defs); i++) {
+        if (trampoline_defs[i].group == FT_PG_NET)
+            return &trampoline_defs[i];
+    }
+    return nullptr;
+}
 
-    int err = load_set(&trampoline_set, cfg, out);
+static int trampoline_refusal(const struct btf *vmlinux)
+{
+    const struct ft_probe_def *def = network_trampoline();
+    int id = vmlinux && def ? btf__find_by_name_kind(vmlinux, def->target, BTF_KIND_FUNC) : -1;
+    if (id < 0)
+        return 0;
+    const struct bpf_insn empty[] = {
+        {.code = BPF_ALU64 | BPF_MOV | BPF_K, .dst_reg = BPF_REG_0},
+        {.code = BPF_JMP | BPF_EXIT},
+    };
+    struct bpf_prog_load_opts opts = {
+        .sz = sizeof(opts),
+        .expected_attach_type =
+            strcmp(def->kind, "fentry") == 0 ? BPF_TRACE_FENTRY : BPF_TRACE_FEXIT,
+        .attach_btf_id = (__u32)id,
+    };
+    int prog = bpf_prog_load(BPF_PROG_TYPE_TRACING, "ft_trampoline", "Dual BSD/GPL", empty,
+                             FT_ARRAY_LEN(empty), &opts);
+    if (prog < 0)
+        return 0;
+    int link = bpf_raw_tracepoint_open(nullptr, prog);
+    if (link >= 0)
+        close(link);
+    close(prog);
+    return link < 0 ? -link : 0;
+}
+
+int ft_linux_trampoline_refusal(const struct ft_probe_def **tried)
+{
+    libbpf_set_print(on_libbpf_print);
+    *tried = network_trampoline();
+    struct btf *vmlinux = btf__load_vmlinux_btf();
+    int refusal = trampoline_refusal(vmlinux);
+    btf__free(vmlinux);
+    return refusal;
+}
+
+static int load_probes(const struct ft_backend_config *cfg, const struct btf *vmlinux,
+                       struct ft_linux_probes *out)
+{
+    /* Where a trampoline cannot attach, verifying the whole object of them is wasted time. */
+    if (cfg->probes == FT_PROBES_KPROBE ||
+        (cfg->probes == FT_PROBES_AUTO && trampoline_refusal(vmlinux)))
+        return load_set(&kprobe_set, cfg, vmlinux, out);
+
+    int err = load_set(&trampoline_set, cfg, vmlinux, out);
     if (cfg->probes == FT_PROBES_TRAMPOLINE || ft_linux_network_attached(out))
         return err;
 
     /* The kernel loaded the programs but cannot attach them to functions. */
     struct ft_linux_probes fallback;
-    int fallback_err = load_set(&kprobe_set, cfg, &fallback);
+    int fallback_err = load_set(&kprobe_set, cfg, vmlinux, &fallback);
     if (fallback_err || !ft_linux_network_attached(&fallback)) {
         if (!fallback_err)
             ft_linux_probes_unload(&fallback);
@@ -480,7 +527,9 @@ static int load_probes(const struct ft_backend_config *cfg, struct ft_linux_prob
 int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out)
 {
     libbpf_set_print(on_libbpf_print);
-    int err = load_probes(cfg, out);
+    struct btf *vmlinux = btf__load_vmlinux_btf();
+    int err = load_probes(cfg, vmlinux, out);
+    btf__free(vmlinux);
     if (!err)
         ft_linux_returns_test(out, cfg);
     return err;
