@@ -29,6 +29,33 @@ Python, PHP, Node.js, Ruby, Perl, Lua or shell process, and for PHP-FPM and
 mod_php the script of the request that sent the file. Each process is also
 recorded with its command line and working directory.
 
+Next to an address Filetrace shows the name the process itself used for it:
+the name it looked up, the server name its TLS client asked for, or
+`target via proxy` where it reached the target through a proxy. No packet is
+parsed and nothing is looked up again: the name is read where the program
+asks for it, and `--remote` takes a name or a pattern of one wherever it takes
+an address. `top` and `watch` show the name in place of the address; the key
+`a`, or `--addresses` for a snapshot, shows the address.
+
+```text
+$ sudo filetrace connections --remote '*.example*'
+PID  PROCESS  PROTOCOL  LOCAL              REMOTE             NAME                                          STATE      SENT  RECEIVED  SOCKET
+203  curl     TCP       10.20.0.5:35184    198.51.100.31:80   mirror.example.net                            CLOSED  3.00 MB     173 B    4101
+202  curl     TCP       10.20.0.5:44656    192.0.2.44:443     api.payments.example                          CLOSED  1.75 KB   8.31 KB       3
+170  python3  TCP       203.0.113.8:55665  198.51.100.20:443  artifacts.example.org                         CLOSED  1.75 KB   8.31 KB    8193
+198  curl     TCP       10.20.0.5:39006    203.0.113.8:3128   artifacts.example.org via proxy.corp.example  CLOSED  1.88 KB   8.35 KB    4099
+195  curl     TCP       10.20.0.5:50568    198.51.100.20:443  registry.example.com                          CLOSED  1.75 KB   8.31 KB    4097
+194  wget     TCP       10.20.0.5:42069    198.51.100.31:80   mirror.example.net                            CLOSED    142 B     173 B       1
+```
+
+The third row is the proxy's own connection to the target of the fourth. A
+name needs a program that looks names up through the C library or speaks TLS
+through OpenSSL or GnuTLS: Go's own resolver and TLS, c-ares, Java, rustls,
+static binaries and TLS over a memory buffer, as in Node.js and Python's
+asyncio, get none or only the looked-up one. [Known
+limitations](https://filetrace.eorlov.org/reference/limitations#destination-names)
+has the list.
+
 The agent can also publish what it sees as Prometheus metrics, over OTLP to
 an OpenTelemetry collector, and through a gRPC API.
 
