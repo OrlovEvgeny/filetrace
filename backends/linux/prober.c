@@ -26,6 +26,7 @@
 /* Time a flush gives to reading /proc, so that a host with many processes does not hold it. */
 #define WORK_BUDGET_NS (20 * FT_NS_PER_MS)
 #define SETTLE_NS (5 * FT_NS_PER_MS)
+#define DELETED " (deleted)"
 #define CANDIDATES_MAX 4 /* distinct files of the kinds a process is looked at for */
 /* A full kind gives a file's place to a new one when no look has found it for this long. */
 #define IDLE_NS (60 * FT_NS_PER_SEC)
@@ -369,6 +370,10 @@ static bool consider_mapped(struct ft_linux_prober *p, const bool *wanted, uint3
             continue;
         char *file = line + file_at;
         file[strcspn(file, "\n")] = '\0';
+        /* A library replaced by an upgrade stays mapped from its deleted file. */
+        size_t len = strlen(file);
+        if (len > strlen(DELETED) && strcmp(file + len - strlen(DELETED), DELETED) == 0)
+            file[len - strlen(DELETED)] = '\0';
         if (file[0] != '/')
             continue;
         const char *name = base_name(file);
