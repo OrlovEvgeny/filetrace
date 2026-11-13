@@ -672,6 +672,19 @@ static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, con
     emit(b, &ev);
 }
 
+static void on_tls_name(struct ft_backend *b, const struct ft_bpf_ev_tls_name *e)
+{
+    char name[FT_BPF_TLS_NAME];
+    memcpy(name, e->name, sizeof(name));
+    name[sizeof(name) - 1] = '\0';
+    struct ft_event ev = {
+        .type = FT_EVENT_TLS_NAME,
+        .ts_ns = e->hdr.ts_ns,
+        .tls_name = {.sock_id = e->cookie, .pid = e->pid, .name = name},
+    };
+    emit(b, &ev);
+}
+
 static void on_lookup(struct ft_backend *b, const struct ft_bpf_ev_lookup *e)
 {
     char name[FT_BPF_LOOKUP_NAME];
@@ -816,6 +829,10 @@ static int on_ring_event(void *ctx, void *data, size_t size)
     case FT_BPF_EV_LOOKUP:
         if (size >= sizeof(struct ft_bpf_ev_lookup))
             on_lookup(b, data);
+        break;
+    case FT_BPF_EV_TLS_NAME:
+        if (size >= sizeof(struct ft_bpf_ev_tls_name))
+            on_tls_name(b, data);
         break;
     default:
         break;
@@ -1018,6 +1035,8 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
     out->name_library_capacity = b->lookup_capacity;
     out->name_libraries_configured = b->lookup_wanted;
     out->name_libraries_forgotten = ft_linux_prober_forgotten(b->prober, b->lookup_kind);
+    out->tls_libraries = ft_linux_prober_count(b->prober, b->tls.openssl) +
+                         ft_linux_prober_count(b->prober, b->tls.gnutls);
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)

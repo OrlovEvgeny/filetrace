@@ -55,7 +55,9 @@ static const char *group_problem(const struct ft_linux_probes *p, enum ft_probe_
 static void name_capability(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
                             const struct ft_backend_stats *libraries, struct ft_capabilities *out)
 {
-    const char *tls = "TLS server names are not read";
+    const char *tls = cfg->tls_names ? "TLS server names are read where the client's library is "
+                                       "probed"
+                                     : "TLS server names are not read";
 
     if (cfg->mode < FT_MODE_STANDARD) {
         ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_DISABLED, "%s",
@@ -83,10 +85,19 @@ static void name_capability(const struct ft_linux_probes *p, const struct ft_bac
         if (libraries->name_libraries_configured > libraries->name_library_capacity)
             snprintf(cut, sizeof(cut), "; the open file limit holds no more than %llu",
                      (unsigned long long)libraries->name_library_capacity);
-        ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL,
-                          "lookups probed in %llu %s%s; %s",
-                          (unsigned long long)libraries->name_libraries,
-                          libraries->name_libraries == 1 ? "library" : "libraries", cut, tls);
+        if (cfg->tls_names && libraries->tls_libraries) {
+            ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_FULL,
+                              "lookups probed in %llu %s%s; TLS server names in %llu %s",
+                              (unsigned long long)libraries->name_libraries,
+                              libraries->name_libraries == 1 ? "library" : "libraries", cut,
+                              (unsigned long long)libraries->tls_libraries,
+                              libraries->tls_libraries == 1 ? "library" : "libraries");
+        } else {
+            ft_capability_set(out, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL,
+                              "lookups probed in %llu %s%s; %s",
+                              (unsigned long long)libraries->name_libraries,
+                              libraries->name_libraries == 1 ? "library" : "libraries", cut, tls);
+        }
     }
 }
 
