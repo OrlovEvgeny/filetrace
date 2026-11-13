@@ -23,6 +23,9 @@ void ft_sim_engine_run(struct ft_sim_engine *e, uint64_t until_ns, uint64_t step
 /* From here on the simulated collector loses no events. */
 void ft_sim_engine_lose_nothing(struct ft_sim_engine *e);
 
+/* Which names the simulated collector sees: those processes look up, those TLS clients ask for. */
+void ft_sim_engine_names(struct ft_sim_engine *e, bool lookups, bool tls);
+
 /* Moves the clock forward without simulating the time skipped. */
 void ft_sim_engine_skip_to(struct ft_sim_engine *e, uint64_t ns);
 

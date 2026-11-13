@@ -151,6 +151,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
 
     if (options.lossless)
         ft_sim_engine_lose_nothing(b->engine);
+    ft_sim_engine_names(b->engine, cfg->lookup_names, cfg->tls_names);
     make_history(b, now);
     catch_up(b);
     b->queued_seen = ft_sim_engine_queued_events(b->engine);
@@ -202,6 +203,11 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
     out->events = ft_sim_engine_events(b->engine);
     out->queue_bytes = b->cfg.queue_bytes;
     out->queue_peak_bytes = b->queue_peak_bytes;
+    /* As a host with a few container images would have: their C libraries, their TLS libraries. */
+    out->name_libraries = (b->cfg.lookup_names ? 6 : 0) + (b->cfg.tls_names ? 3 : 0);
+    if (out->name_libraries > b->cfg.name_libraries)
+        out->name_libraries = b->cfg.name_libraries;
+    out->name_library_capacity = out->name_libraries ? b->cfg.name_libraries : 0;
 }
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
