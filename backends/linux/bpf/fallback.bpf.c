@@ -5,6 +5,7 @@
 #include "common.bpf.h"
 #include "lookups.bpf.h"
 #include "returns.bpf.h"
+#include "tls.bpf.h"
 
 #define IPPROTO_UDP 17
 
@@ -344,6 +345,7 @@ int BPF_KPROBE(ft_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     t->tx_tgid = (__u32)(ids >> 32);
     t->tx_tid = (__u32)ids;
     t->tx_asked = 0;
+    tls_bind_send(t->id);
 
     /* Pages spliced in by sendfile belong to the claim that sendfile made. */
     if (!cfg.file_corr || (BPF_CORE_READ(msg, msg_flags) & MSG_SPLICE_PAGES))

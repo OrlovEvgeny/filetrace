@@ -22,6 +22,7 @@ enum ft_bpf_event_kind {
     FT_BPF_EV_FILE = 5,
     FT_BPF_EV_SCRIPT = 6,
     FT_BPF_EV_LOOKUP = 7,
+    FT_BPF_EV_TLS_NAME = 8,
 };
 
 struct ft_bpf_ev_hdr {
@@ -127,6 +128,17 @@ struct ft_bpf_ev_lookup {
     __u32 pad;
     __u8 addrs[FT_BPF_LOOKUP_ADDRS][16];
     char name[FT_BPF_LOOKUP_NAME]; /* as the process passed it, NUL-terminated */
+};
+
+#define FT_BPF_TLS_NAME 256 /* a server name's 253 bytes, and room to tell a longer one */
+
+/* A server name a TLS client set, bound to the socket its handshake's first bytes went out on. */
+struct ft_bpf_ev_tls_name {
+    struct ft_bpf_ev_hdr hdr;
+    __u64 cookie; /* the socket, as the socket event reports it */
+    __u32 pid;
+    __u32 pad;
+    char name[FT_BPF_TLS_NAME]; /* as the client set it, NUL-terminated */
 };
 
 enum ft_bpf_agg_kind {

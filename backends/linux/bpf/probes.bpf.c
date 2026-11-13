@@ -5,6 +5,7 @@
 #include "common.bpf.h"
 #include "lookups.bpf.h"
 #include "returns.bpf.h"
+#include "tls.bpf.h"
 
 /* Sends are counted as they return, so a window is always up to date. */
 static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)
@@ -146,6 +147,8 @@ static __always_inline int account(struct socket *sock, struct msghdr *msg, long
         v->last_ns = now;
     }
 
+    if (dir == FT_BPF_TX && proto == IPPROTO_TCP)
+        tls_bind_send(key.cookie);
     if (!cfg.file_corr)
         return 0;
     bool tcp = proto == IPPROTO_TCP;
