@@ -95,6 +95,24 @@ static void scope_from(struct ft_query *q, const struct ft_query *filter)
     ft_strlcpy(q->process, filter->process, sizeof(q->process));
 }
 
+void ft_watch_connections_query(const struct ft_watch_options *opt, uint32_t limit,
+                                struct ft_query *q)
+{
+    const struct ft_query *filter = &opt->filter;
+
+    ft_query_init(q, FT_Q_CONNECTIONS);
+    scope_from(q, filter);
+    q->flags |= FT_QF_ACTIVE;
+    q->proto = filter->proto;
+    q->remote = filter->remote;
+    q->remote_host_bits = filter->remote_host_bits;
+    ft_strlcpy(q->remote_name, filter->remote_name, sizeof(q->remote_name));
+    q->sort = opt->direction == FT_WATCH_OUTBOUND  ? FT_SORT_OUTBOUND
+              : opt->direction == FT_WATCH_INBOUND ? FT_SORT_INBOUND
+                                                   : FT_SORT_RATE;
+    q->limit = limit;
+}
+
 static int take_snapshot(struct ft_session *s, const struct ft_watch_options *opt, enum view view,
                          bool every_view, uint32_t limit, struct snapshot *snap,
                          struct ft_error *err)
@@ -129,16 +147,7 @@ static int take_snapshot(struct ft_session *s, const struct ft_watch_options *op
         code = ft_client_query(s->client, q, ft_rows_collect, &snap->processes, nullptr, err);
     }
     if (code == FT_EXIT_OK && view == VIEW_NETWORK && !every_view) {
-        ft_query_init(q, FT_Q_CONNECTIONS);
-        scope_from(q, filter);
-        q->flags |= FT_QF_ACTIVE;
-        q->proto = filter->proto;
-        q->remote = filter->remote;
-        q->remote_host_bits = filter->remote_host_bits;
-        q->sort = opt->direction == FT_WATCH_OUTBOUND  ? FT_SORT_OUTBOUND
-                  : opt->direction == FT_WATCH_INBOUND ? FT_SORT_INBOUND
-                                                       : FT_SORT_RATE;
-        q->limit = limit;
+        ft_watch_connections_query(opt, limit, q);
         ft_rows_clear(&snap->connections);
         code = ft_client_query(s->client, q, ft_rows_collect, &snap->connections, nullptr, err);
     }

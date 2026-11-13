@@ -535,8 +535,38 @@ static void test_table_fit_bounds(void)
     }
 }
 
+/* The network view of watch asks for what every filter of the screen selects of connections. */
+static void test_watch_network_filters(void)
+{
+    struct ft_watch_options opt = {.direction = FT_WATCH_INBOUND};
+    uint8_t network[16] = {203, 0, 113, 0};
+    struct ft_query q;
+
+    ft_query_init(&opt.filter, FT_Q_TRANSFERS);
+    opt.filter.pid = 2210;
+    opt.filter.proto = FT_PROTO_TCP;
+    ft_endpoint_set(&opt.filter.remote, false, network, 0);
+    opt.filter.remote_host_bits = 8;
+    CHECK(ft_name_pattern("*.Example.com", opt.filter.remote_name));
+    ft_strlcpy(opt.filter.path, "/data/*", sizeof(opt.filter.path));
+
+    ft_watch_connections_query(&opt, 25, &q);
+    CHECK_U64(q.kind, FT_Q_CONNECTIONS);
+    CHECK(q.flags & FT_QF_ACTIVE);
+    CHECK_U64(q.pid, 2210);
+    CHECK_U64(q.proto, FT_PROTO_TCP);
+    CHECK(ft_addr_equal(&q.remote, &opt.filter.remote));
+    CHECK_U64(q.remote_host_bits, 8);
+    CHECK_STR(q.remote_name, "*.example.com");
+    CHECK_U64(q.sort, FT_SORT_INBOUND);
+    CHECK_U64(q.limit, 25);
+    /* A file filter says nothing of a connection. */
+    CHECK_STR(q.path, "");
+}
+
 void test_tui(void)
 {
+    test_watch_network_filters();
     test_text_clipping();
     test_text_wide();
     test_text_sanitized();
