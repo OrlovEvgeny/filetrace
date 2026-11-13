@@ -455,6 +455,7 @@ struct ft_backend {
     int background_fd;
     uint64_t background_scan_ns; /* when the background map was last brought up to date */
     uint64_t aged_ns;            /* when the aging iterator last ran */
+    struct ft_linux_prober *prober;
     struct ft_linux_php *php;
     char path[FT_BPF_PATH_BUF + FT_BPF_NAME_MAX + 8];
 };
@@ -520,22 +521,21 @@ static void join_path(const char *comps, size_t len, uint16_t flags, char *path,
 }
 
 /*
- * Probes a PHP binary a process starts, or one a forked child carries on with: PHP-FPM forks
- * its master off the process that ran it, and web servers load PHP before forking workers.
+ * Probes the files a process starts with, or those a forked child carries on with: PHP-FPM
+ * forks its master off the process that ran it, and web servers load PHP before forking workers.
  */
-static void php_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe)
+static void process_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe)
 {
     /* The kernel's process ID names the right /proc entry only in the host's namespace. */
-    if (!b->php || !ft_sysinfo_host_pid_namespace())
+    if (!b->prober || !ft_sysinfo_host_pid_namespace())
         return;
     char comm[FT_BPF_COMM_LEN];
     memcpy(comm, e->comm, sizeof(comm));
     comm[sizeof(comm) - 1] = '\0';
     const char *slash = exe ? strrchr(exe, '/') : nullptr;
     const char *name = exe ? (slash ? slash + 1 : exe) : comm;
-    if (strncmp(name, "php", 3) == 0 || strncmp(name, "frankenphp", 10) == 0 ||
-        strcmp(name, "apache2") == 0 || strncmp(name, "httpd", 5) == 0)
-        ft_linux_php_attach_pid(b->php, e->pid);
+    if (ft_linux_prober_wants(b->prober, name))
+        ft_linux_prober_attach_pid(b->prober, e->pid);
 }
 
 static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe,
@@ -668,7 +668,7 @@ static int on_ring_event(void *ctx, void *data, size_t size)
                 }
             }
             on_process(b, &e->proc, exe, args, args_len, cwd);
-            php_started(b, &e->proc, exe);
+            process_started(b, &e->proc, exe);
         }
         break;
     case FT_BPF_EV_FORK:
@@ -676,7 +676,7 @@ static int on_ring_event(void *ctx, void *data, size_t size)
         if (size >= sizeof(struct ft_bpf_ev_proc)) {
             on_process(b, data, nullptr, nullptr, 0, nullptr);
             if (hdr->kind == FT_BPF_EV_FORK)
-                php_started(b, data, nullptr);
+                process_started(b, data, nullptr);
         }
         break;
     case FT_BPF_EV_SOCK_STATE:
@@ -866,8 +866,7 @@ static void backend_flush(struct ft_backend *b)
     if (now_ns - b->background_scan_ns > BACKGROUND_RESCAN_NS) {
         if (b->background_fd >= 0)
             background_scan(b, now_ns);
-        if (b->php)
-            ft_linux_php_scan(b->php);
+        ft_linux_prober_scan(b->prober);
         b->background_scan_ns = now_ns;
     }
 }
@@ -898,6 +897,7 @@ static void backend_close(struct ft_backend *b)
     if (!b)
         return;
     ring_buffer__free(b->ring);
+    ft_linux_prober_destroy(b->prober);
     ft_linux_php_close(b->php);
     ft_linux_probes_unload(&b->probes);
     free(b->cpu_values);
@@ -990,9 +990,9 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
             "[correlation] background_paths and strict_paths name more than %d files; %zu are kept",
             FT_BPF_BACKGROUND_MAX, b->probes.listed_files);
     if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
-        b->php = ft_linux_php_open(obj);
-        if (b->php)
-            ft_linux_php_scan(b->php);
+        b->prober = ft_linux_prober_create();
+        b->php = b->prober ? ft_linux_php_open(obj, b->prober) : nullptr;
+        ft_linux_prober_scan(b->prober);
     }
 
     b->ring = ring_buffer__new(bpf_map__fd(events), on_ring_event, b, nullptr);
