@@ -317,6 +317,22 @@ static void attach_aging(struct ft_linux_probes *p)
         p->aging_error = errno;
 }
 
+/* Loads with the probes of getaddrinfo, or without them when the kernel refuses them. */
+static int load_lookups(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
+                        const bool enabled[FT_LINUX_MAX_PROBES], bool *lookups,
+                        struct ft_linux_probes *out)
+{
+    failed_program[0] = '\0';
+    int err = load_with(set, cfg, enabled, *lookups, &out->obj, &out->aging_error);
+    if (err && *lookups && strncmp(failed_program, "ft_getaddrinfo", 14) == 0) {
+        /* Without them, connections have no looked-up names. */
+        out->lookups_error = -err;
+        *lookups = false;
+        err = load_with(set, cfg, enabled, false, &out->obj, &out->aging_error);
+    }
+    return err;
+}
+
 static int load_set(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
                     struct ft_linux_probes *out)
 {
@@ -357,14 +373,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     btf__free(vmlinux);
 
     bool lookups = lookups_wanted(cfg);
-    int err =
-        wanted ? load_with(set, cfg, enabled, lookups, &out->obj, &out->aging_error) : -ENOENT;
-    if (err && lookups && strncmp(failed_program, "ft_getaddrinfo", 14) == 0) {
-        /* Without the probes of getaddrinfo, connections have no looked-up names. */
-        out->lookups_error = -err;
-        lookups = false;
-        err = load_with(set, cfg, enabled, false, &out->obj, &out->aging_error);
-    }
+    int err = wanted ? load_lookups(set, cfg, enabled, &lookups, out) : -ENOENT;
     if (err && wanted > 1) {
         /* One rejected probe fails the whole object: find which ones load. */
         int first_error = err;
@@ -387,8 +396,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
             }
         }
         out->aging_error = 0;
-        err = usable ? load_with(set, cfg, enabled, lookups, &out->obj, &out->aging_error)
-                     : first_error;
+        err = usable ? load_lookups(set, cfg, enabled, &lookups, out) : first_error;
     }
     out->lookups = lookups && !err;
     if (err) {
