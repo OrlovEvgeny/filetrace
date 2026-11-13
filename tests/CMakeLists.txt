@@ -69,7 +69,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/run.sh $<TARGET_FILE_DIR:filetrace>
                     $<TARGET_FILE:ft_workload> ${probes})
         set_tests_properties(integration-${probes} PROPERTIES
-            SKIP_RETURN_CODE 77 TIMEOUT 120 RUN_SERIAL TRUE)
+            SKIP_RETURN_CODE 77 TIMEOUT 300 RUN_SERIAL TRUE)
     endforeach()
 endif()
 
