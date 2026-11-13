@@ -488,23 +488,19 @@ static int trampoline_refusal(const struct btf *vmlinux)
     return link < 0 ? -link : 0;
 }
 
-int ft_linux_trampoline_refusal(const struct ft_probe_def **tried)
-{
-    libbpf_set_print(on_libbpf_print);
-    *tried = network_trampoline();
-    struct btf *vmlinux = btf__load_vmlinux_btf();
-    int refusal = trampoline_refusal(vmlinux);
-    btf__free(vmlinux);
-    return refusal;
-}
-
 static int load_probes(const struct ft_backend_config *cfg, const struct btf *vmlinux,
                        struct ft_linux_probes *out)
 {
     /* Where a trampoline cannot attach, verifying the whole object of them is wasted time. */
-    if (cfg->probes == FT_PROBES_KPROBE ||
-        (cfg->probes == FT_PROBES_AUTO && trampoline_refusal(vmlinux)))
-        return load_set(&kprobe_set, cfg, vmlinux, out);
+    int refused = cfg->probes == FT_PROBES_AUTO ? trampoline_refusal(vmlinux) : 0;
+    if (cfg->probes == FT_PROBES_KPROBE || refused) {
+        int err = load_set(&kprobe_set, cfg, vmlinux, out);
+        if (refused) {
+            out->trampoline_def = network_trampoline();
+            out->trampoline = (struct ft_probe_status){FT_PROBE_ATTACH_FAILED, refused};
+        }
+        return err;
+    }
 
     int err = load_set(&trampoline_set, cfg, vmlinux, out);
     if (cfg->probes == FT_PROBES_TRAMPOLINE || ft_linux_network_attached(out))
@@ -517,6 +513,14 @@ static int load_probes(const struct ft_backend_config *cfg, const struct btf *vm
         if (!fallback_err)
             ft_linux_probes_unload(&fallback);
         return err;
+    }
+    fallback.trampoline = (struct ft_probe_status){FT_PROBE_LOAD_FAILED, -err};
+    for (size_t i = 0; !err && i < out->set->count; i++) {
+        if (out->set->defs[i].group == FT_PG_NET && out->status[i].state != FT_PROBE_ATTACHED) {
+            fallback.trampoline_def = &out->set->defs[i];
+            fallback.trampoline = out->status[i];
+            break;
+        }
     }
     if (!err)
         ft_linux_probes_unload(out);

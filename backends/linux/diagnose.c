@@ -354,28 +354,22 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     cfg.agg_entries = 64;
     cfg.known_files = 64;
 
-    /* Trampolines are tried on their own first, to be able to say why they are not used. */
-    const struct ft_probe_def *tried = nullptr;
-    int refused = wanted == FT_PROBES_AUTO ? ft_linux_trampoline_refusal(&tried) : 0;
-    cfg.probes = wanted == FT_PROBES_KPROBE || refused ? FT_PROBES_KPROBE : FT_PROBES_TRAMPOLINE;
+    cfg.probes = wanted;
     int rc = ft_linux_probes_load(&cfg, &probes);
-    if (refused) {
-        ft_diagnosis_add(out, FT_CHECK_WARN, false, "BPF trampolines",
-                         "%s %s: cannot attach: %s; kernel functions are traced with kprobes "
-                         "instead",
-                         tried->kind, tried->target, error_text(refused));
-    } else if (wanted == FT_PROBES_AUTO && (rc || !ft_linux_network_attached(&probes))) {
-        char why[240] = "";
-        const char *problem =
-            rc ? strerror(-rc) : group_problem(&probes, FT_PG_NET, why, sizeof(why));
+    if (wanted == FT_PROBES_AUTO && !rc && probes.set->kind == FT_PROBES_KPROBE) {
+        const struct ft_probe_def *def = probes.trampoline_def;
+        char why[160];
 
-        ft_diagnosis_add(out, FT_CHECK_WARN, false, "BPF trampolines",
-                         "%s; kernel functions are traced with kprobes instead", problem);
-        if (!rc)
-            ft_linux_probes_unload(&probes);
-        cfg.probes = FT_PROBES_KPROBE;
-        rc = ft_linux_probes_load(&cfg, &probes);
-    } else if (wanted != FT_PROBES_KPROBE) {
+        if (def)
+            ft_diagnosis_add(out, FT_CHECK_WARN, false, "BPF trampolines",
+                             "%s %s: %s; kernel functions are traced with kprobes instead",
+                             def->kind, def->target,
+                             probe_problem(&probes.trampoline, why, sizeof(why)));
+        else
+            ft_diagnosis_add(out, FT_CHECK_WARN, false, "BPF trampolines",
+                             "%s; kernel functions are traced with kprobes instead",
+                             error_text(probes.trampoline.error));
+    } else if (wanted == FT_PROBES_TRAMPOLINE || (wanted == FT_PROBES_AUTO && !rc)) {
         ft_diagnosis_add(out, FT_CHECK_OK, false, "BPF trampolines", "%s", "");
     }
 
