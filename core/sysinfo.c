@@ -9,6 +9,9 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #endif
@@ -162,5 +165,12 @@ const char *ft_platform_name(void)
     return "freebsd";
 #else
     return "unknown";
+#endif
+}
+
+void ft_sysinfo_small_pages(void)
+{
+#if defined(__linux__) && defined(PR_SET_THP_DISABLE)
+    prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0);
 #endif
 }
