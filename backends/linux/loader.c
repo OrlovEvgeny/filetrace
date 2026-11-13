@@ -643,6 +643,7 @@ static void on_sock_state(struct ft_backend *b, const struct ft_bpf_ev_sock *e)
                 .pid = e->pid,
                 .proto = e->proto,
                 .state = tcp_state(e->new_state),
+                .tid = e->tid,
             },
     };
     ft_endpoint_set(&ev.socket.local, e->family == AF_INET6, e->laddr, e->lport);

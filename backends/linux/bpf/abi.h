@@ -63,13 +63,14 @@ struct ft_bpf_ev_sock {
     struct ft_bpf_ev_hdr hdr;
     __u64 cookie;
     __u32 pid; /* 0 when the transition did not run in the owner's context */
+    __u32 tid; /* SYN_SENT: the thread that called connect; otherwise 0 */
     __u16 family;
     __u16 proto;
     __u16 lport; /* host byte order */
     __u16 rport; /* host byte order */
     __u8 old_state;
     __u8 new_state;
-    __u8 pad[2];
+    __u8 pad[6];
     __u8 laddr[16];
     __u8 raddr[16];
 };
