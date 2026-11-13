@@ -1369,13 +1369,14 @@ static __always_inline void correlate_send(void *map, __u64 sk, __u64 cookie, __
 }
 
 /*
- * A reply that took all the thread read of a file ends when the thread reads the file again. A
- * first flight goes on: its next send decides, on its own socket or another.
+ * A reply that took all the thread read of a file ends when the thread reads the file again from
+ * its start. A first flight goes on: its next send decides, on its own socket or another.
  */
 static __always_inline void file_again(struct thread_state *ts, const struct file_key *fk,
-                                       __u64 now)
+                                       bool from_start, __u64 now)
 {
-    if (ts->pending || ts->file.ino != fk->ino || ts->file.dev != fk->dev || ts->gen != fk->gen)
+    if (!from_start || ts->pending || ts->file.ino != fk->ino || ts->file.dev != fk->dev ||
+        ts->gen != fk->gen)
         return;
     if (ts->episode_sock)
         carry_episode_end(ts, now, CARRY_NEXT);

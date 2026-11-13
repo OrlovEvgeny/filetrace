@@ -122,7 +122,7 @@ static __always_inline struct thread_state *thread_now(bool create)
 }
 
 SEC("kprobe/vfs_read")
-int BPF_KPROBE(ft_vfs_read, struct file *file)
+int BPF_KPROBE(ft_vfs_read, struct file *file, char *buf, size_t count, loff_t *pos)
 {
     struct inode *inode = BPF_CORE_READ(file, f_inode);
     struct super_block *sb = BPF_CORE_READ(inode, i_sb);
@@ -152,7 +152,10 @@ int BPF_KPROBE(ft_vfs_read, struct file *file)
         ts->reading = 0;
         return 0;
     }
-    file_again(ts, &fk, now);
+    loff_t at = 0;
+    if (pos)
+        bpf_probe_read_kernel(&at, sizeof(at), pos);
+    file_again(ts, &fk, at == 0, now);
     thread_set_file(ts, file, inode, &fk, magic);
     ts->file_strict = listed == FT_BPF_LISTED_STRICT;
 

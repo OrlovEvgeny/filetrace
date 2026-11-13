@@ -219,7 +219,10 @@ int BPF_PROG(ft_vfs_read, struct file *file, char *buf, size_t len, loff_t *pos,
     __u8 listed = listed_read(ts, BPF_CORE_READ(file, f_path.dentry, d_name.name), &fk);
     if (listed == FT_BPF_LISTED_BACKGROUND)
         return 0;
-    file_again(ts, &fk, now);
+    loff_t at = 0;
+    if (pos)
+        bpf_probe_read_kernel(&at, sizeof(at), pos);
+    file_again(ts, &fk, at == ret, now);
     thread_set_file(ts, file, inode, &fk, magic);
     ts->file_strict = listed == FT_BPF_LISTED_STRICT;
     if (!ts->pending)
