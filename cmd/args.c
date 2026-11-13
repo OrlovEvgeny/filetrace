@@ -217,11 +217,15 @@ static bool parse_cgroup(const char *text, uint64_t *id)
     return true;
 }
 
+/* Leaves net as it was for text that is no address or network. */
 static bool parse_network(const char *text, struct ft_endpoint *net, uint8_t *host_bits)
 {
+    struct ft_endpoint parsed;
     uint8_t bits;
-    if (!ft_prefix_parse(text, net, &bits))
+
+    if (!ft_prefix_parse(text, &parsed, &bits))
         return false;
+    *net = parsed;
     *host_bits = (uint8_t)((net->family == 6 ? 128 : 32) - bits);
     return true;
 }

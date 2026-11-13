@@ -128,6 +128,12 @@ ok "an accepted connection has no name" grep -Eq ' nginx +TCP +[^ ]+:443 +[^ ]+ 
 ok "files are listed by a name" query named.jsonl files --remote '*.s3.example.com' --jsonl
 ok "the name filter leaves what has the name" grep -q '"remote_name":"pg-backups.s3.example.com","remote_name_source":"lookup+tls","resolved_names":\["pg-backups.s3.example.com"\],"resolved_name_count":1' named.jsonl
 ok "the name filter leaves nothing else" test "$(grep -vc '"remote_name":"pg-backups.s3.example.com"' named.jsonl)" -eq 0
+ok "a network and a name are asked together" query both.txt connections --remote 10.0.8.0/24 --remote 'registry*' --format quiet
+ok "what is in the network under the name is listed" test -s both.txt
+ok "a name after another network is asked" query neither.txt connections --remote 10.0.7.0/24 --remote 'registry*' --format quiet
+ok "the network still holds beside the name" test ! -s neither.txt
+ok "a name before another network is asked" query neither.txt connections --remote 'registry*' --remote 10.0.7.0/24 --format quiet
+ok "the name still holds beside the network" test ! -s neither.txt
 ok "an unknown name lists nothing" query unnamed.txt files --remote none.example.com --format quiet
 ok "nothing is listed for it" test ! -s unnamed.txt
 ok "events are listed by a name" query events.txt events --type socket_connect --remote 'mirror-*' --limit 1
