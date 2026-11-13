@@ -223,12 +223,15 @@ struct xfer {
     uint64_t size;
     uint64_t ino; /* the id when 0 */
     const char *script;
+    const char *tls;
+    const char *resolved[FT_RESOLVED_NAMES];
 };
 
 static void transfer(struct fixture *f, struct xfer x)
 {
     struct ft_row_transfer *row = calloc(1, sizeof(*row));
     struct ft_process_strings text = {"", "/srv", x.script ? x.script : ""};
+    struct ft_remote_names names = {.tls = x.tls ? x.tls : ""};
 
     row->id = x.id;
     row->pid = x.pid;
@@ -246,7 +249,11 @@ static void transfer(struct fixture *f, struct xfer x)
     ft_strlcpy(row->comm, "worker", sizeof(row->comm));
     ft_strlcpy(row->path, x.path ? x.path : "/srv/data/file.bin", FT_PATH_MAX);
     size_t lead = strlen(row->path) + 1;
-    ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    lead += ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+    for (; names.listed < FT_RESOLVED_NAMES && x.resolved[names.listed]; names.listed++)
+        names.resolved[names.listed] = x.resolved[names.listed];
+    names.count = names.listed;
+    ft_remote_names_pack(&names, &row->names, row->path + lead, sizeof(row->path) - lead);
     CHECK(ft_rows_append(&f->transfers, row, ft_row_transfer_size(row)));
     free(row);
 }
@@ -537,7 +544,8 @@ static void tables(void)
     CHECK_U64(rows, 4);
     CHECK_U64(csv_records(text, &columns), 5);
     CHECK(starts(text, "id,pid,user,process,comm,script,file,device,inode,size,bytes_sent,"));
-    CHECK(has(text, ",remote.address,remote.port,remote.public,remote.host,age_seconds,"));
+    CHECK(has(text, ",remote.address,remote.port,remote.public,remote.host,remote.name,"
+                    "remote.name_source,remote.resolved_names,age_seconds,"));
     CHECK(has(text, ",\"/srv/a,b.bin\","));
     CHECK(has(text, ",\"/srv/say \"\"hi\"\".bin\","));
     CHECK(has(text, ",\"/srv/q\"\"u\\o\nt\xc3\xa9.bin\","));
@@ -568,6 +576,60 @@ static void tables(void)
     CHECK(has(text, ",tr_1,101,root,"));
     free(text);
 
+    fixture_free(&f);
+}
+
+static void names(void)
+{
+    struct fixture f;
+    size_t rows;
+    size_t columns = 0;
+
+    fixture_init(&f);
+    transfer(&f, (struct xfer){.id = 1,
+                               .pid = 7,
+                               .rate = 300,
+                               .remote = "10.0.8.40",
+                               .tls = "s3.example.com",
+                               .resolved = {"proxy.corp.example"}});
+    transfer(&f, (struct xfer){.id = 2,
+                               .pid = 7,
+                               .rate = 200,
+                               .remote = "198.51.100.4",
+                               .resolved = {"files.example.com", "cdn.example.com"}});
+    transfer(&f, (struct xfer){.id = 3, .pid = 7, .rate = 100, .remote = "10.0.0.5"});
+    sample(&f, 0);
+
+    /* A remote end without names leaves them out, as it is without any. */
+    char *text = document(f.m, FT_TOP_TRANSFERS, false);
+    CHECK(json_ok(text));
+    CHECK(has(text, "\"host\":null,\"name\":\"s3.example.com\",\"name_source\":\"tls\","
+                    "\"resolved_names\":[\"proxy.corp.example\"]},"));
+    CHECK(has(text, "\"name\":\"files.example.com\",\"name_source\":\"lookup\","
+                    "\"resolved_names\":[\"files.example.com\",\"cdn.example.com\"]},"));
+    CHECK(has(text, "\"address\":\"10.0.0.5\",\"port\":443,\"public\":false,\"host\":null},"));
+    free(text);
+    text = document(f.m, FT_TOP_DESTINATIONS, true);
+    CHECK(json_ok(text));
+    CHECK(has(text, "\"host\": null,\n      \"names\": [\"s3.example.com\", "
+                    "\"proxy.corp.example\"],\n      \"rate\": "));
+    CHECK(has(text, "\"address\": \"10.0.0.5\",\n      \"label\": \"10.0.0.5:443\",\n"
+                    "      \"public\": false,\n      \"new\": false,\n      \"host\": null,\n"
+                    "      \"rate\": "));
+    free(text);
+
+    /* CSV has the columns whatever the rows, a list in one cell. */
+    text = csv(f.m, FT_TOP_TRANSFERS, &rows);
+    CHECK_U64(csv_records(text, &columns), 4);
+    CHECK(has(text, ",s3.example.com,tls,proxy.corp.example,"));
+    CHECK(has(text, ",files.example.com,lookup,files.example.com;cdn.example.com,"));
+    CHECK(has(text, ",10.0.0.5,443,false,,,,,"));
+    free(text);
+    text = csv(f.m, FT_TOP_DESTINATIONS, &rows);
+    CHECK_U64(csv_records(text, &columns), 4);
+    CHECK(has(text, ",host,names,rate,"));
+    CHECK(has(text, ",s3.example.com;proxy.corp.example,"));
+    free(text);
     fixture_free(&f);
 }
 
@@ -972,6 +1034,7 @@ void test_top_once(void)
     leaders();
     single_rows();
     tables();
+    names();
     lists();
     canvas_lines();
     table_height();

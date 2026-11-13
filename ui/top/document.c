@@ -276,6 +276,27 @@ static void put_uints(struct writer *w, const char *name, const uint64_t *values
     fputc(']', w->out);
 }
 
+/* A list of strings on one line. */
+static void put_strings(struct writer *w, const char *name, const char *const *items, size_t count)
+{
+    if (w->csv) {
+        struct list l = {0};
+
+        for (size_t i = 0; i < count; i++)
+            list_add(&l, items[i]);
+        put_list(w, name, &l);
+        free(l.text);
+        return;
+    }
+    element(w, name);
+    fputc('[', w->out);
+    for (size_t i = 0; i < count; i++) {
+        fputs(i ? (w->indent ? ", " : ",") : "", w->out);
+        ft_json_string(w->out, valid_utf8(w, items[i]));
+    }
+    fputc(']', w->out);
+}
+
 static const char *method_text(uint8_t method)
 {
     return method == FT_METHOD_NONE ? nullptr : ft_method_name((enum ft_method)method);
@@ -385,6 +406,20 @@ static const struct ft_top_process *process_of(const struct ft_top_transfer *t)
     return t->process ? t->process : &none;
 }
 
+static bool begin_part(struct writer *w, bool present, enum cells *before);
+
+static void put_remote_names(struct writer *w, const struct ft_remote_names *n)
+{
+    enum cells before;
+
+    if (begin_part(w, n != nullptr, &before)) {
+        put_text(w, "name", n ? ft_remote_name(n) : nullptr);
+        put_text(w, "name_source", n ? ft_name_source_name(ft_remote_name_source(n)) : nullptr);
+        put_strings(w, "resolved_names", n ? n->resolved : nullptr, n ? n->listed : 0);
+    }
+    w->cells = before;
+}
+
 static void put_remote(struct writer *w, const struct ft_top_transfer *t)
 {
     const struct ft_top_destination *d = t->destination;
@@ -402,6 +437,7 @@ static void put_remote(struct writer *w, const struct ft_top_transfer *t)
     else
         put_null(w, "public");
     put_text(w, "host", d && d->host_state == FT_TOP_HOST_NAMED ? d->host : nullptr);
+    put_remote_names(w, t->names);
     end_object(w);
 }
 
@@ -492,11 +528,16 @@ static void fold_members(struct writer *w, const struct ft_top_fold *f)
 
 static void destination_members(struct writer *w, const struct ft_top_destination *d)
 {
+    enum cells before;
+
     put_text(w, "address", d->text);
     put_text(w, "label", d->label);
     put_bool(w, "public", d->is_public);
     put_bool(w, "new", d->is_new);
     put_text(w, "host", d->host_state == FT_TOP_HOST_NAMED ? d->host : nullptr);
+    if (begin_part(w, d->nnames > 0, &before))
+        put_strings(w, "names", d->names, d->nnames);
+    w->cells = before;
     put_uint(w, "rate", d->rate);
     put_uint(w, "total", d->total);
     put_uint(w, "files", d->files);
