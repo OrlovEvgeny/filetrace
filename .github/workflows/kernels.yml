@@ -30,3 +30,32 @@ jobs:
         env:
           KERNEL: ${{ matrix.kernel }}
         run: tools/dev/vm.sh "$KERNEL" 'sh /ft/tests/integration/run.sh /ft/bin /ft/bin/ft_workload'
+
+  returns:
+    name: Return probes on x86-64 ${{ matrix.kernel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kernel: "6.12.13"
+            fix: unfixed
+          - kernel: "6.12.15"
+            fix: fixed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Let the runner use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Check the return probes under QEMU
+        env:
+          KERNEL: ${{ matrix.kernel }}
+          FIX: ${{ matrix.fix }}
+        run: tools/dev/vm.sh --arch x86_64 "$KERNEL" "sh /ft/tests/returns/run.sh /ft/bin $FIX"
