@@ -1499,6 +1499,34 @@ if [ -n "$dynamic" ]; then
         alone.ft.test
     expect "names: another alike but for its device" "$(name_of private2.bin)" alone.ft.test
 
+    # A C library that only short processes map, each over well within a flush interval: the
+    # second of them is named at the latest, however short the first was.
+    mkdir -p "$work/short"
+    for i in 1 2 3; do
+        named "$dynamic" sharedlibc "$work/short" sleepsend 0 alone.ft.test "$data/short$i.bin" \
+            >/dev/null
+    done
+    settle
+    expect "names: the second short process of a new C library" "$(name_of short2.bin)" \
+        alone.ft.test
+    expect "names: the third short process of a new C library" "$(name_of short3.bin)" \
+        alone.ft.test
+
+    # A process of a program the agent has not seen loads a C library file no process has mapped,
+    # and looks a name up through it a tenth of a second later.
+    mkdir -p "$work/loaded"
+    cp "$("$dynamic" libcpath)" "$work/loaded/libc.so.6"
+    cp "$dynamic" "$work/loaded/ft_workload"
+    loaded=$(named "$work/loaded/ft_workload" dlopensend "$work/loaded/libc.so.6" 100 \
+        alone.ft.test "$data/loaded.bin")
+    if [ "$(field "$loaded" loaded)" = unsupported ]; then
+        echo "SKIP: this C library loads no second copy of itself;" \
+            "the run-time load check did not run"
+    else
+        settle
+        expect "names: a C library loaded at run time" "$(name_of loaded.bin)" alone.ft.test
+    fi
+
     # A name with 20 addresses asked for without a socket type: each address comes back once per
     # type, and the first 16 distinct ones are kept.
     many=$(named "$dynamic" lookupmany many.ft.test "$data/many0.bin" 0)
