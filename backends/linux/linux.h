@@ -140,7 +140,8 @@ struct ft_linux_probe_kind {
     bool every_process;                                  /* the maps of every process are read */
     bool (*runs)(const char *program);    /* the program file is of the kind; may be nullptr */
     bool (*maps_of)(const char *program); /* the maps of a process running it are read */
-    bool (*mapped)(const char *file);     /* a mapped file of this base name may be of the kind */
+    /* A file mapped at path, whose base name is name, may be of the kind. */
+    bool (*mapped)(const char *path, const char *name);
     /* The cookie of the probes, from the ELF file open at fd; 0 when it is not of the kind. */
     uint64_t (*cookie)(int fd);
     /* Reports a file probed, by the name the process pid knows it by. */
@@ -174,6 +175,9 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns);
  */
 bool ft_linux_elf_exports(int fd, const char *const *names, size_t count, bool *found,
                           uint16_t *machine);
+
+/* C libraries probed for the names processes look up; returns the prober's kind, or -1. */
+int ft_linux_lookups_open(struct bpf_object *obj, struct ft_linux_prober *prober, size_t capacity);
 
 /* PHP binaries probed for the script each request runs. */
 struct ft_linux_php;
