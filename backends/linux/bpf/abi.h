@@ -21,6 +21,7 @@ enum ft_bpf_event_kind {
     FT_BPF_EV_SOCK_STATE = 4,
     FT_BPF_EV_FILE = 5,
     FT_BPF_EV_SCRIPT = 6,
+    FT_BPF_EV_LOOKUP = 7,
 };
 
 struct ft_bpf_ev_hdr {
@@ -108,6 +109,21 @@ struct ft_bpf_ev_script {
     __u32 len;
     __u32 pad;
     __u64 hash; /* the key of the id in known_scripts */
+};
+
+#define FT_BPF_LOOKUP_NAME 256   /* a host name's 253 bytes, and room to tell a longer one */
+#define FT_BPF_LOOKUP_ADDRS 16   /* distinct addresses a lookup reports */
+#define FT_BPF_LOOKUP_ENTRIES 64 /* entries of a lookup's result looked at */
+
+/* A name a process looked up with getaddrinfo, and the addresses the call returned for it. */
+struct ft_bpf_ev_lookup {
+    struct ft_bpf_ev_hdr hdr;
+    __u32 pid;
+    __u32 tid;
+    __u32 count;
+    __u32 inet6; /* a bit per address that is IPv6 */
+    __u8 addrs[FT_BPF_LOOKUP_ADDRS][16];
+    char name[FT_BPF_LOOKUP_NAME]; /* as the process passed it, NUL-terminated */
 };
 
 enum ft_bpf_agg_kind {

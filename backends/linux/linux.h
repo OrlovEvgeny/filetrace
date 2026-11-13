@@ -59,6 +59,8 @@ struct ft_linux_probes {
     bool listed_truncated;  /* more than the kernel table holds */
     struct bpf_link *aging; /* the iterator that judges windows nothing touched lately */
     int aging_error;        /* errno of the kernel's refusal of it */
+    bool lookups;           /* the programs that read getaddrinfo's results are loaded */
+    int lookups_error;      /* errno of the kernel's refusal of them */
 };
 
 /* Returns 0 once an object is loaded, even if single probes failed (see status); else -errno. */
