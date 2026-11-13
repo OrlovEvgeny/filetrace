@@ -376,7 +376,19 @@ static void remote_ends_have_names(void)
     add_connection(&rows, 58, 4120, "python3", endpoint(10, 0, 0, 5, 3128), &proxied);
     add_connection(&rows, 17, 1840, "nginx", endpoint(198, 51, 100, 4, 51344), &none);
 
-    char *text = render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_JSONL, false);
+    char *text = squeeze(render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_TABLE, false));
+    CHECK_STR(text,
+              "PID PROCESS PROTOCOL LOCAL REMOTE NAME STATE SENT RECEIVED SOCKET\n"
+              "2210 php-fpm TCP 10.0.0.12:50412 203.0.113.25:443 files.example.com ESTABLISHED "
+              "0 B 0 B 41\n"
+              "3312 curl TCP 10.0.0.12:50412 203.0.113.25:80 cdn.example.com (+1) ESTABLISHED "
+              "0 B 0 B 52\n"
+              "4120 python3 TCP 10.0.0.12:50412 10.0.0.5:3128 "
+              "s3.example.com via proxy.corp.example ESTABLISHED 0 B 0 B 58\n"
+              "1840 nginx TCP 10.0.0.12:50412 198.51.100.4:51344 - ESTABLISHED 0 B 0 B 17\n");
+    free(text);
+
+    text = render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_JSONL, false);
     CHECK(strstr(text, "\"remote_port\":443,\"remote_name\":\"files.example.com\","
                        "\"remote_name_source\":\"lookup+tls\","
                        "\"resolved_names\":[\"files.example.com\"],"
@@ -402,6 +414,19 @@ static void remote_ends_have_names(void)
     free(text);
     ft_rows_free(&rows);
 
+    struct ft_row_flow flow = {
+        .id = 9, .pid = 2450, .proto = FT_PROTO_UDP, .remote = endpoint(192, 0, 2, 53, 514)};
+    struct ft_remote_names logs = {.tls = "", .resolved = {"logs.example.net"}, .listed = 1};
+    ft_strlcpy(flow.comm, "python3", sizeof(flow.comm));
+    ft_remote_names_pack(&logs, &flow.names, flow.text, sizeof(flow.text));
+    ft_rows_init(&rows, FT_MSG_ROW_FLOW);
+    CHECK(ft_rows_append(&rows, &flow, ft_row_flow_size(&flow)));
+    text = squeeze(render(FT_VIEW_FLOWS, &rows, FT_FMT_TABLE, false));
+    CHECK_STR(text, "PID PROCESS PROTOCOL LOCAL REMOTE NAME SENT RECEIVED OUTBOUND FLOW\n"
+                    "2450 python3 UDP * 192.0.2.53:514 logs.example.net 0 B 0 B 0 B/s 9\n");
+    free(text);
+    ft_rows_free(&rows);
+
     struct ft_row_transfer *row = calloc(1, sizeof(*row));
     row->id = 0x1a;
     row->pid = 2210;
@@ -419,6 +444,16 @@ static void remote_ends_have_names(void)
     ft_rows_init(&rows, FT_MSG_ROW_TRANSFER);
     CHECK(ft_rows_append(&rows, row, ft_row_transfer_size(row)));
 
+    text = squeeze(render(FT_VIEW_FILES, &rows, FT_FMT_TABLE, false));
+    CHECK_STR(text, "FILE PROCESS DESTINATION NAME BYTES METHOD CONFIDENCE SCRIPT\n"
+                    "/data/invoice.pdf php-fpm 203.0.113.25 files.example.com 2.00 KB "
+                    "read-write INFERRED /srv/blog/index.php\n");
+    free(text);
+    text = squeeze(render(FT_VIEW_TRANSFERS, &rows, FT_FMT_TABLE, false));
+    CHECK_STR(text, "ID PROCESS FILE REMOTE NAME BYTES METHOD CONFIDENCE SCRIPT\n"
+                    "tr_1a php-fpm /data/invoice.pdf 203.0.113.25:443 files.example.com 2.00 KB "
+                    "read-write INFERRED /srv/blog/index.php\n");
+    free(text);
     text = render(FT_VIEW_FILES, &rows, FT_FMT_JSONL, false);
     CHECK(strstr(text, "\"remote_ip\":\"203.0.113.25\",\"remote_port\":443,"
                        "\"remote_name\":\"files.example.com\","

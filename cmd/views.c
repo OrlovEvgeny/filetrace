@@ -136,6 +136,7 @@ enum name_part : uint8_t {
     NAME_SOURCE, /* how the process came to use it */
     NAME_RESOLVED,
     NAME_RESOLVED_COUNT,
+    NAME_SHOWN, /* what a table says, for all of them at once */
 };
 
 static void set_name(struct value *v, const struct ft_remote_names *n, enum name_part part)
@@ -156,6 +157,10 @@ static void set_name(struct value *v, const struct ft_remote_names *n, enum name
     case NAME_RESOLVED_COUNT:
         set_uint(v, n->count);
         v->absent = n->count == 0;
+        break;
+    case NAME_SHOWN:
+        ft_remote_name_format(n, v->buf, sizeof(v->buf));
+        set_str(v, v->buf);
         break;
     }
 }
@@ -455,6 +460,13 @@ static void c_resolved_count(const void *row, struct value *v)
     set_name(v, &names, NAME_RESOLVED_COUNT);
 }
 
+static void c_rname_shown(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_connection_names(row, &names);
+    set_name(v, &names, NAME_SHOWN);
+}
+
 static void c_laddr(const void *row, struct value *v)
 {
     ROW(ft_row_connection);
@@ -543,6 +555,7 @@ static const struct field connection_fields[] = {
     {"remote_name_source", 0, c_rname_source},
     {"resolved_names", 0, c_resolved},
     {"resolved_name_count", 0, c_resolved_count},
+    {"@name", F_VIRTUAL | F_SPARSE, c_rname_shown},
     {"state", F_UPPER, c_state},
     {"bytes_sent", 0, c_tx},
     {"bytes_received", 0, c_rx},
@@ -553,10 +566,15 @@ static const struct field connection_fields[] = {
 };
 
 static const struct ft_view_column connection_columns[] = {
-    {"PID", "pid", false},           {"PROCESS", "process", false},
-    {"PROTOCOL", "protocol", false}, {"LOCAL", "@local", false},
-    {"REMOTE", "@remote", false},    {"STATE", "state", false},
-    {"SENT", "bytes_sent", true},    {"RECEIVED", "bytes_received", true},
+    {"PID", "pid", false},
+    {"PROCESS", "process", false},
+    {"PROTOCOL", "protocol", false},
+    {"LOCAL", "@local", false},
+    {"REMOTE", "@remote", false},
+    {"NAME", "@name", false},
+    {"STATE", "state", false},
+    {"SENT", "bytes_sent", true},
+    {"RECEIVED", "bytes_received", true},
     {"SOCKET", "socket_id", true},
 };
 
@@ -654,6 +672,13 @@ static void f_resolved_count(const void *row, struct value *v)
     set_name(v, &names, NAME_RESOLVED_COUNT);
 }
 
+static void f_rname_shown(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_flow_names(row, &names);
+    set_name(v, &names, NAME_SHOWN);
+}
+
 static void f_laddr(const void *row, struct value *v)
 {
     ROW(ft_row_flow);
@@ -719,6 +744,7 @@ static const struct field flow_fields[] = {
     {"remote_name_source", 0, f_rname_source},
     {"resolved_names", 0, f_resolved},
     {"resolved_name_count", 0, f_resolved_count},
+    {"@name", F_VIRTUAL | F_SPARSE, f_rname_shown},
     {"bytes_sent", 0, f_tx},
     {"bytes_received", 0, f_rx},
     {"bytes_sent_per_second", 0, f_tx_rate},
@@ -735,6 +761,7 @@ static const struct ft_view_column flow_columns[] = {
     {"PROTOCOL", "protocol", false},
     {"LOCAL", "@local", false},
     {"REMOTE", "@remote", false},
+    {"NAME", "@name", false},
     {"SENT", "bytes_sent", true},
     {"RECEIVED", "bytes_received", true},
     {"OUTBOUND", "bytes_sent_per_second", true},
@@ -963,6 +990,13 @@ static void t_resolved_count(const void *row, struct value *v)
     set_name(v, &names, NAME_RESOLVED_COUNT);
 }
 
+static void t_rname_shown(const void *row, struct value *v)
+{
+    struct ft_remote_names names;
+    ft_row_transfer_names(row, &names);
+    set_name(v, &names, NAME_SHOWN);
+}
+
 static void t_destination(const void *row, struct value *v)
 {
     ROW(ft_row_transfer);
@@ -1105,6 +1139,7 @@ static const struct field transfer_fields[] = {
     {"@file", F_VIRTUAL, t_file_column},
     {"@remote", F_VIRTUAL, t_remote},
     {"@destination", F_VIRTUAL, t_destination},
+    {"@name", F_VIRTUAL | F_SPARSE, t_rname_shown},
     {"@method", F_VIRTUAL, t_method_column},
     {"@confidence", F_VIRTUAL | F_UPPER, t_confidence_column},
 };
@@ -1113,6 +1148,7 @@ static const struct ft_view_column file_columns[] = {
     {"FILE", "@file", false},
     {"PROCESS", "process.name", false},
     {"DESTINATION", "@destination", false},
+    {"NAME", "@name", false},
     {"BYTES", "transfer.bytes_sent", true},
     {"METHOD", "@method", false},
     {"CONFIDENCE", "@confidence", false},
@@ -1124,6 +1160,7 @@ static const struct ft_view_column transfer_columns[] = {
     {"PROCESS", "process.name", false},
     {"FILE", "@file", false},
     {"REMOTE", "@remote", false},
+    {"NAME", "@name", false},
     {"BYTES", "transfer.bytes_sent", true},
     {"METHOD", "@method", false},
     {"CONFIDENCE", "@confidence", false},
