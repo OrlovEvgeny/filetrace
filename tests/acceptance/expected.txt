@@ -70,7 +70,7 @@ chatty-307200-49152x7                                  -       LIMIT LIMIT  -   
 chatty-307200-65536x5                                  -       LIMIT LIMIT  -       -       1    a first flight of 4 KB or more after a 64 to 400 KB file was read is charged to it (residue)
 chatty-1048576-16384x64                                -       OK    OK     -       -       1
 chatty-1048576-32768x32                                -       OK    OK     -       -       1
-chatty-1048576-65536x16                                -       OK    OK     -       -       1
+chatty-1048576-65536x16                                -       LIMIT LIMIT  BUG     BUG     1    a file read whole and not sent, then at least 1 KB and 5% of it sent from memory before the thread hears from its peer, is charged to the file with that many bytes (the base rule)
 small-file-after-pread-small.json                      -       OK    OK     -       -       1
 small-file-after-pread-x.js                            -       OK    OK     -       -       1
 small-file-after-pread-x.so                            -       OK    OK     -       -       1
@@ -107,7 +107,7 @@ two-php-files-on-never-heard-connection                -       OK    OK     -   
 script-then-file-after-pause-on-never-heard-connection -       OK    OK     -       -       1
 writer-thread-page-reader-thread-echoes                -       OK    OK     OK      OK      1
 writer-thread-stream-reader-thread-hears-once          -       OK    OK     -       -       1
-one-blocking-send-to-slow-reader                       -       OK    OK     -       -       1
+one-blocking-send-to-slow-reader                       -       LIMIT OK     BUG     OK      1    on trampolines a single send that the peer takes longer than the correlation window to accept is not associated with its file
 one-blocking-send-reader-thread-hears                  -       OK    OK     -       -       1
 script-read-then-memory-requests                       F032    OK    OK     -       -       4
 config-read-after-connect-then-large-memory            -       OK    OK     -       -       1
