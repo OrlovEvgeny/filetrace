@@ -1449,6 +1449,7 @@ void ft_top_subject_of(const struct ft_top_transfer *t, struct ft_top_subject *s
         .remote = &t->remote,
         .remote_text = t->remote_text,
         .host = d->host_state == FT_TOP_HOST_NAMED ? d->host : nullptr,
+        .names = t->names,
         .is_public = t->is_public,
         .method = t->method,
         .confidence = t->confidence,

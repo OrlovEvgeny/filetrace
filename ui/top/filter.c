@@ -2,6 +2,7 @@
 
 #include "filetrace/format.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -463,8 +464,24 @@ static bool rate_holds(const struct term *t, uint64_t rate)
     }
 }
 
+/* The TLS name and every looked-up one; a bare word tests them as substrings alone. */
+static bool names_hold(const struct term *t, const struct ft_remote_names *n, bool bare)
+{
+    if (!n)
+        return false;
+    if (n->tls[0] && (bare ? contains(n->tls, t->needle, t->needle_len) : text_holds(t, n->tls)))
+        return true;
+    for (uint32_t i = 0; i < n->listed; i++) {
+        if (bare ? contains(n->resolved[i], t->needle, t->needle_len)
+                 : text_holds(t, n->resolved[i]))
+            return true;
+    }
+    return false;
+}
+
 static bool dest_holds(const struct term *t, const struct ft_endpoint *remote, bool is_public,
-                       const char *remote_text, const char *host)
+                       const char *remote_text, const char *host,
+                       const struct ft_remote_names *names)
 {
     bool known = remote && remote->family != 0;
     switch (t->test) {
@@ -475,7 +492,7 @@ static bool dest_holds(const struct term *t, const struct ft_endpoint *remote, b
     case TEST_PREFIX:
         return known && ft_addr_in_prefix(&t->net, t->bits, remote);
     default:
-        return text_holds(t, host) || text_holds(t, remote_text);
+        return text_holds(t, host) || text_holds(t, remote_text) || names_hold(t, names, false);
     }
 }
 
@@ -500,7 +517,7 @@ static bool term_holds(const struct term *t, const struct ft_top_subject *s)
     case FT_TOP_FIELD_FILE:
         return text_holds(t, s->path);
     case FT_TOP_FIELD_DEST:
-        return dest_holds(t, s->remote, s->is_public, s->remote_text, s->host);
+        return dest_holds(t, s->remote, s->is_public, s->remote_text, s->host, s->names);
     case FT_TOP_FIELD_METHOD:
         return s->method == t->code;
     case FT_TOP_FIELD_CONF:
@@ -514,7 +531,7 @@ static bool term_holds(const struct term *t, const struct ft_top_subject *s)
                contains(s->script, t->needle, t->needle_len) ||
                contains(s->path, t->needle, t->needle_len) ||
                contains(s->remote_text, t->needle, t->needle_len) ||
-               contains(s->host, t->needle, t->needle_len) ||
+               contains(s->host, t->needle, t->needle_len) || names_hold(t, s->names, true) ||
                contains(ft_method_name((enum ft_method)s->method), t->needle, t->needle_len) ||
                contains(ft_confidence_name((enum ft_confidence)s->confidence), t->needle,
                         t->needle_len);
@@ -548,7 +565,7 @@ static bool leader_term_holds(const struct term *t, const struct ft_top_leader_s
         return text_holds(t, s->text);
     case FT_TOP_FIELD_DEST:
         return dest_holds(t, s->remote, s->remote && !ft_addr_is_private(s->remote), s->remote_text,
-                          s->host);
+                          s->host, nullptr);
     case FT_TOP_FIELD_METHOD:
         return s->method == t->code;
     case FT_TOP_FIELD_CONF:
@@ -611,6 +628,28 @@ void ft_top_filter_pushdown(const struct ft_top_filter *f, struct ft_query *q)
         q->method = t->code;
     if ((t = sole_term(f, FT_TOP_FIELD_CONF)))
         q->confidence = t->code;
+}
+
+/* Whether the term's text has a character no address text has, so that only a name holds it. */
+static bool only_names_hold(const struct term *t)
+{
+    return (t->test == TEST_TEXT || t->test == TEST_GLOB) &&
+           t->needle[strspn(t->needle, "0123456789abcdef.:[]*?")] != '\0';
+}
+
+void ft_top_filter_pushdown_name(const struct ft_top_filter *f, struct ft_query *q)
+{
+    const struct term *t;
+    char pattern[FT_NAME_MAX + 2];
+
+    if (!f || !(t = sole_term(f, FT_TOP_FIELD_DEST)) || !only_names_hold(t))
+        return;
+    /* The agent matches the whole name, so a substring takes a '*' on each side. */
+    if (t->test == TEST_TEXT)
+        snprintf(pattern, sizeof(pattern), "*%s*", t->needle);
+    else
+        snprintf(pattern, sizeof(pattern), "%s", t->value);
+    ft_name_pattern(pattern, q->remote_name);
 }
 
 void ft_top_filter_leader_path(const char *text, char *out, size_t size)

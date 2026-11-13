@@ -210,6 +210,8 @@ static void scope_transfer(struct ft_query *q, const struct ft_query *scope)
     scope_process(q, scope);
     q->remote = scope->remote;
     q->remote_host_bits = scope->remote_host_bits;
+    copy_text(q->remote_name, sizeof(q->remote_name), scope->remote_name,
+              sizeof(scope->remote_name));
     q->method = scope->method;
     q->confidence = scope->confidence;
 }

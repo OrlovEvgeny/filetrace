@@ -12,8 +12,8 @@ struct ft_top_source;
 
 struct ft_top_request {
     uint64_t delay_ns; /* between the starts of two refreshes */
-    /* The terms the agent applies: pid, uid, process, script, remote, method and confidence.
-     * Kind 0 selects everything; ft_top_request_init() sets a scope that does too. */
+    /* The terms the agent applies: pid, uid, process, script, remote and its name, method and
+     * confidence. Kind 0 selects everything; ft_top_request_init() sets a scope that does too. */
     struct ft_query scope;
     bool live;    /* statistics, active transfers and processes */
     bool totals;  /* lifetime bytes per destination, on the first refresh and every fifth after */

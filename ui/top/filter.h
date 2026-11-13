@@ -39,8 +39,9 @@ struct ft_top_subject {
     const char *script; /* "" when none */
     const char *path;
     const struct ft_endpoint *remote;
-    const char *remote_text; /* the address and port as printed */
-    const char *host;        /* nullptr when no name is known */
+    const char *remote_text;             /* the address and port as printed */
+    const char *host;                    /* nullptr when no name is known */
+    const struct ft_remote_names *names; /* the process's names of it; nullptr when none */
     bool is_public;
     uint8_t method;     /* enum ft_method */
     uint8_t confidence; /* enum ft_confidence */
@@ -81,6 +82,12 @@ bool ft_top_filter_match_leader(const struct ft_top_filter *f,
 
 /* Copies into q the terms the agent applies with the same meaning; the rest stay client-side. */
 void ft_top_filter_pushdown(const struct ft_top_filter *f, struct ft_query *q);
+
+/*
+ * Copies into q's remote_name a single dest: term that only a name can hold. The agent knows the
+ * names processes used, not those of reverse lookups, so it is for when those are off.
+ */
+void ft_top_filter_pushdown_name(const struct ft_top_filter *f, struct ft_query *q);
 
 /* The glob of a Leaders filter's one file: term, when that term is positive and a glob. */
 void ft_top_filter_leader_path(const char *text, char *out, size_t size);

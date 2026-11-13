@@ -211,6 +211,8 @@ static void make_request(struct ft_top_request *req, const struct ft_top_options
     req->live = true;
     req->totals = opt->mode == FT_TOP_DESTINATIONS;
     ft_top_filter_pushdown(ft_top_filter_get(m, opt->mode), &req->scope);
+    if (!ft_top_resolve_of(m))
+        ft_top_filter_pushdown_name(ft_top_filter_get(m, opt->mode), &req->scope);
 }
 
 /* Returns 1 with a frame taken, 0 when none came within the time, -1 when interrupted. */
