@@ -52,6 +52,13 @@ sudo "./filetrace-$v-linux-$a/bin/filetrace" top
 Run this way, it shows activity from the moment it starts; the installed agent
 below keeps the history between runs and feeds the exporters.
 
+Where `filetrace-agent` is already running, `top` shows what that agent
+collects, and when the agent is from an older release that speaks another
+protocol, `top` reports "The agent speaks a different protocol version".
+Upgrade the installed package to the archive's version, or stop the service
+(`sudo systemctl stop filetrace-agent`) and start `top` again to have it
+collect by itself.
+
 ## Install
 
 ```sh
