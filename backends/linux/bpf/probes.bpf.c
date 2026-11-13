@@ -3,6 +3,7 @@
 #define FT_COPY16(dst, ptr, field) __builtin_memcpy(dst, &(ptr)->field, 16)
 
 #include "common.bpf.h"
+#include "lookups.bpf.h"
 
 /* Sends are counted as they return, so a window is always up to date. */
 static __always_inline bool carry_settle(void *map, __u64 sk, __u64 now)

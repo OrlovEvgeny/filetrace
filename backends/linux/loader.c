@@ -58,6 +58,9 @@ static const struct ft_probe_def kprobe_defs[] = {
 
 static_assert(FT_ARRAY_LEN(trampoline_defs) <= FT_LINUX_MAX_PROBES);
 static_assert(FT_ARRAY_LEN(kprobe_defs) <= FT_LINUX_MAX_PROBES);
+static_assert(FT_BPF_LOOKUP_ADDRS == FT_LOOKUP_ADDRS);
+/* A name longer than a host name's 253 bytes arrives longer, never cut to a valid one. */
+static_assert(FT_BPF_LOOKUP_NAME > FT_NAME_MAX);
 
 static const struct ft_probe_set trampoline_set = {
     .kind = FT_PROBES_TRAMPOLINE,
@@ -76,10 +79,13 @@ static const struct ft_probe_set kprobe_set = {
 };
 
 static char last_message[512];
+static char failed_program[64]; /* the program the kernel refused last */
 
 static int on_libbpf_print(enum libbpf_print_level level, const char *fmt, va_list ap)
 {
     char line[1024];
+    char program[64];
+    int end = 0;
 
     if (level == LIBBPF_DEBUG)
         return 0;
@@ -87,6 +93,8 @@ static int on_libbpf_print(enum libbpf_print_level level, const char *fmt, va_li
     line[strcspn(line, "\n")] = '\0';
     if (level == LIBBPF_WARN && strncmp(line, "libbpf: ", 8) == 0)
         ft_strlcpy(last_message, line + 8, sizeof(last_message));
+    if (sscanf(line, "libbpf: prog '%63[^']': failed to load%n", program, &end) == 1 && end)
+        ft_strlcpy(failed_program, program, sizeof(failed_program));
     ft_log(FT_LOG_DEBUG, "%s", line);
     return 0;
 }
@@ -179,9 +187,15 @@ static bool enabled_file_probes(const struct ft_probe_set *set,
     return false;
 }
 
+/* Whether the probes of getaddrinfo are loaded. */
+static bool lookups_wanted(const struct ft_backend_config *cfg)
+{
+    return cfg->lookup_names && cfg->mode >= FT_MODE_STANDARD && ft_sysinfo_host_pid_namespace();
+}
+
 static struct bpf_object *open_object(const struct ft_probe_set *set,
                                       const struct ft_backend_config *cfg,
-                                      const bool enabled[FT_LINUX_MAX_PROBES])
+                                      const bool enabled[FT_LINUX_MAX_PROBES], bool lookups)
 {
     struct bpf_object_open_opts opts = {.sz = sizeof(opts), .object_name = "filetrace"};
     struct bpf_object *obj = bpf_object__open_mem(set->object, set->object_size, &opts);
@@ -193,11 +207,18 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
     struct bpf_map *agg_a = bpf_object__find_map_by_name(obj, "agg_a");
     struct bpf_map *agg_b = bpf_object__find_map_by_name(obj, "agg_b");
     struct bpf_map *known = bpf_object__find_map_by_name(obj, "known_files");
-    if (!bpf_cfg || !events || !agg_a || !agg_b || !known) {
+    struct bpf_program *lookup = bpf_object__find_program_by_name(obj, "ft_getaddrinfo");
+    struct bpf_program *lookup_return =
+        bpf_object__find_program_by_name(obj, "ft_getaddrinfo_return");
+    struct bpf_map *calls = bpf_object__find_map_by_name(obj, "lookup_calls");
+    if (!bpf_cfg || !events || !agg_a || !agg_b || !known || !lookup || !lookup_return || !calls) {
         bpf_object__close(obj);
         errno = EINVAL;
         return nullptr;
     }
+    bpf_program__set_autoload(lookup, lookups);
+    bpf_program__set_autoload(lookup_return, lookups);
+    bpf_map__set_autocreate(calls, lookups);
 
     uint32_t queue = round_up_pow2(cfg->queue_bytes, (uint32_t)sysconf(_SC_PAGESIZE));
     bpf_cfg->corr_window_ns = cfg->corr_window_ns;
@@ -221,10 +242,10 @@ static struct bpf_object *open_object(const struct ft_probe_set *set,
 }
 
 static int load_with(const struct ft_probe_set *set, const struct ft_backend_config *cfg,
-                     const bool enabled[FT_LINUX_MAX_PROBES], struct bpf_object **out,
+                     const bool enabled[FT_LINUX_MAX_PROBES], bool lookups, struct bpf_object **out,
                      int *aging_error)
 {
-    struct bpf_object *obj = open_object(set, cfg, enabled);
+    struct bpf_object *obj = open_object(set, cfg, enabled, lookups);
     if (!obj)
         return errno ? -errno : -EINVAL;
 
@@ -232,7 +253,7 @@ static int load_with(const struct ft_probe_set *set, const struct ft_backend_con
     if (err) {
         /* Without the aging iterator, a window is judged at its connection's next event. */
         bpf_object__close(obj);
-        obj = open_object(set, cfg, enabled);
+        obj = open_object(set, cfg, enabled, lookups);
         struct bpf_program *aging =
             obj ? bpf_object__find_program_by_name(obj, "ft_carries_aged") : nullptr;
         if (!aging) {
@@ -294,6 +315,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     memset(out, 0, sizeof(*out));
     out->set = set;
     last_message[0] = '\0';
+    failed_program[0] = '\0';
 
     struct btf *vmlinux = btf__load_vmlinux_btf();
     for (size_t i = 0; i < set->count; i++) {
@@ -323,7 +345,15 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
     }
     btf__free(vmlinux);
 
-    int err = wanted ? load_with(set, cfg, enabled, &out->obj, &out->aging_error) : -ENOENT;
+    bool lookups = lookups_wanted(cfg);
+    int err =
+        wanted ? load_with(set, cfg, enabled, lookups, &out->obj, &out->aging_error) : -ENOENT;
+    if (err && lookups && strncmp(failed_program, "ft_getaddrinfo", 14) == 0) {
+        /* Without the probes of getaddrinfo, connections have no looked-up names. */
+        out->lookups_error = -err;
+        lookups = false;
+        err = load_with(set, cfg, enabled, false, &out->obj, &out->aging_error);
+    }
     if (err && wanted > 1) {
         /* One rejected probe fails the whole object: find which ones load. */
         int first_error = err;
@@ -336,7 +366,7 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
             struct bpf_object *trial = nullptr;
 
             only[i] = true;
-            int trial_err = load_with(set, cfg, only, &trial, nullptr);
+            int trial_err = load_with(set, cfg, only, false, &trial, nullptr);
             if (trial_err) {
                 enabled[i] = false;
                 out->status[i] = (struct ft_probe_status){FT_PROBE_LOAD_FAILED, -trial_err};
@@ -346,8 +376,10 @@ static int load_set(const struct ft_probe_set *set, const struct ft_backend_conf
             }
         }
         out->aging_error = 0;
-        err = usable ? load_with(set, cfg, enabled, &out->obj, &out->aging_error) : first_error;
+        err = usable ? load_with(set, cfg, enabled, lookups, &out->obj, &out->aging_error)
+                     : first_error;
     }
+    out->lookups = lookups && !err;
     if (err) {
         for (size_t i = 0; i < set->count; i++) {
             if (enabled[i])
@@ -578,6 +610,28 @@ static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, con
     emit(b, &ev);
 }
 
+static void on_lookup(struct ft_backend *b, const struct ft_bpf_ev_lookup *e)
+{
+    char name[FT_BPF_LOOKUP_NAME];
+    struct ft_event ev = {
+        .type = FT_EVENT_NAME_LOOKUP,
+        .ts_ns = e->hdr.ts_ns,
+        .lookup =
+            {
+                .pid = e->pid,
+                .tid = e->tid,
+                .name = name,
+                .addr_count = e->count < FT_LOOKUP_ADDRS ? e->count : FT_LOOKUP_ADDRS,
+            },
+    };
+
+    memcpy(name, e->name, sizeof(name));
+    name[sizeof(name) - 1] = '\0';
+    for (uint32_t i = 0; i < ev.lookup.addr_count; i++)
+        ft_endpoint_set(&ev.lookup.addrs[i], (e->inet6 >> i) & 1, e->addrs[i], 0);
+    emit(b, &ev);
+}
+
 static void on_sock_state(struct ft_backend *b, const struct ft_bpf_ev_sock *e)
 {
     struct ft_event ev = {
@@ -694,6 +748,10 @@ static int on_ring_event(void *ctx, void *data, size_t size)
             size_t len = e->len < size - sizeof(*e) ? e->len : size - sizeof(*e);
             ft_linux_php_script_seen(b->php, e->id, e->tgid, e->hash, (const char *)(e + 1), len);
         }
+        break;
+    case FT_BPF_EV_LOOKUP:
+        if (size >= sizeof(struct ft_bpf_ev_lookup))
+            on_lookup(b, data);
         break;
     default:
         break;
