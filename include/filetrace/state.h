@@ -3,6 +3,7 @@
 
 #include "filetrace/event.h"
 #include "filetrace/metrics.h"
+#include "filetrace/names.h"
 #include "filetrace/process.h"
 #include "filetrace/table.h"
 #include "filetrace/wire.h"
@@ -18,6 +19,12 @@ struct ft_state_config {
     size_t max_metric_series; /* label sets of the exported counters */
     size_t event_log_bytes;   /* 0: recent events are not kept */
     size_t leader_entries;    /* sizes the tables of the rankings; 0: no rankings */
+
+    /* Names of remote ends, as the processes that connect to them used them; a size of 0: none. */
+    bool names;
+    size_t max_names;
+    size_t max_name_lookups;  /* one per process and address */
+    uint64_t name_max_age_ns; /* a lookup older than this names no connection; 0: no limit */
 
     /* An inferred association is reported only at or above both thresholds. */
     uint64_t inferred_min_bytes;
@@ -65,6 +72,14 @@ struct ft_rate {
 void ft_rate_add(struct ft_rate *r, uint64_t now_ns, uint64_t bytes);
 uint64_t ft_rate_per_second(const struct ft_rate *r, uint64_t now_ns);
 
+#define FT_NAME_GENERATIONS 4
+
+/* A process a forked one descends from: what it looked up before the fork names the child too. */
+struct ft_ancestor {
+    uint64_t image;
+    uint64_t before_ns;
+};
+
 struct ft_process {
     uint32_t pid;
     uint32_t ppid;
@@ -95,6 +110,10 @@ struct ft_process {
     uint64_t text_ns;   /* when they were read during traffic; 0: not since the last exec or fork */
     uint64_t args_hash; /* of the arguments they were made from */
 
+    uint64_t
+        image; /* one program run by the process: another after an exec, or under a reused PID */
+    struct ft_ancestor ancestors[FT_NAME_GENERATIONS]; /* nearest first; none after an exec */
+
     /* Per-query working values. */
     uint64_t q_tx;
     uint64_t q_rx;
@@ -109,6 +128,16 @@ struct ft_process {
     uint32_t q_own_files;
     uint32_t q_own_transfers;
     uint32_t q_own_active_transfers;
+};
+
+/* The names of a connection's remote end, each held in the table of names. */
+struct ft_name_binding {
+    uint32_t tls; /* the TLS server name; 0: none */
+    /* Looked up to the address, the connecting thread's latest first. */
+    uint32_t resolved[FT_RESOLVED_NAMES];
+    uint16_t count; /* how many were looked up: listed or more */
+    uint8_t listed;
+    uint8_t pad;
 };
 
 struct ft_socket {
@@ -127,6 +156,7 @@ struct ft_socket {
     struct ft_rate rx_rate;
     bool many_remotes;
     char comm[FT_COMM_MAX];
+    struct ft_name_binding names; /* bound when it connects; a connectionless one has none */
 
     uint64_t q_attributed;
 };
@@ -153,6 +183,7 @@ struct ft_flow {
     struct ft_rate tx_rate;
     struct ft_rate rx_rate;
     char comm[FT_COMM_MAX];
+    struct ft_name_binding names; /* of a connectionless socket's peer, bound when first seen */
 };
 
 struct ft_file {
@@ -230,6 +261,8 @@ struct ft_state {
     struct ft_table *transfers; /* key: struct ft_transfer_key */
     struct ft_evlog *logs[FT_LOG_CLASS_COUNT];
     struct ft_leaders *leaders; /* nullptr when rankings are off */
+    struct ft_names *names;     /* nullptr when names are off, as is lookups */
+    struct ft_table *lookups;   /* what each process image looked up to each address */
     struct ft_series *series;
     struct ft_row_event *record;          /* the record being made */
     struct ft_process_text *process_text; /* what read_process_text last read */
@@ -240,6 +273,7 @@ struct ft_state {
     uint64_t clock_ns; /* the server's clock at the latest sweep; 0 before the first */
     uint64_t next_transfer_id;
     uint64_t next_flow_id;
+    uint64_t next_image;
     uint64_t next_record_seq;
     uint64_t last_record_ns;
     uint64_t events;
@@ -271,6 +305,34 @@ void ft_process_text_refresh(struct ft_state *st, struct ft_process *p, uint64_t
 void ft_process_text_inherit(struct ft_process *child, const struct ft_process *parent);
 
 void ft_process_text_clear(struct ft_process *p);
+
+/* The tables of names and lookups, when the configuration asks for names. */
+bool ft_state_names_create(struct ft_state *st);
+void ft_state_names_destroy(struct ft_state *st);
+
+/* Keeps the name under each address a lookup returned, for the process as it is running now. */
+void ft_lookup_record(struct ft_state *st, const struct ft_process *p, const struct ft_ev_lookup *e,
+                      uint64_t ts_ns);
+
+/*
+ * Gives a connection the names its process looked up to the remote address, and those its
+ * ancestors looked up before they forked; tid is the connecting thread, 0 when unknown.
+ */
+void ft_binding_make(struct ft_state *st, struct ft_name_binding *b, const struct ft_process *p,
+                     const struct ft_endpoint *remote, uint32_t tid, uint64_t now_ns);
+
+/* The latest TLS server name of a connection is the one it has. */
+void ft_binding_set_tls(struct ft_state *st, struct ft_name_binding *b, const char *name);
+
+void ft_binding_clear(struct ft_state *st, struct ft_name_binding *b);
+
+/* The names of a socket's remote end: its own, or its only peer's when it is connectionless. */
+const struct ft_name_binding *ft_state_socket_names(const struct ft_state *st,
+                                                    const struct ft_socket *s);
+
+/* out points into the table of names. */
+void ft_binding_names(const struct ft_state *st, const struct ft_name_binding *b,
+                      struct ft_remote_names *out);
 
 /* Returns false for an association that is not reported. */
 bool ft_state_classify(const struct ft_state *st, const struct ft_transfer *t,

@@ -17,6 +17,9 @@ void ft_state_config_defaults(struct ft_state_config *cfg)
         .max_metric_series = 2048,
         .event_log_bytes = 1024 * 1024,
         .leader_entries = 512,
+        .names = true,
+        .max_names = 4096,
+        .max_name_lookups = 16384,
         .inferred_min_bytes = 1024,
         .inferred_min_permille = 50,
         .min_confidence = FT_CONF_INFERRED,
@@ -85,6 +88,18 @@ static void release_process(void *value, void *ctx)
     ft_process_text_clear(value);
 }
 
+static void release_socket(void *value, void *ctx)
+{
+    struct ft_socket *s = value;
+    ft_binding_clear(ctx, &s->names);
+}
+
+static void release_flow(void *value, void *ctx)
+{
+    struct ft_flow *f = value;
+    ft_binding_clear(ctx, &f->names);
+}
+
 struct ft_state *ft_state_create(const struct ft_state_config *cfg)
 {
     struct ft_state *st = calloc(1, sizeof(*st));
@@ -120,6 +135,7 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
             ft_leaders_create(&(struct ft_leaders_config){.entries = cfg->leader_entries});
         ok = ok && st->leaders;
     }
+    ok = ok && ft_state_names_create(st);
     if (!ok) {
         ft_state_destroy(st);
         return nullptr;
@@ -127,6 +143,8 @@ struct ft_state *ft_state_create(const struct ft_state_config *cfg)
     ft_table_on_evict(st->files, release_file, nullptr);
     ft_table_on_evict(st->processes, release_process, nullptr);
     ft_table_on_evict(st->transfers, release_transfer, nullptr);
+    ft_table_on_evict(st->sockets, release_socket, st);
+    ft_table_on_evict(st->flows, release_flow, st);
     return st;
 }
 
@@ -139,6 +157,7 @@ void ft_state_destroy(struct ft_state *st)
     ft_table_destroy(st->flows);
     ft_table_destroy(st->files);
     ft_table_destroy(st->transfers);
+    ft_state_names_destroy(st);
     for (size_t i = 0; i < FT_LOG_CLASS_COUNT; i++)
         ft_evlog_destroy(st->logs[i]);
     ft_leaders_destroy(st->leaders);
@@ -174,6 +193,8 @@ static struct ft_process *process_record(struct ft_state *st, const struct ft_ev
         ft_process_text_clear(p);
         memset(p, 0, sizeof(*p));
     }
+    if (!p->image)
+        p->image = ++st->next_image;
 
     p->pid = e->pid;
     p->ppid = e->ppid;
@@ -204,6 +225,7 @@ static struct ft_process *process_ensure(struct ft_state *st, uint32_t pid)
     }
     p = ft_table_insert(st->processes, &pid, nullptr);
     p->pid = pid;
+    p->image = ++st->next_image;
     return p;
 }
 
@@ -216,16 +238,25 @@ static bool ingest_exec(struct ft_state *st, const struct ft_ev_process *e)
     if (e->exe[0])
         ft_strlcpy(p->exe, e->exe, sizeof(p->exe));
     ft_process_text_exec(st, p, e);
+    /* The program that looked names up is gone, and what its parents looked up with it. */
+    p->image = ++st->next_image;
+    memset(p->ancestors, 0, sizeof(p->ancestors));
     return !p->excluded;
 }
 
-static bool ingest_fork(struct ft_state *st, const struct ft_ev_process *e)
+static bool ingest_fork(struct ft_state *st, const struct ft_event *ev)
 {
+    const struct ft_ev_process *e = &ev->process;
     struct ft_process *p = process_record(st, e);
     const struct ft_process *parent = ft_table_find(st->processes, &e->ppid);
     if (!p->exe[0] && parent)
         ft_strlcpy(p->exe, parent->exe, sizeof(p->exe));
     ft_process_text_inherit(p, parent);
+    if (parent) {
+        p->ancestors[0] = (struct ft_ancestor){.image = parent->image, .before_ns = ev->ts_ns};
+        memcpy(&p->ancestors[1], parent->ancestors,
+               (FT_NAME_GENERATIONS - 1) * sizeof(p->ancestors[0]));
+    }
     return !p->excluded;
 }
 
@@ -323,6 +354,12 @@ static bool ingest_socket(struct ft_state *st, const struct ft_event *ev)
     }
     if (owner)
         socket_set_owner(s, owner);
+    /* Each connect is a connection of its own; nothing later renames it. */
+    if (e->state == FT_SOCK_CONNECTING) {
+        ft_binding_clear(st, &s->names);
+        if (owner)
+            ft_binding_make(st, &s->names, owner, &s->remote, e->tid, ev->ts_ns);
+    }
     return true;
 }
 
@@ -379,6 +416,9 @@ static bool ingest_flow(struct ft_state *st, const struct ft_event *ev)
         f->remote = e->remote;
         f->first_ns = e->first_ns;
         ft_strlcpy(f->comm, s->comm, sizeof(f->comm));
+        /* A connectionless socket has a peer per flow, so a name per flow. */
+        if (e->proto != FT_PROTO_TCP)
+            ft_binding_make(st, &f->names, p, &f->remote, 0, ev->ts_ns);
     }
     f->local = s->local;
     f->last_ns = ev->ts_ns;
@@ -578,6 +618,22 @@ static bool ingest_loss(struct ft_state *st, const struct ft_event *ev)
     return true;
 }
 
+static void ingest_lookup(struct ft_state *st, const struct ft_event *ev)
+{
+    if (!st->names || !ev->lookup.pid)
+        return;
+    const struct ft_process *p = process_ensure(st, ev->lookup.pid);
+    if (!p->excluded)
+        ft_lookup_record(st, p, &ev->lookup, ev->ts_ns);
+}
+
+static void ingest_tls_name(struct ft_state *st, const struct ft_ev_tls_name *e)
+{
+    struct ft_socket *s = st->names ? ft_table_find(st->sockets, &e->sock_id) : nullptr;
+    if (s)
+        ft_binding_set_tls(st, &s->names, e->name);
+}
+
 static enum ft_log_class record_class(enum ft_record_type type)
 {
     switch (type) {
@@ -651,6 +707,16 @@ static void record_process_text(struct ft_row_event *r, const struct ft_process 
     r->flags |= FT_EVENT_PROCESS_TEXT;
 }
 
+/* A record keeps the one name its remote end had when it was made. */
+static void record_name(struct ft_state *st, struct ft_row_event *r,
+                        const struct ft_name_binding *b)
+{
+    struct ft_remote_names names;
+
+    ft_binding_names(st, b, &names);
+    ft_row_event_set_name(r, ft_remote_name_source(&names), ft_remote_name(&names));
+}
+
 static void record_process(struct ft_state *st, enum ft_record_type type, const struct ft_event *ev)
 {
     struct ft_row_event *r = record_begin(st, type, ev->ts_ns);
@@ -698,7 +764,24 @@ static void record_socket(struct ft_state *st, const struct ft_event *ev)
     r->local = s->local;
     r->remote = s->remote;
     record_owner(st, r, s->pid);
+    record_name(st, r, ft_state_socket_names(st, s));
     record_commit(st);
+}
+
+/* The names of the peer the bytes went to or came from. */
+static const struct ft_name_binding *
+flow_names(const struct ft_state *st, const struct ft_ev_flow *e, const struct ft_socket *s)
+{
+    struct ft_flow_key key;
+
+    if (e->proto == FT_PROTO_TCP)
+        return s ? &s->names : nullptr;
+    memset(&key, 0, sizeof(key));
+    key.sock_id = e->sock_id;
+    key.pid = e->pid;
+    key.remote = e->remote;
+    const struct ft_flow *f = ft_table_find(st->flows, &key);
+    return f ? &f->names : nullptr;
 }
 
 static void record_network(struct ft_state *st, enum ft_record_type type, const struct ft_event *ev,
@@ -716,6 +799,7 @@ static void record_network(struct ft_state *st, enum ft_record_type type, const 
     r->remote = ev->flow.remote;
     r->bytes = bytes;
     record_owner(st, r, ev->flow.pid);
+    record_name(st, r, flow_names(st, &ev->flow, s));
     record_commit(st);
 }
 
@@ -776,6 +860,8 @@ static void record_transfer(struct ft_state *st, const struct ft_event *ev)
     if (f)
         record_file(r, f);
     record_process_text(r, ft_table_find(st->processes, &e->pid), e->script);
+    if (s)
+        record_name(st, r, ft_state_socket_names(st, s));
     record_commit(st);
 }
 
@@ -799,7 +885,7 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev)
             record_process(st, FT_REC_PROCESS_EXEC, ev);
         break;
     case FT_EVENT_PROCESS_FORK:
-        if (ingest_fork(st, &ev->process))
+        if (ingest_fork(st, ev))
             record_process(st, FT_REC_PROCESS_FORK, ev);
         break;
     case FT_EVENT_PROCESS_EXIT:
@@ -829,7 +915,10 @@ void ft_state_ingest(struct ft_state *st, const struct ft_event *ev)
             record_loss(st, ev);
         break;
     case FT_EVENT_NAME_LOOKUP:
+        ingest_lookup(st, ev);
+        break;
     case FT_EVENT_TLS_NAME:
+        ingest_tls_name(st, &ev->tls_name);
         break;
     }
 }

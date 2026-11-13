@@ -24,6 +24,7 @@ int main(void)
         {"leaders", test_leaders},
         {"names", test_names},
         {"wire", test_wire},
+        {"binding", test_binding},
         {"top_model", test_top_model},
         {"top_filter", test_top_filter},
         {"tui", test_tui},

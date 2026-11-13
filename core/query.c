@@ -144,6 +144,15 @@ static size_t candidates_finish(struct candidates *c, const struct ft_query *q)
     return q->limit && q->limit < c->count ? q->limit : c->count;
 }
 
+static size_t pack_names(const struct ft_state *st, const struct ft_name_binding *b,
+                         struct ft_row_names *fixed, char *buf, size_t size)
+{
+    struct ft_remote_names names;
+
+    ft_binding_names(st, b, &names);
+    return ft_remote_names_pack(&names, fixed, buf, size);
+}
+
 static bool socket_is_open(const struct ft_state *st, const struct ft_socket *s, uint64_t now_ns)
 {
     enum ft_sock_state state = ft_state_socket_state(st, s, now_ns);
@@ -446,7 +455,9 @@ static void query_connections(struct ft_state *st, const struct ft_query *q, uin
             .remote = s->remote,
         };
         ft_strlcpy(row.comm, s->comm, sizeof(row.comm));
-        emit(ctx, FT_MSG_ROW_CONNECTION, &row, sizeof(row));
+        size_t names =
+            pack_names(st, ft_state_socket_names(st, s), &row.names, row.text, sizeof(row.text));
+        emit(ctx, FT_MSG_ROW_CONNECTION, &row, offsetof(struct ft_row_connection, text) + names);
     }
     end->rows = (uint32_t)n;
     free(c.items);
@@ -533,7 +544,11 @@ static void query_flows(struct ft_state *st, const struct ft_query *q, uint64_t 
             .remote = f->remote,
         };
         ft_strlcpy(row.comm, f->comm, sizeof(row.comm));
-        emit(ctx, FT_MSG_ROW_FLOW, &row, sizeof(row));
+        const struct ft_socket *s =
+            f->proto == FT_PROTO_TCP ? ft_table_find(st->sockets, &f->sock_id) : nullptr;
+        size_t names =
+            pack_names(st, s ? &s->names : &f->names, &row.names, row.text, sizeof(row.text));
+        emit(ctx, FT_MSG_ROW_FLOW, &row, offsetof(struct ft_row_flow, text) + names);
     }
     end->rows = (uint32_t)n;
     free(c.items);
@@ -665,13 +680,16 @@ static void emit_transfer(struct ft_state *st, const struct candidate *cand, uin
         ft_strlcpy(row->exe, p->exe, sizeof(row->exe));
     }
     const char *script = request_script ? request_script : (p ? p->script : nullptr);
+    size_t used = strnlen(row->path, FT_PATH_MAX - 1) + 1;
     if ((p && (p->command_line || p->cwd)) || script) {
         struct ft_process_strings text = {p ? p->command_line : nullptr, p ? p->cwd : nullptr,
                                           script};
-        size_t lead = strnlen(row->path, FT_PATH_MAX - 1) + 1;
-        ft_process_strings_pack(row->path + lead, sizeof(row->path) - lead, &text);
+        used += ft_process_strings_pack(row->path + used, FT_PROCESS_TEXT_MAX, &text);
         row->flags |= FT_XFER_PROCESS_TEXT;
     }
+    if (s)
+        pack_names(st, ft_state_socket_names(st, s), &row->names, row->path + used,
+                   sizeof(row->path) - used);
     emit(ctx, FT_MSG_ROW_TRANSFER, row, ft_row_transfer_size(row));
 }
 
