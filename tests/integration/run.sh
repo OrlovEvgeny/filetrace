@@ -1512,6 +1512,14 @@ if [ -n "$dynamic" ]; then
     else
         settle
         expect "names: a C library loaded at run time" "$(name_of loaded.bin)" alone.ft.test
+        # The same, two seconds after the process started, long after any look at its start.
+        mkdir -p "$work/loaded-late"
+        cp "$work/loaded/libc.so.6" "$work/loaded-late/libc.so.6"
+        named "$work/loaded/ft_workload" dlopensend "$work/loaded-late/libc.so.6" 2000 100 \
+            alone.ft.test "$data/loaded-late.bin" >/dev/null
+        settle
+        expect "names: a C library loaded two seconds in" "$(name_of loaded-late.bin)" \
+            alone.ft.test
     fi
 
     # A name with 20 addresses asked for without a socket type: each address comes back once per
@@ -1675,6 +1683,27 @@ TMPL
     # No lookup named it, so the resolved-name count is absent, not zero.
     expect "names: a server name to a literal address resolves no name" \
         "$(tls_resolved_of sharp.ft.test)" ""
+
+    # A process two seconds old loads a copy of libssl no other process maps, and the server
+    # name it sets on its connection after that is read through it.
+    libssl=$(ls /usr/lib/*/libssl.so.3 /lib/*/libssl.so.3 /usr/lib64/libssl.so.3 2>/dev/null |
+        head -1)
+    if [ -z "$libssl" ] || [ -z "$dynamic" ]; then
+        echo "SKIP: no libssl.so.3 or dynamic workload here; the late TLS library check did not run"
+    else
+        mkdir -p "$work/ssl-late"
+        cp "$libssl" "$work/ssl-late/libssl.so.3"
+        late=$("$dynamic" tlsconnect 2000 127.0.0.1 "$tls_port" late.ft.test \
+            "$data/tls-late.bin" "$work/ssl-late/libssl.so.3")
+        if [ "$(field "$late" loaded)" = unsupported ]; then
+            echo "SKIP: this C library has no dlopen for the TLS client;" \
+                "the late TLS library check did not run"
+        else
+            settle
+            expect "names: a TLS library loaded two seconds in" "$(tls_source_of late.ft.test)" \
+                tls
+        fi
+    fi
 
     expect_match "names: capability counts the probed TLS library" \
         "$(ft capabilities | grep '^Destination names')" \
