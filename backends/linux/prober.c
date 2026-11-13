@@ -3,6 +3,7 @@
 #include "filetrace/clock.h"
 #include "filetrace/sysinfo.h"
 
+#include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -12,12 +13,15 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <linux/magic.h>
+#include <linux/types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <unistd.h>
+
+#include "backends/linux/bpf/abi.h"
 
 #define MAX_KINDS 4
 #define MAX_SKIPPED 256
@@ -45,6 +49,9 @@
 #define LOADING_MAX_NS (1 * FT_NS_PER_SEC)
 #define NOTED_MAX 256
 #define NOTED_NS (60 * FT_NS_PER_SEC)
+static_assert(NOTED_MAX <= FT_BPF_QUIET_MAX);
+/* A quiet program has a prompt look again after this long, whatever its processes did meanwhile. */
+#define QUIET_NS (10 * FT_NS_PER_SEC)
 #define DELETED " (deleted)"
 #define CANDIDATES_MAX 4 /* distinct files of the kinds a process is looked at for */
 /* A full kind gives a file's place to a new one when no look has found it for this long. */
@@ -99,7 +106,11 @@ struct pending {
     struct ft_linux_program file; /* zero after a fork */
 };
 
-/* A program whose process ended before a look reached it: its next process is looked at early. */
+/*
+ * A program noted for a while: missed, when its process ended before a look reached it, and its
+ * next process is looked at early; or quiet, when a look found it maps only files probed or
+ * skipped already, and each of its processes gets one look, with no wake of its own.
+ */
 struct noted {
     struct ft_linux_program file;
     uint64_t ns;
@@ -135,6 +146,9 @@ struct ft_linux_prober {
     struct pending queue[PENDING_MAX];
     size_t head;
     size_t queued;
+    struct pending quiet_queue[PENDING_MAX]; /* processes of quiet programs */
+    size_t quiet_head;
+    size_t quiet_queued;
     DIR *pass;          /* a pass over /proc for the processes no event announced, while it runs */
     bool again;         /* a pass starts as soon as the one running, if any, is over */
     uint64_t pass_ns;   /* when a slice of the pass last ran */
@@ -144,6 +158,11 @@ struct ft_linux_prober {
     size_t recheck_count;
     struct noted missed[NOTED_MAX];
     size_t missed_count;
+    struct noted quiet[NOTED_MAX];
+    size_t quiet_count;
+    size_t forgotten; /* files the kinds gave up, when the quiet programs were last checked */
+    int quiet_fd;     /* the probes' map of the quiet programs, whose execs do not wake the agent */
+    bool fresh;       /* the look running found a file not probed or skipped before */
 };
 
 static bool read_at(int fd, void *buf, size_t size, uint64_t off)
@@ -356,19 +375,20 @@ static void printable(const char *path, char *out, size_t size)
 
 /*
  * Probes the file that path leads to for one kind, once per file; mapped_as is how the process
- * knows it. path is a /proc link to the file the process runs or has mapped, never a name it could
- * replace, and the open does not wait on anything that is not a regular file.
+ * knows it. True when the file was probed or skipped before. path is a /proc link to the file the
+ * process runs or has mapped, never a name it could replace, and the open does not wait on anything
+ * that is not a regular file.
  */
-static void consider(struct kind *k, const char *path, const char *mapped_as,
+static bool consider(struct kind *k, const char *path, const char *mapped_as,
                      const struct mapped_file *mf, uint32_t pid)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY);
     if (fd < 0)
-        return;
+        return false;
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
         close(fd);
-        return;
+        return true;
     }
     struct statfs fs;
     bool overlay = fstatfs(fd, &fs) == 0 && fs.f_type == OVERLAYFS_SUPER_MAGIC;
@@ -385,7 +405,7 @@ static void consider(struct kind *k, const char *path, const char *mapped_as,
         found->found_ns = now;
     if (found || skipped(k, &id)) {
         close(fd);
-        return;
+        return true;
     }
     char name[512];
     printable(mapped_as, name, sizeof(name));
@@ -399,14 +419,14 @@ static void consider(struct kind *k, const char *path, const char *mapped_as,
                    k->def.capacity, k->def.many, name);
         k->full_logged = true;
         close(fd);
-        return;
+        return false;
     }
 
     uint64_t cookie = k->def.cookie(fd);
     if (!cookie) {
         skip(k, &id);
         close(fd);
-        return;
+        return false;
     }
 
     /* Held open, the file stays reachable after the process that named it exits. */
@@ -425,7 +445,7 @@ static void consider(struct kind *k, const char *path, const char *mapped_as,
         detach(&fresh);
         if (!transient(error))
             skip(k, &id);
-        return;
+        return false;
     }
     k->probing_ns += ft_clock_mono_ns() - now;
     if (full) {
@@ -438,6 +458,7 @@ static void consider(struct kind *k, const char *path, const char *mapped_as,
     }
     *slot = fresh;
     k->def.probed(name, pid, cookie);
+    return false;
 }
 
 static const char *base_name(const char *path)
@@ -510,8 +531,9 @@ static enum look consider_mapped(struct ft_linux_prober *p, const bool *wanted, 
         char mapped[128];
         snprintf(mapped, sizeof(mapped), "/proc/%" PRIu32 "/map_files/%s", pid, range);
         for (size_t i = 0; i < p->kind_count; i++) {
-            if (wanted[i] && p->kinds[i].def.mapped(file, name) && !refresh(&p->kinds[i], &mf))
-                consider(&p->kinds[i], mapped, file, &mf, pid);
+            if (wanted[i] && p->kinds[i].def.mapped(file, name) && !refresh(&p->kinds[i], &mf) &&
+                !consider(&p->kinds[i], mapped, file, &mf, pid))
+                p->fresh = true;
         }
     }
     fclose(f);
@@ -572,7 +594,8 @@ static enum look look_at(struct ft_linux_prober *p, uint32_t pid, uint64_t until
     for (size_t i = 0; i < p->kind_count; i++) {
         const struct ft_linux_probe_kind *def = &p->kinds[i].def;
         if (def->runs && def->runs(name)) {
-            consider(&p->kinds[i], path, exe, nullptr, pid);
+            if (!consider(&p->kinds[i], path, exe, nullptr, pid))
+                p->fresh = true;
             result = LOOK_FOUND;
         } else if (def->every_process || (def->maps_of && def->maps_of(name))) {
             maps = wanted[i] = true;
@@ -584,31 +607,37 @@ static enum look look_at(struct ft_linux_prober *p, uint32_t pid, uint64_t until
     return mapped == LOOK_NONE ? result : mapped;
 }
 
-static bool same_program(const struct ft_linux_program *a, const struct ft_linux_program *b)
+static bool same_program(const struct ft_linux_program *a, const struct ft_linux_program *b,
+                         bool mntns)
 {
-    return a->ino == b->ino && a->size == b->size;
+    return a->ino == b->ino && a->size == b->size && (!mntns || a->mntns == b->mntns);
 }
 
-static struct noted *noted(struct noted *set, size_t count, const struct ft_linux_program *file)
+static struct noted *noted(struct noted *set, size_t count, const struct ft_linux_program *file,
+                           bool mntns)
 {
     for (size_t i = 0; i < count; i++) {
-        if (same_program(&set[i].file, file))
+        if (same_program(&set[i].file, file, mntns))
             return &set[i];
     }
     return nullptr;
 }
 
-/* Notes a program in a set, or with put false takes it out. */
-static void note(struct noted *set, size_t *count, const struct ft_linux_program *file, bool put,
-                 uint64_t now)
+/* Notes a program in a set, or with put false takes it out; returns the one that left, if any. */
+static struct ft_linux_program note(struct noted *set, size_t *count,
+                                    const struct ft_linux_program *file, bool mntns, bool put,
+                                    uint64_t now)
 {
+    struct ft_linux_program left = {0};
     if (!file->ino)
-        return;
-    struct noted *m = noted(set, *count, file);
+        return left;
+    struct noted *m = noted(set, *count, file, mntns);
     if (!put) {
-        if (m)
+        if (m) {
+            left = m->file;
             *m = set[--*count];
-        return;
+        }
+        return left;
     }
     if (!m && *count < NOTED_MAX)
         m = &set[(*count)++];
@@ -618,8 +647,46 @@ static void note(struct noted *set, size_t *count, const struct ft_linux_program
             if (set[i].ns < m->ns)
                 m = &set[i];
         }
+        left = m->file;
     }
     *m = (struct noted){.file = *file, .ns = now};
+    return left;
+}
+
+static void quiet_map(struct ft_linux_prober *p, const struct ft_linux_program *file, bool on)
+{
+    if (p->quiet_fd < 0 || !file->ino)
+        return;
+    struct ft_bpf_program_key key = {.ino = file->ino, .size = file->size, .mntns = file->mntns};
+    uint8_t one = 1;
+    if (on)
+        bpf_map_update_elem(p->quiet_fd, &key, &one, BPF_ANY);
+    else
+        bpf_map_delete_elem(p->quiet_fd, &key);
+}
+
+/*
+ * Makes a program quiet for a while from now, or with put false takes it out. A program quiet
+ * already stays so until its time is up: a change under it is seen once a while.
+ */
+static void note_quiet(struct ft_linux_prober *p, const struct ft_linux_program *file, bool put,
+                       uint64_t now)
+{
+    if (put && noted(p->quiet, p->quiet_count, file, true))
+        return;
+    struct ft_linux_program left = note(p->quiet, &p->quiet_count, file, true, put, now);
+    quiet_map(p, &left, false);
+    if (put)
+        quiet_map(p, file, true);
+}
+
+/* A program missed is looked at early next time, and quiet no longer. */
+static void note_missed(struct ft_linux_prober *p, const struct ft_linux_program *file, bool put,
+                        uint64_t now)
+{
+    note(p->missed, &p->missed_count, file, false, put, now);
+    if (put)
+        note_quiet(p, file, false, now);
 }
 
 /* Process IDs past this are looked at on every pass. */
@@ -643,6 +710,7 @@ struct ft_linux_prober *ft_linux_prober_create(void)
     p->pid_limit = pid_limit();
     p->credit_ns = WORK_BUDGET_NS;
     p->credit_at = ft_clock_mono_ns();
+    p->quiet_fd = -1;
     p->seen = calloc(p->pid_limit / 8 + 1, 1);
     if (!p->seen) {
         free(p);
@@ -659,7 +727,23 @@ void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char
     mark(p, pid, false);
     if (!wants(p, program, !file))
         return;
-    const struct noted *m = file ? noted(p->missed, p->missed_count, file) : nullptr;
+    size_t forgotten = 0;
+    for (size_t i = 0; i < p->kind_count; i++)
+        forgotten += p->kinds[i].forgotten;
+    /* A file given up may be one a quiet program maps. */
+    if (forgotten != p->forgotten) {
+        p->forgotten = forgotten;
+        while (p->quiet_count)
+            note_quiet(p, &p->quiet[0].file, false, ts_ns);
+    }
+    const struct noted *q = file ? noted(p->quiet, p->quiet_count, file, true) : nullptr;
+    if (q && ts_ns < q->ns + QUIET_NS) {
+        if (p->quiet_queued < PENDING_MAX)
+            p->quiet_queue[(p->quiet_head + p->quiet_queued++) % PENDING_MAX] =
+                (struct pending){.pid = pid, .ts_ns = ts_ns, .file = *file};
+        return;
+    }
+    const struct noted *m = file ? noted(p->missed, p->missed_count, file, false) : nullptr;
     if (m && ts_ns < m->ns + NOTED_NS && p->recheck_count < RECHECK_MAX) {
         p->rechecks[p->recheck_count++] = (struct recheck){
             .pid = pid, .file = *file, .ts_ns = ts_ns, .due_ns = ts_ns, .dense = true};
@@ -759,6 +843,12 @@ static uint64_t next_age(const struct recheck *r, enum look result, uint64_t age
     }
 }
 
+static enum look look_fresh(struct ft_linux_prober *p, uint32_t pid, uint64_t until)
+{
+    p->fresh = false;
+    return look_at(p, pid, until);
+}
+
 /* Takes what a look found, and has the process looked at again while it is due another. */
 static void looked(struct ft_linux_prober *p, struct recheck r, enum look result, uint64_t now)
 {
@@ -766,13 +856,44 @@ static void looked(struct ft_linux_prober *p, struct recheck r, enum look result
     uint64_t next = next_age(&r, result, age);
     r.reached = r.reached || (result != LOOK_GONE && result != LOOK_CUT);
     r.late = result == LOOK_FOUND;
+    if (result == LOOK_FOUND || result == LOOK_NONE)
+        note_quiet(p, &r.file, !p->fresh, now);
     if (next && p->recheck_count < RECHECK_MAX) {
         mark(p, r.pid, false);
         r.due_ns = r.ts_ns + next;
         p->rechecks[p->recheck_count++] = r;
         return;
     }
-    note(p->missed, &p->missed_count, &r.file, result == LOOK_GONE && !r.reached, now);
+    note_missed(p, &r.file, result == LOOK_GONE && !r.reached, now);
+}
+
+/* Looks at each process of a quiet program once; one that has ended by then is let go. */
+static void quiet_work(struct ft_linux_prober *p, uint64_t until)
+{
+    while (p->quiet_queued && ft_clock_mono_ns() < until) {
+        uint64_t now = ft_clock_mono_ns();
+        struct pending next = p->quiet_queue[p->quiet_head];
+        if (next.ts_ns + SETTLE_NS > now)
+            break;
+        enum look result = look_fresh(p, next.pid, until);
+        if (result == LOOK_CUT)
+            break;
+        p->quiet_head = (p->quiet_head + 1) % PENDING_MAX;
+        p->quiet_queued--;
+        if (p->fresh)
+            note_quiet(p, &next.file, false, now);
+    }
+}
+
+/* A program's quiet time is up: its execs wake the agent again. */
+static void quiet_expire(struct ft_linux_prober *p, uint64_t now)
+{
+    for (size_t i = 0; i < p->quiet_count;) {
+        if (now < p->quiet[i].ns + QUIET_NS)
+            i++;
+        else
+            note_quiet(p, &p->quiet[i].file, false, now);
+    }
 }
 
 /*
@@ -790,9 +911,9 @@ static void recheck_work(struct ft_linux_prober *p, bool late, uint64_t until)
         }
         p->rechecks[i] = p->rechecks[--p->recheck_count];
         if (now >= until)
-            note(p->missed, &p->missed_count, &r.file, false, now);
+            note_missed(p, &r.file, false, now);
         else
-            looked(p, r, look_at(p, r.pid, until), now);
+            looked(p, r, look_fresh(p, r.pid, until), now);
     }
 }
 
@@ -818,6 +939,7 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
     p->credit_at = start;
     uint64_t until = start + p->credit_ns;
 
+    quiet_expire(p, start);
     recheck_work(p, false, until);
     while (p->queued && ft_clock_mono_ns() < until) {
         uint64_t now = ft_clock_mono_ns();
@@ -827,8 +949,9 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
         p->head = (p->head + 1) % PENDING_MAX;
         p->queued--;
         struct recheck r = {.pid = next.pid, .file = next.file, .ts_ns = next.ts_ns};
-        looked(p, r, look_at(p, next.pid, until), now);
+        looked(p, r, look_fresh(p, next.pid, until), now);
     }
+    quiet_work(p, until);
     recheck_work(p, true, until);
     if (p->pass && now_ns - p->pass_ns >= PASS_GAP_NS) {
         p->pass_ns = now_ns;
@@ -849,6 +972,12 @@ uint64_t ft_linux_prober_due(const struct ft_linux_prober *p)
     /* Not before the share of time the work has left gives it a slice again. */
     uint64_t ready = p->credit_at + (WORK_SLICE_MIN_NS - p->credit_ns) * 100 / WORK_PERCENT;
     return later(due, ready);
+}
+
+void ft_linux_prober_quiet(struct ft_linux_prober *p, int map_fd)
+{
+    if (p)
+        p->quiet_fd = map_fd;
 }
 
 void ft_linux_prober_destroy(struct ft_linux_prober *p)

@@ -864,7 +864,8 @@ static int on_ring_event(void *ctx, void *data, size_t size)
                 }
             }
             on_process(b, &e->proc, exe, args, args_len, cwd);
-            struct ft_linux_program file = {.ino = e->exe_ino, .size = e->exe_size};
+            struct ft_linux_program file = {
+                .ino = e->exe_ino, .size = e->exe_size, .mntns = e->mntns_seq};
             process_started(b, &e->proc, exe, &file);
         }
         break;
@@ -1315,8 +1316,10 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
         char why[320];
         ft_log(FT_LOG_WARN, "%s", ft_linux_returns_forced(&b->probes, why, sizeof(why)));
     }
-    if (php || lookups || tls)
+    if (php || lookups || tls) {
         b->prober = ft_linux_prober_create();
+        ft_linux_prober_quiet(b->prober, bpf_object__find_map_fd_by_name(obj, "quiet_programs"));
+    }
     if (b->prober && php)
         b->php = ft_linux_php_open(obj, b->prober);
     if (b->prober && lookups) {

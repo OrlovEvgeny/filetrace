@@ -199,10 +199,11 @@ size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind);
 /* The file of a kind whose probes carry the cookie served a call at ts_ns. */
 void ft_linux_prober_used(struct ft_linux_prober *p, int kind, uint64_t cookie, uint64_t ts_ns);
 
-/* A program file as the kernel opened it for an exec. */
+/* A program file as the kernel opened it for an exec, and the mount namespace it ran in. */
 struct ft_linux_program {
     uint64_t ino;
     uint64_t size;
+    uint64_t mntns; /* the kernel's sequence number of the namespace, never reused */
 };
 
 /*
@@ -228,6 +229,9 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns);
 
 /* When the work is next due for a process that started, or 0 when none waits. */
 uint64_t ft_linux_prober_due(const struct ft_linux_prober *p);
+
+/* The probes' map of the programs whose execs need not wake the agent. */
+void ft_linux_prober_quiet(struct ft_linux_prober *p, int map_fd);
 
 /*
  * Reads which of names the 64-bit ELF file open at fd defines among its dynamic symbols, and

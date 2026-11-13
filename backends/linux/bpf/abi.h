@@ -60,6 +60,7 @@ struct ft_bpf_ev_exec {
     __u32 pad;
     __u64 exe_ino; /* the program file, as the kernel opened it */
     __u64 exe_size;
+    __u64 mntns_seq; /* the mount namespace it runs in, by a number the kernel does not reuse */
 };
 
 struct ft_bpf_ev_sock {
@@ -236,6 +237,15 @@ struct ft_bpf_background_key {
     __u32 dev; /* the kernel's encoding: major in the top 12 bits, minor in the low 20 */
     __u32 pad;
 };
+
+/* A program file whose execs need not wake the agent: its processes are not looked at early. */
+struct ft_bpf_program_key {
+    __u64 ino;
+    __u64 size;
+    __u64 mntns;
+};
+
+#define FT_BPF_QUIET_MAX 256
 
 struct ft_bpf_cfg {
     __u64 corr_window_ns;
