@@ -683,7 +683,8 @@ static void join_path(const char *comps, size_t len, uint16_t flags, char *path,
  * Has the files a process starts with probed, or those a forked child carries on with: PHP-FPM
  * forks its master off the process that ran it, and web servers load PHP before forking workers.
  */
-static void process_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe)
+static void process_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe,
+                            const struct ft_linux_program *file)
 {
     /* The kernel's process ID names the right /proc entry only in the host's namespace. */
     if (!b->prober || !ft_sysinfo_host_pid_namespace())
@@ -693,7 +694,7 @@ static void process_started(struct ft_backend *b, const struct ft_bpf_ev_proc *e
     comm[sizeof(comm) - 1] = '\0';
     const char *slash = exe ? strrchr(exe, '/') : nullptr;
     const char *name = exe ? (slash ? slash + 1 : exe) : comm;
-    ft_linux_prober_started(b->prober, e->pid, name, !exe, e->hdr.ts_ns);
+    ft_linux_prober_started(b->prober, e->pid, name, file, e->hdr.ts_ns);
 }
 
 static void on_process(struct ft_backend *b, const struct ft_bpf_ev_proc *e, const char *exe,
@@ -863,7 +864,8 @@ static int on_ring_event(void *ctx, void *data, size_t size)
                 }
             }
             on_process(b, &e->proc, exe, args, args_len, cwd);
-            process_started(b, &e->proc, exe);
+            struct ft_linux_program file = {.ino = e->exe_ino, .size = e->exe_size};
+            process_started(b, &e->proc, exe, &file);
         }
         break;
     case FT_BPF_EV_FORK:
@@ -871,7 +873,7 @@ static int on_ring_event(void *ctx, void *data, size_t size)
         if (size >= sizeof(struct ft_bpf_ev_proc)) {
             on_process(b, data, nullptr, nullptr, 0, nullptr);
             if (hdr->kind == FT_BPF_EV_FORK)
-                process_started(b, data, nullptr);
+                process_started(b, data, nullptr, nullptr);
             else if (ft_sysinfo_host_pid_namespace())
                 ft_linux_prober_ended(b->prober, ((const struct ft_bpf_ev_proc *)data)->pid);
         }

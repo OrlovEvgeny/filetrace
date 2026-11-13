@@ -1802,6 +1802,9 @@ static __always_inline void fill_exec(struct ft_bpf_ev_exec *e, struct task_stru
     const char *filename = BPF_CORE_READ(bprm, filename);
     if (bpf_probe_read_kernel_str(e->exe, sizeof(e->exe), filename) < 0)
         e->exe[0] = 0;
+    struct inode *inode = BPF_CORE_READ(bprm, file, f_inode);
+    e->exe_ino = BPF_CORE_READ(inode, i_ino);
+    e->exe_size = (__u64)BPF_CORE_READ(inode, i_size);
     e->cwd_len = 0;
     e->cwd_depth = 0;
     e->cwd_flags = 0;

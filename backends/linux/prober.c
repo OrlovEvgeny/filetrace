@@ -43,6 +43,8 @@
 #define LATE_MAX_NS (512 * FT_NS_PER_MS)
 /* A loader still mapping libraries this long after the exec is left to itself. */
 #define LOADING_MAX_NS (1 * FT_NS_PER_SEC)
+#define NOTED_MAX 256
+#define NOTED_NS (60 * FT_NS_PER_SEC)
 #define DELETED " (deleted)"
 #define CANDIDATES_MAX 4 /* distinct files of the kinds a process is looked at for */
 /* A full kind gives a file's place to a new one when no look has found it for this long. */
@@ -94,14 +96,27 @@ struct kind {
 struct pending {
     uint32_t pid;
     uint64_t ts_ns;
+    struct ft_linux_program file; /* zero after a fork */
 };
 
-/* A process looked at again: its loader was still mapping libraries, or it may load more later. */
+/* A program whose process ended before a look reached it: its next process is looked at early. */
+struct noted {
+    struct ft_linux_program file;
+    uint64_t ns;
+};
+
+/*
+ * A process looked at again: its loader was still mapping libraries, it may load more as it runs,
+ * or a process of its program ended before a look reached it.
+ */
 struct recheck {
     uint32_t pid;
+    struct ft_linux_program file;
     uint64_t ts_ns;
     uint64_t due_ns;
-    bool late; /* it maps a file of a kind already: the look is for what it loads later */
+    bool dense;   /* its program was missed: looked at as it starts and at every doubling of age */
+    bool reached; /* a look found it running */
+    bool late;    /* it maps a file of a kind already: the look is for what it loads later */
 };
 
 enum look {
@@ -127,6 +142,8 @@ struct ft_linux_prober {
     uint64_t credit_at; /* when it was last brought up to date */
     struct recheck rechecks[RECHECK_MAX];
     size_t recheck_count;
+    struct noted missed[NOTED_MAX];
+    size_t missed_count;
 };
 
 static bool read_at(int fd, void *buf, size_t size, uint64_t off)
@@ -567,6 +584,44 @@ static enum look look_at(struct ft_linux_prober *p, uint32_t pid, uint64_t until
     return mapped == LOOK_NONE ? result : mapped;
 }
 
+static bool same_program(const struct ft_linux_program *a, const struct ft_linux_program *b)
+{
+    return a->ino == b->ino && a->size == b->size;
+}
+
+static struct noted *noted(struct noted *set, size_t count, const struct ft_linux_program *file)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (same_program(&set[i].file, file))
+            return &set[i];
+    }
+    return nullptr;
+}
+
+/* Notes a program in a set, or with put false takes it out. */
+static void note(struct noted *set, size_t *count, const struct ft_linux_program *file, bool put,
+                 uint64_t now)
+{
+    if (!file->ino)
+        return;
+    struct noted *m = noted(set, *count, file);
+    if (!put) {
+        if (m)
+            *m = set[--*count];
+        return;
+    }
+    if (!m && *count < NOTED_MAX)
+        m = &set[(*count)++];
+    if (!m) {
+        m = &set[0];
+        for (size_t i = 1; i < NOTED_MAX; i++) {
+            if (set[i].ns < m->ns)
+                m = &set[i];
+        }
+    }
+    *m = (struct noted){.file = *file, .ns = now};
+}
+
 /* Process IDs past this are looked at on every pass. */
 static uint32_t pid_limit(void)
 {
@@ -597,17 +652,27 @@ struct ft_linux_prober *ft_linux_prober_create(void)
 }
 
 void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char *program,
-                             bool forked, uint64_t ts_ns)
+                             const struct ft_linux_program *file, uint64_t ts_ns)
 {
     if (!p)
         return;
     mark(p, pid, false);
-    if (!wants(p, program, forked))
+    if (!wants(p, program, !file))
         return;
+    const struct noted *m = file ? noted(p->missed, p->missed_count, file) : nullptr;
+    if (m && ts_ns < m->ns + NOTED_NS && p->recheck_count < RECHECK_MAX) {
+        p->rechecks[p->recheck_count++] = (struct recheck){
+            .pid = pid, .file = *file, .ts_ns = ts_ns, .due_ns = ts_ns, .dense = true};
+        return;
+    }
     /* A process that finds no room is left for the next pass. */
     if (p->queued == PENDING_MAX)
         return;
-    p->queue[(p->head + p->queued++) % PENDING_MAX] = (struct pending){.pid = pid, .ts_ns = ts_ns};
+    p->queue[(p->head + p->queued++) % PENDING_MAX] = (struct pending){
+        .pid = pid,
+        .ts_ns = ts_ns,
+        .file = file ? *file : (struct ft_linux_program){0},
+    };
 }
 
 void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid)
@@ -677,7 +742,7 @@ static uint64_t later(uint64_t a, uint64_t b)
 }
 
 /* The age at which a process is looked at next, after a look at this age found this; 0 for none. */
-static uint64_t next_age(enum look result, uint64_t age)
+static uint64_t next_age(const struct recheck *r, enum look result, uint64_t age)
 {
     switch (result) {
     case LOOK_CUT:
@@ -685,7 +750,8 @@ static uint64_t next_age(enum look result, uint64_t age)
     case LOOK_LOADING:
         return age < LOADING_MAX_NS ? age + later(RECHECK_STEP_NS, age) : 0;
     case LOOK_FOUND: {
-        uint64_t next = later(LATE_FIRST_NS, 4 * age);
+        uint64_t next =
+            r->dense ? later(age + RECHECK_STEP_NS, 2 * age) : later(LATE_FIRST_NS, 4 * age);
         return next <= LATE_MAX_NS ? next : 0;
     }
     default:
@@ -697,13 +763,16 @@ static uint64_t next_age(enum look result, uint64_t age)
 static void looked(struct ft_linux_prober *p, struct recheck r, enum look result, uint64_t now)
 {
     uint64_t age = now > r.ts_ns ? now - r.ts_ns : 0;
-    uint64_t next = next_age(result, age);
+    uint64_t next = next_age(&r, result, age);
+    r.reached = r.reached || (result != LOOK_GONE && result != LOOK_CUT);
     r.late = result == LOOK_FOUND;
     if (next && p->recheck_count < RECHECK_MAX) {
         mark(p, r.pid, false);
         r.due_ns = r.ts_ns + next;
         p->rechecks[p->recheck_count++] = r;
+        return;
     }
+    note(p->missed, &p->missed_count, &r.file, result == LOOK_GONE && !r.reached, now);
 }
 
 /*
@@ -720,7 +789,9 @@ static void recheck_work(struct ft_linux_prober *p, bool late, uint64_t until)
             continue;
         }
         p->rechecks[i] = p->rechecks[--p->recheck_count];
-        if (now < until)
+        if (now >= until)
+            note(p->missed, &p->missed_count, &r.file, false, now);
+        else
             looked(p, r, look_at(p, r.pid, until), now);
     }
 }
@@ -755,7 +826,7 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
         struct pending next = p->queue[p->head];
         p->head = (p->head + 1) % PENDING_MAX;
         p->queued--;
-        struct recheck r = {.pid = next.pid, .ts_ns = next.ts_ns};
+        struct recheck r = {.pid = next.pid, .file = next.file, .ts_ns = next.ts_ns};
         looked(p, r, look_at(p, next.pid, until), now);
     }
     recheck_work(p, true, until);

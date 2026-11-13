@@ -199,13 +199,19 @@ size_t ft_linux_prober_forgotten(const struct ft_linux_prober *p, int kind);
 /* The file of a kind whose probes carry the cookie served a call at ts_ns. */
 void ft_linux_prober_used(struct ft_linux_prober *p, int kind, uint64_t cookie, uint64_t ts_ns);
 
+/* A program file as the kernel opened it for an exec. */
+struct ft_linux_program {
+    uint64_t ino;
+    uint64_t size;
+};
+
 /*
- * A process started the program named so, by an exec or a fork at ts_ns: the work looks at it
- * shortly after, and again while it may still load files of a kind. A process that ended is
- * forgotten.
+ * A process started the program named so, by an exec of file or, without one, a fork at ts_ns:
+ * the work looks at it shortly after, and again while it may still load files of a kind. A
+ * process that ended is forgotten.
  */
 void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char *program,
-                             bool forked, uint64_t ts_ns);
+                             const struct ft_linux_program *file, uint64_t ts_ns);
 void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid);
 
 /*
