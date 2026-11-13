@@ -84,6 +84,9 @@ says "top refuses a remote that is neither an address nor a name" 2 \
 says "top takes half an address for no name either" 2 \
     "filetrace: invalid value '10.0.0' for --remote (expected an IP address, a CIDR network or a host name; '*' wildcards in a name)" \
     top --remote 10.0.0
+says "flows refuses an unknown grouping" 2 \
+    "filetrace: invalid value 'asn' for --group-by (expected process, remote, name, port or protocol)" \
+    flows --group-by asn
 says "top asks for leaders with --window" 2 \
     "filetrace: --window does not apply to the transfers mode (use --leaders)" top --window 5m
 says "top asks for processes with --tree" 2 \

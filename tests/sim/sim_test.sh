@@ -170,6 +170,14 @@ ok "unnamed groups are grouped by remote" query bare-remote.txt flows --group-by
 ok "they have no column of names" grep -Eq '^REMOTE +SENT +RECEIVED +FLOWS$' bare-remote.txt
 ok "unnamed groups are grouped by remote as CSV" query bare-remote.csv flows --group-by remote --process nginx --format csv
 ok "their CSV header still ends in the names" test "$(head -n 1 bare-remote.csv)" = remote_ip,bytes_sent,bytes_received,flows,remote_names
+ok "flows are grouped by name" query by-name.txt flows --group-by name
+ok "the groups are headed by the name" grep -Eq '^NAME +SENT +RECEIVED +FLOWS$' by-name.txt
+ok "flows nobody named form one group" test "$(grep -Ec '^- +' by-name.txt)" -eq 1
+ok "a group is the name as shown" grep -Eq '^ch-replica-2\.internal \(\+1\) +[0-9]' by-name.txt
+ok "a name through a proxy is a group" grep -Eq '^registry\.ml\.example\.com via proxy\.corp\.internal +[0-9]' by-name.txt
+ok "flows are grouped by name as JSON" query by-name.json flows --group-by name --json
+ok "a group by name is keyed by the name" grep -q '{"remote_name":"mirror-1.internal","bytes_sent":' by-name.json
+ok "flows nobody named are keyed by a dash" grep -q '{"remote_name":"-","bytes_sent":' by-name.json
 ok "top ranks the destinations" query destinations.txt top destinations --limit 100
 ok "the destinations have a column of names" grep -Eq '^RANK +REMOTE +NAME +SENT +RECEIVED +FLOWS$' destinations.txt
 ok "a destination counts the other names" grep -Eq '^[0-9]+ +10\.0\.6\.14 +ch-replica-2\.internal \(\+1\) ' destinations.txt
