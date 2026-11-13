@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <sched.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -18,6 +19,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -3987,6 +3989,352 @@ static void scenario_pty(size_t columns, size_t rows, const char *text, size_t s
     }
 }
 
+#define LOOKUP_FILE_BYTES 200000
+
+/* Gives the process a mount namespace of its own whose /etc is dir, for the hosts it resolves. */
+static void private_etc(const char *dir)
+{
+    if (unshare(CLONE_NEWNS) != 0)
+        die("unshare");
+    if (mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0)
+        die("mount private");
+    if (mount(dir, "/etc", nullptr, MS_BIND, nullptr) != 0)
+        die("mount bind");
+    unsetenv("FT_ETC");
+}
+
+static int port_of(const struct sockaddr_storage *ss)
+{
+    return ntohs(ss->ss_family == AF_INET6 ? ((const struct sockaddr_in6 *)ss)->sin6_port
+                                           : ((const struct sockaddr_in *)ss)->sin_port);
+}
+
+static socklen_t with_port(struct sockaddr_storage *ss, int port)
+{
+    if (ss->ss_family == AF_INET6) {
+        ((struct sockaddr_in6 *)ss)->sin6_port = htons((uint16_t)port);
+        return sizeof(struct sockaddr_in6);
+    }
+    ((struct sockaddr_in *)ss)->sin_port = htons((uint16_t)port);
+    return sizeof(struct sockaddr_in);
+}
+
+/* The first address the C library's getaddrinfo returns for the name. */
+static void lookup(const char *name, int family, int flags, struct sockaddr_storage *out)
+{
+    struct addrinfo hints = {.ai_family = family, .ai_socktype = SOCK_STREAM, .ai_flags = flags};
+    struct addrinfo *res;
+    int rc = getaddrinfo(name, nullptr, &hints, &res);
+    if (rc != 0) {
+        fprintf(stderr, "getaddrinfo %s: %s\n", name, gai_strerror(rc));
+        exit(1);
+    }
+    memset(out, 0, sizeof(*out));
+    memcpy(out, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+}
+
+static void address_text(const struct sockaddr_storage *addr, char text[INET6_ADDRSTRLEN])
+{
+    const void *raw = addr->ss_family == AF_INET6
+                          ? (const void *)&((const struct sockaddr_in6 *)addr)->sin6_addr
+                          : (const void *)&((const struct sockaddr_in *)addr)->sin_addr;
+    inet_ntop(addr->ss_family, raw, text, INET6_ADDRSTRLEN);
+}
+
+static void parse_address(const char *text, struct sockaddr_storage *out)
+{
+    memset(out, 0, sizeof(*out));
+    struct sockaddr_in *in = (struct sockaddr_in *)out;
+    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)out;
+    if (inet_pton(AF_INET, text, &in->sin_addr) == 1)
+        in->sin_family = AF_INET;
+    else if (inet_pton(AF_INET6, text, &in6->sin6_addr) == 1)
+        in6->sin6_family = AF_INET6;
+    else
+        die(text);
+}
+
+/* A listener on the address of at, on a port of its own, that a child drains. */
+static struct sink start_sink_at(const struct sockaddr_storage *at, int type)
+{
+    struct sink s = {.addr = *at};
+    s.addr_len = with_port(&s.addr, 0);
+    int fd = socket(at->ss_family, type, 0);
+    if (fd < 0)
+        die("socket");
+    if (bind(fd, (struct sockaddr *)&s.addr, s.addr_len) != 0)
+        die("bind");
+    if (getsockname(fd, (struct sockaddr *)&s.addr, &s.addr_len) != 0)
+        die("getsockname");
+    s.port = port_of(&s.addr);
+    if (type == SOCK_STREAM && listen(fd, 16) != 0)
+        die("listen");
+    s.pid = fork();
+    if (s.pid < 0)
+        die("fork");
+    if (s.pid == 0) {
+        char buf[65536];
+        if (type == SOCK_DGRAM) {
+            while (recv(fd, buf, sizeof(buf), 0) > 0) {
+            }
+            _exit(0);
+        }
+        for (;;) {
+            int c = accept(fd, nullptr, nullptr);
+            if (c < 0)
+                _exit(0);
+            while (read(c, buf, sizeof(buf)) > 0) {
+            }
+            close(c);
+        }
+    }
+    close(fd);
+    return s;
+}
+
+/* Connects to the address of to on the sink's port; returns the socket and its local port. */
+static int connect_to(const struct sink *sink, const struct sockaddr_storage *to, int *local)
+{
+    struct sockaddr_storage dst = *to;
+    socklen_t len = with_port(&dst, sink->port);
+    int sock = socket(dst.ss_family, SOCK_STREAM, 0);
+    if (sock < 0)
+        die("socket");
+    if (connect(sock, (struct sockaddr *)&dst, len) != 0)
+        die("connect");
+    struct sockaddr_storage self;
+    socklen_t self_len = sizeof(self);
+    if (getsockname(sock, (struct sockaddr *)&self, &self_len) != 0)
+        die("getsockname");
+    *local = port_of(&self);
+    return sock;
+}
+
+/* Sends the file over a fresh connection to a sink listening on the address of to. */
+static void send_to(const struct sockaddr_storage *to, const char *path)
+{
+    struct sink sink = start_sink_at(to, SOCK_STREAM);
+    make_file(path, LOOKUP_FILE_BYTES);
+    int file = open_file(path);
+    int local;
+    int sock = connect_to(&sink, to, &local);
+    sendfile_all(sock, file, LOOKUP_FILE_BYTES);
+    close(sock);
+    close(file);
+    printf("scenario=lookupsend pid=%d port=%d local=%d bytes=%d file=%s\n", (int)getpid(),
+           sink.port, local, LOOKUP_FILE_BYTES, path);
+    fflush(stdout);
+    stop_sink(&sink);
+}
+
+struct lookup_job {
+    const char *name;
+    struct sockaddr_storage addr;
+};
+
+static void *lookup_main(void *arg)
+{
+    struct lookup_job *job = arg;
+    lookup(job->name, AF_UNSPEC, 0, &job->addr);
+    return nullptr;
+}
+
+/* One datagram to the address of the name and one to 127.0.0.7, from one unconnected socket. */
+static void send_datagrams(const struct sockaddr_storage *named, const char *path)
+{
+    struct sockaddr_storage literal;
+    parse_address("127.0.0.7", &literal);
+    struct sink first = start_sink_at(named, SOCK_DGRAM);
+    struct sink second = start_sink_at(&literal, SOCK_DGRAM);
+    make_file(path, 512);
+    char datagram[512];
+    int file = open_file(path);
+    if (read(file, datagram, sizeof(datagram)) != (ssize_t)sizeof(datagram))
+        die("read");
+    close(file);
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0)
+        die("socket");
+    if (sendto(sock, datagram, sizeof(datagram), 0, (struct sockaddr *)&first.addr,
+               first.addr_len) != (ssize_t)sizeof(datagram) ||
+        sendto(sock, datagram, sizeof(datagram), 0, (struct sockaddr *)&second.addr,
+               second.addr_len) != (ssize_t)sizeof(datagram))
+        die("sendto");
+    close(sock);
+    printf("scenario=lookupsend pid=%d port=%d other=%d file=%s\n", (int)getpid(), first.port,
+           second.port, path);
+    fflush(stdout);
+    usleep(100 * 1000);
+    stop_sink(&first);
+    stop_sink(&second);
+}
+
+/*
+ * lookupsend <name> <file> <how> [<name2>]: looks the name up with getaddrinfo and sends the
+ * file to the first address, to a sink of its own listening there. how: tcp; udp (a datagram to
+ * it and one to 127.0.0.7 from one socket); thread (looked up on another thread); fork (looked
+ * up before a fork, sent from the child); forklater (the parent looks up after the fork and
+ * hands the address to the child); exec (sent after an exec of this program); mapped (asked
+ * for IPv6 with IPv4-mapped results, sent from an IPv6 socket); numeric (the name is an
+ * address); both (name2 looked up as well).
+ */
+static void scenario_lookup_send(const char *name, const char *path, const char *how,
+                                 const char *name2)
+{
+    struct sockaddr_storage addr;
+    char text[INET6_ADDRSTRLEN];
+
+    if (strcmp(how, "thread") == 0) {
+        struct lookup_job job = {.name = name};
+        pthread_t thread;
+        if (pthread_create(&thread, nullptr, lookup_main, &job) != 0)
+            die("pthread_create");
+        pthread_join(thread, nullptr);
+        send_to(&job.addr, path);
+    } else if (strcmp(how, "forklater") == 0) {
+        int pipefd[2];
+        if (pipe(pipefd) != 0)
+            die("pipe");
+        pid_t child = fork();
+        if (child < 0)
+            die("fork");
+        if (child == 0) {
+            close(pipefd[1]);
+            if (read(pipefd[0], &addr, sizeof(addr)) != (ssize_t)sizeof(addr))
+                die("read");
+            send_to(&addr, path);
+            _exit(0);
+        }
+        close(pipefd[0]);
+        lookup(name, AF_UNSPEC, 0, &addr);
+        if (write(pipefd[1], &addr, sizeof(addr)) != (ssize_t)sizeof(addr))
+            die("write");
+        waitpid(child, nullptr, 0);
+    } else if (strcmp(how, "mapped") == 0) {
+        lookup(name, AF_INET6, AI_V4MAPPED, &addr);
+        const struct sockaddr_in6 *mapped = (const struct sockaddr_in6 *)&addr;
+        struct sockaddr_storage v4 = {0};
+        ((struct sockaddr_in *)&v4)->sin_family = AF_INET;
+        memcpy(&((struct sockaddr_in *)&v4)->sin_addr, &mapped->sin6_addr.s6_addr[12], 4);
+        struct sink sink = start_sink_at(&v4, SOCK_STREAM);
+        make_file(path, LOOKUP_FILE_BYTES);
+        int file = open_file(path);
+        int local;
+        int sock = connect_to(&sink, &addr, &local);
+        sendfile_all(sock, file, LOOKUP_FILE_BYTES);
+        close(sock);
+        close(file);
+        printf("scenario=lookupsend pid=%d port=%d local=%d bytes=%d file=%s\n", (int)getpid(),
+               sink.port, local, LOOKUP_FILE_BYTES, path);
+        stop_sink(&sink);
+    } else {
+        lookup(name, AF_UNSPEC, strcmp(how, "numeric") == 0 ? AI_NUMERICHOST : 0, &addr);
+        if (name2) {
+            struct sockaddr_storage other;
+            lookup(name2, AF_UNSPEC, 0, &other);
+        }
+        if (strcmp(how, "udp") == 0) {
+            send_datagrams(&addr, path);
+        } else if (strcmp(how, "fork") == 0) {
+            pid_t child = fork();
+            if (child < 0)
+                die("fork");
+            if (child == 0) {
+                send_to(&addr, path);
+                _exit(0);
+            }
+            waitpid(child, nullptr, 0);
+        } else if (strcmp(how, "exec") == 0) {
+            char self[PATH_MAX];
+            ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+            if (n <= 0)
+                die("readlink");
+            self[n] = '\0';
+            address_text(&addr, text);
+            fflush(stdout);
+            execl(self, self, "sendto", text, path, (char *)nullptr);
+            die("exec");
+        } else {
+            send_to(&addr, path);
+        }
+    }
+}
+
+/* lookupwrite <name> <out>: looks the name up and writes its first address to out. */
+static void scenario_lookup_write(const char *name, const char *out)
+{
+    struct sockaddr_storage addr;
+    char text[INET6_ADDRSTRLEN];
+    lookup(name, AF_UNSPEC, 0, &addr);
+    address_text(&addr, text);
+    FILE *f = fopen(out, "w");
+    if (!f)
+        die(out);
+    fprintf(f, "%s\n", text);
+    fclose(f);
+    printf("scenario=lookupwrite pid=%d address=%s\n", (int)getpid(), text);
+}
+
+/* sendto <address> <file>: sends the file to a sink of its own on the address, looking up nothing.
+ */
+static void scenario_send_to(const char *text, const char *path)
+{
+    struct sockaddr_storage addr;
+    parse_address(text, &addr);
+    send_to(&addr, path);
+}
+
+/*
+ * lookuplater <name> <name2> <file>: looks the name up, connects and sends half the file, then
+ * looks name2 up with the first connection still open and sends the rest over a second one.
+ */
+static void scenario_lookup_later(const char *name, const char *name2, const char *path)
+{
+    struct sockaddr_storage addr;
+    struct sockaddr_storage other;
+    lookup(name, AF_UNSPEC, 0, &addr);
+    struct sink sink = start_sink_at(&addr, SOCK_STREAM);
+    make_file(path, LOOKUP_FILE_BYTES);
+    int file = open_file(path);
+    int first_port;
+    int first = connect_to(&sink, &addr, &first_port);
+    sendfile_span(first, file, 0, LOOKUP_FILE_BYTES / 2);
+    lookup(name2, AF_UNSPEC, 0, &other);
+    int second_port;
+    int second = connect_to(&sink, &addr, &second_port);
+    sendfile_span(second, file, LOOKUP_FILE_BYTES / 2, LOOKUP_FILE_BYTES);
+    close(first);
+    close(second);
+    close(file);
+    printf("scenario=lookuplater pid=%d port=%d first=%d second=%d file=%s\n", (int)getpid(),
+           sink.port, first_port, second_port, path);
+    stop_sink(&sink);
+}
+
+/* nofile <limit> <program> [arguments]: runs the program with both open file limits at limit. */
+static void scenario_nofile(size_t limit, char **argv)
+{
+    struct rlimit lim = {.rlim_cur = limit, .rlim_max = limit};
+    if (setrlimit(RLIMIT_NOFILE, &lim) != 0)
+        die("setrlimit");
+    execv(argv[0], argv);
+    die(argv[0]);
+}
+
+/* lookupwait <name> <file> <go>: looks the name up, then sends the file once go exists. */
+static void scenario_lookup_wait(const char *name, const char *path, const char *go)
+{
+    struct sockaddr_storage addr;
+    lookup(name, AF_UNSPEC, 0, &addr);
+    printf("scenario=lookupwait pid=%d looked=up\n", (int)getpid());
+    fflush(stdout);
+    for (int i = 0; i < 600 && access(go, F_OK) != 0; i++)
+        usleep(100 * 1000);
+    send_to(&addr, path);
+}
+
 static size_t arg_size(const char *text)
 {
     char *end;
@@ -4003,6 +4351,8 @@ int main(int argc, char **argv)
     const char *name = argc > 1 ? argv[1] : "";
 
     signal(SIGPIPE, SIG_IGN);
+    if (getenv("FT_ETC"))
+        private_etc(getenv("FT_ETC"));
     if (strcmp(name, "sendfile") == 0 && argc >= 4)
         scenario_sendfile(argv[2], arg_size(argv[3]), argc > 4 && strcmp(argv[4], "ipv6") == 0);
     else if (strcmp(name, "steady") == 0 && argc == 5)
@@ -4222,6 +4572,18 @@ int main(int argc, char **argv)
         scenario_partial_send(argv[2], arg_size(argv[3]));
     else if (strcmp(name, "partialsendfile") == 0 && argc == 4)
         scenario_partial_sendfile(argv[2], arg_size(argv[3]));
+    else if (strcmp(name, "lookupsend") == 0 && (argc == 5 || argc == 6))
+        scenario_lookup_send(argv[2], argv[3], argv[4], argc == 6 ? argv[5] : nullptr);
+    else if (strcmp(name, "lookupwrite") == 0 && argc == 4)
+        scenario_lookup_write(argv[2], argv[3]);
+    else if (strcmp(name, "sendto") == 0 && argc == 4)
+        scenario_send_to(argv[2], argv[3]);
+    else if (strcmp(name, "lookuplater") == 0 && argc == 5)
+        scenario_lookup_later(argv[2], argv[3], argv[4]);
+    else if (strcmp(name, "lookupwait") == 0 && argc == 5)
+        scenario_lookup_wait(argv[2], argv[3], argv[4]);
+    else if (strcmp(name, "nofile") == 0 && argc >= 4)
+        scenario_nofile(arg_size(argv[2]), argv + 3);
     else if (strcmp(name, "pty") == 0 && argc >= 9 && strcmp(argv[7], "--") == 0)
         scenario_pty(arg_size(argv[2]), arg_size(argv[3]), argv[4], arg_size(argv[5]), argv[6],
                      nullptr, nullptr, nullptr, argv + 8);

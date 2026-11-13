@@ -25,6 +25,9 @@ done | sort -u | while read -r lib; do
     mkdir -p "$root$(dirname "$lib")"
     cp -L "$lib" "$root$lib"
 done
+# The workload linked to the shared C library, for the checks of looked-up names.
+mkdir -p "$root/ft/bin/dynamic"
+cp "$build/tests/dynamic/ft_workload" "$root/ft/bin/dynamic/"
 # A PHP-FPM pool and a FastCGI client, for the checks of PHP request scripts.
 for binary in /usr/sbin/php-fpm* /usr/bin/cgi-fcgi; do
     [ -e "$binary" ] || continue
