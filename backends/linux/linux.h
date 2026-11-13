@@ -195,8 +195,11 @@ void ft_linux_prober_started(struct ft_linux_prober *p, uint32_t pid, const char
                              bool forked, uint64_t ts_ns);
 void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid);
 
-/* Takes no process as looked at, so that the next pass looks at every one again. */
-void ft_linux_prober_forget(struct ft_linux_prober *p);
+/*
+ * Takes no process as looked at and has a pass look at every one again, after the one running;
+ * false when one was already due.
+ */
+bool ft_linux_prober_forget(struct ft_linux_prober *p);
 
 /* Starts a pass over every running process not looked at yet, which the work carries on. */
 void ft_linux_prober_rescan(struct ft_linux_prober *p);

@@ -80,7 +80,8 @@ struct ft_linux_prober {
     struct pending queue[PENDING_MAX];
     size_t head;
     size_t queued;
-    DIR *pass; /* a pass over /proc for the processes no event announced, while it runs */
+    DIR *pass;  /* a pass over /proc for the processes no event announced, while it runs */
+    bool again; /* a pass starts as soon as the one running, if any, is over */
 };
 
 static bool read_at(int fd, void *buf, size_t size, uint64_t off)
@@ -530,10 +531,14 @@ void ft_linux_prober_ended(struct ft_linux_prober *p, uint32_t pid)
         mark(p, pid, false);
 }
 
-void ft_linux_prober_forget(struct ft_linux_prober *p)
+bool ft_linux_prober_forget(struct ft_linux_prober *p)
 {
-    if (p)
-        memset(p->seen, 0, p->pid_limit / 8 + 1);
+    if (!p)
+        return false;
+    memset(p->seen, 0, p->pid_limit / 8 + 1);
+    bool started = !p->again;
+    p->again = true;
+    return started;
 }
 
 void ft_linux_prober_rescan(struct ft_linux_prober *p)
@@ -542,8 +547,9 @@ void ft_linux_prober_rescan(struct ft_linux_prober *p)
         return;
     /* Outside the host's PID namespace no event names a process by its /proc entry. */
     if (!ft_sysinfo_host_pid_namespace())
-        ft_linux_prober_forget(p);
+        memset(p->seen, 0, p->pid_limit / 8 + 1);
     p->pass = opendir("/proc");
+    p->again = false;
 }
 
 /*
@@ -570,6 +576,8 @@ void ft_linux_prober_work(struct ft_linux_prober *p, uint64_t now_ns)
 {
     if (!p)
         return;
+    if (p->again)
+        ft_linux_prober_rescan(p);
     uint64_t until = ft_clock_mono_ns() + WORK_BUDGET_NS;
     do {
         /* A program's loader maps its libraries just after the exec. */

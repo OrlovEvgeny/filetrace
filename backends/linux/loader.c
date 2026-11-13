@@ -905,8 +905,10 @@ static void report_losses(struct ft_backend *b, const uint64_t totals[FT_BPF_CNT
     };
 
     /* A lost exec leaves its process taken as looked at, with the program it had before. */
-    if (totals[FT_BPF_CNT_RING_FULL] != b->counters[FT_BPF_CNT_RING_FULL])
-        ft_linux_prober_forget(b->prober);
+    if (totals[FT_BPF_CNT_RING_FULL] != b->counters[FT_BPF_CNT_RING_FULL] &&
+        ft_linux_prober_forget(b->prober))
+        ft_log(FT_LOG_INFO, "the kernel's queue lost events; every process is looked at again "
+                            "for the files the probes need");
     for (size_t i = 0; i < FT_ARRAY_LEN(losses); i++) {
         uint64_t delta = totals[losses[i].counter] - b->counters[losses[i].counter];
         if (delta == 0)
