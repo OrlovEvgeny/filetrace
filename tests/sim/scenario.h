@@ -49,7 +49,7 @@ struct ft_sim_flavor {
 enum ft_sim_dest_kind : uint8_t {
     FT_SIM_DEST_LIST,          /* the generator's own addresses, one per slot in turn */
     FT_SIM_DEST_PUBLIC,        /* clients from a pool that favours a few */
-    FT_SIM_DEST_PUBLIC_RANDOM, /* a different public address each time */
+    FT_SIM_DEST_PUBLIC_RANDOM, /* a public address drawn afresh each time */
     FT_SIM_DEST_PRIVATE,       /* 10.0.x.y */
 };
 

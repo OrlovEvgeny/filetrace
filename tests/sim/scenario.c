@@ -166,7 +166,7 @@ static const struct ft_sim_flavor kafka_segments[] = {
 };
 
 static const struct ft_sim_dest s3_dests[] = {
-    {.addr = "52.219.170.52", .port = 443, .name = "pg-backups.s3.example.com",
+    {.addr = "198.51.100.7", .port = 443, .name = "pg-backups.s3.example.com",
      .tls = "pg-backups.s3.example.com"},
     {},
 };
