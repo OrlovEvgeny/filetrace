@@ -7,6 +7,9 @@
 #define MIB(n) (KIB(n) * 1024)
 #define GIB(n) (MIB(n) * 1024)
 
+/* Every destination with a name is met this soon after the start, whatever the seed. */
+#define NAMED_WITHIN_MS 5000u
+
 #define MINUTE 60u
 #define HOUR (60u * MINUTE)
 #define DAY (24u * HOUR)
@@ -275,9 +278,11 @@ static const struct ft_sim_generator edge_generators[] = {
      .dests = kafka_dests, .local_port = 9092, .chunk = MIB(1), .flavors = kafka_segments},
     {.name = "rclone", .pids = rclone_pids, .method = FT_METHOD_READ_SEND, .outbound = true,
      .steady = true, .slots = 1, .pause_min_ms = 3000, .pause_max_ms = 10000,
-     .dest_kind = FT_SIM_DEST_LIST, .dests = s3_dests, .chunk = MIB(1), .flavors = pg_backups},
+     .spread_ms = NAMED_WITHIN_MS, .dest_kind = FT_SIM_DEST_LIST, .dests = s3_dests,
+     .chunk = MIB(1), .flavors = pg_backups},
     {.name = "rsync", .pids = rsync_pids, .method = FT_METHOD_READ_SEND, .outbound = true,
-     .slots = 2, .pause_min_ms = 4000, .pause_max_ms = 20000, .dest_kind = FT_SIM_DEST_LIST,
+     .slots = 2, .pause_min_ms = 4000, .pause_max_ms = 20000, .spread_ms = NAMED_WITHIN_MS,
+     .dest_kind = FT_SIM_DEST_LIST,
      .dests = rsync_dests, .chunk = KIB(128), .flavors = release_archives},
     {.name = "walsender", .pids = walsender_pids, .method = FT_METHOD_READ_SEND,
      .keep_socket = true, .slots = 1, .pause_min_ms = 300, .pause_max_ms = 1500,
@@ -285,11 +290,12 @@ static const struct ft_sim_generator edge_generators[] = {
      .chunk = KIB(128), .flavors = wal_segments},
     {.name = "clickhouse", .pids = clickhouse_pids, .method = FT_METHOD_READ_SEND,
      .outbound = true, .slots = 2, .pause_min_ms = 3000, .pause_max_ms = 25000,
-     .dest_kind = FT_SIM_DEST_LIST, .dests = clickhouse_dests, .chunk = MIB(1),
+     .spread_ms = NAMED_WITHIN_MS, .dest_kind = FT_SIM_DEST_LIST, .dests = clickhouse_dests,
+     .chunk = MIB(1),
      .flavors = clickhouse_parts},
     {.name = "model-push", .pids = python_pids, .method = FT_METHOD_READ_SEND, .outbound = true,
-     .slots = 1, .pause_min_ms = 30000, .pause_max_ms = 90000, .dest_kind = FT_SIM_DEST_LIST,
-     .dests = registry_dests, .chunk = MIB(1), .flavors = models},
+     .slots = 1, .pause_min_ms = 30000, .pause_max_ms = 90000, .spread_ms = NAMED_WITHIN_MS,
+     .dest_kind = FT_SIM_DEST_LIST, .dests = registry_dests, .chunk = MIB(1), .flavors = models},
     {.name = "sshd", .pids = sshd_pids, .method = FT_METHOD_READ_SEND, .slots = 1,
      .pause_min_ms = 40000, .pause_max_ms = 120000, .dest_kind = FT_SIM_DEST_PUBLIC,
      .local_port = 22, .chunk = KIB(32), .flavors = dumps},
