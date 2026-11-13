@@ -165,6 +165,21 @@ ok "a process lists the names it used" grep -q '"bytes_sent_per_second":[0-9]*,"
 ok "an address nobody named is inspected" query bare-address.txt inspect ip 10.0.5.22
 ok "it has no line of names" exits 1 grep -q '^Names:' bare-address.txt
 ok "its processes have no column of names" grep -Eq '^PID +PROCESS +OUTBOUND +SENT +RECEIVED$' bare-address.txt
+ok "a name is inspected" query name.txt inspect name ch-replica-2.internal
+ok "the report is on the name" grep -Eq '^Name: +ch-replica-2\.internal$' name.txt
+ok "the name has its address" grep -Eq '^Addresses: +10\.0\.6\.14$' name.txt
+ok "the addresses are listed" grep -Eq '^ADDRESS +PROCESSES +SENT +RECEIVED$' name.txt
+ok "the name has its files" grep -q '^FILES SENT TO IT$' name.txt
+ok "a pattern is inspected" query pattern.txt inspect name 'Mirror-*'
+ok "the pattern is shown as kept" grep -Eq '^Name: +mirror-\*$' pattern.txt
+ok "the pattern has both addresses" grep -Eq '^Addresses: +10\.0\.7\.3[12], 10\.0\.7\.3[12]$' pattern.txt
+ok "a pattern is inspected as JSON" query pattern.json inspect name 'mirror-*' --json
+ok "the JSON is about a name" grep -q '^{"kind":"name","name":"mirror-\*","totals":{' pattern.json
+ok "the JSON lists the addresses" grep -q '"addresses":\[{"remote_ip":"10.0.7.3[12]","processes":1,' pattern.json
+ok "a name that is no name is refused" exits 2 "$cli" --socket sim.sock inspect name 'x y'
+ok "inspect ip refuses a name" exits 2 "$cli" --socket sim.sock inspect ip mirror-1.internal
+"$cli" --socket sim.sock inspect ip mirror-1.internal 2>refused.txt || true
+ok "inspect ip points to inspect name" grep -q "^filetrace: .*'inspect name mirror-1.internal'" refused.txt
 rsync=$("$cli" --socket sim.sock processes --process rsync --format quiet 2>/dev/null | head -n 1)
 ok "a process is inspected" query process.txt inspect process "$rsync"
 ok "its destinations have a column of names" grep -Eq '^DESTINATION +NAME +OUTBOUND +SENT +RECEIVED$' process.txt
