@@ -1235,9 +1235,7 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
     bool tls = cfg->tls_names && cfg->mode >= FT_MODE_STANDARD && returns;
     if (!returns && b->probes.returns != FT_RETURNS_NOT_TESTED) {
         char why[320];
-        ft_log(FT_LOG_WARN,
-               "%s; the probes for PHP requests, name lookups and TLS server names are not "
-               "attached",
+        ft_log(FT_LOG_WARN, "%s; the PHP, lookup and TLS probes are not attached",
                ft_linux_returns_refusal(&b->probes, why, sizeof(why)));
     } else if ((php || lookups || tls) && ft_linux_returns_refused(&b->probes)) {
         char why[320];

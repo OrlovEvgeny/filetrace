@@ -1565,7 +1565,7 @@ if [ -n "$dynamic" ]; then
         'Remote: +127\.0\.0\.3:[0-9]+ .*Name: +alone\.ft\.test .*Name from: +lookup'
 
     expect_match "names: capability" "$(ft capabilities | grep '^Destination names')" \
-        'PARTIAL +lookups probed in [1-9][0-9]* librar(y|ies); TLS server names are not read'
+        'Destination names +(PARTIAL|FULL) +lookups probed in [1-9][0-9]* librar(y|ies); TLS server names (are read where the client.s library is probed|in [1-9][0-9]* librar)'
     stats=$(ft stats --json)
     expect_match "names: stats names" "$stats" '"names":\{"entries":[1-9]'
     expect_match "names: stats lookups" "$stats" '"name_lookups":\{"entries":[1-9]'
@@ -2119,13 +2119,13 @@ if [ -n "$dynamic" ]; then
     expect "unsafe return probes: no name" "$(name_of unsafe.bin)" ""
     expect "unsafe return probes: nothing probed" "$(grep -c 'probing' "$work/unsafe.err")" 0
     expect_match "unsafe return probes: logged" "$(cat "$work/unsafe.err")" \
-        'neither the PHP probes nor those of name lookups are attached'
+        'the PHP, lookup and TLS probes are not attached'
     expect_match "unsafe return probes: names" "$(ft capabilities | grep '^Destination names')" \
         'UNAVAILABLE +return probes kill processes under seccomp on this kernel.*update the kernel'
     expect_match "unsafe return probes: PHP" "$(ft capabilities | grep '^PHP request scripts')" \
         'UNAVAILABLE +return probes kill processes under seccomp on this kernel'
     expect_match "unsafe return probes: doctor" "$(ft doctor | grep 'Return probes:')" \
-        "Return probes: +$seccomp_killed.*update the kernel; the agent attaches the PHP probes and those of name lookups here only with \\[process\\] force_return_probes"
+        "Return probes: +$seccomp_killed.*update the kernel; the agent attaches the PHP, lookup and TLS probes here only with \\[process\\] force_return_probes"
     expect "unsafe return probes: doctor exit code" \
         "$("$bin/filetrace" doctor --probes "$probes" >/dev/null 2>&1; echo $?)" 0
     stop_agent
@@ -2141,11 +2141,11 @@ if [ -n "$dynamic" ]; then
     expect "forced return probes: named" "$(name_of forced.bin)" alone.ft.test
     expect_match "forced return probes: probed" "$(cat "$work/forced.err")" 'probing name lookups in'
     expect_match "forced return probes: what it costs is logged" "$(cat "$work/forced.err")" \
-        'warn: return probes kill processes under seccomp on this kernel.*force_return_probes attaches the PHP probes and those of name lookups all the same, so a process under a seccomp filter is killed'
+        'warn: return probes kill processes under seccomp on this kernel.*force_return_probes attaches the PHP, lookup and TLS probes all the same, so a process under a seccomp filter is killed'
     expect "forced return probes: nothing refused" \
         "$(grep -c 'are not attached' "$work/forced.err")" 0
     expect_match "forced return probes: names" "$(ft capabilities | grep '^Destination names')" \
-        'PARTIAL'
+        '(PARTIAL|FULL)'
     stop_agent
     expect "forced return probes: agent exit code" "$?" 0
     unset FILETRACE_TEST_RETURN_PROBES
