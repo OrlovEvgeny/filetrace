@@ -86,6 +86,18 @@ static void name_capability(const struct ft_linux_probes *p, const struct ft_bac
     }
 }
 
+static void php_capability(const struct ft_backend_config *cfg, struct ft_capabilities *out)
+{
+    if (cfg->mode < FT_MODE_STANDARD)
+        ft_capability_set(out, FT_FEAT_PHP_SCRIPTS, FT_CAP_DISABLED, "%s",
+                          "disabled in minimal mode");
+    else if (!cfg->php_scripts)
+        ft_capability_set(out, FT_FEAT_PHP_SCRIPTS, FT_CAP_DISABLED, "%s",
+                          "turned off in the configuration");
+    else
+        ft_capability_set(out, FT_FEAT_PHP_SCRIPTS, FT_CAP_FULL, "%s", "");
+}
+
 void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_backend_config *cfg,
                            const struct ft_backend_stats *libraries, struct ft_capabilities *out)
 {
@@ -199,6 +211,7 @@ void ft_linux_capabilities(const struct ft_linux_probes *p, const struct ft_back
                       "cgroup and namespace identifiers are recorded per process; "
                       "container names are not resolved");
     name_capability(p, cfg, libraries, out);
+    php_capability(cfg, out);
 }
 
 static bool lockdown_blocks_reads(void)

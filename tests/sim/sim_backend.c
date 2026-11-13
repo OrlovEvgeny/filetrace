@@ -60,6 +60,7 @@ static void fill_capabilities(struct ft_capabilities *caps)
                       "control group and namespace identifiers are made up per process");
     ft_capability_set(caps, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL, "%s",
                       "looked-up and TLS server names are made up per destination");
+    ft_capability_set(caps, FT_FEAT_PHP_SCRIPTS, FT_CAP_FULL, "%s", "");
 }
 
 static void backend_diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *out)

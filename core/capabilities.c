@@ -22,6 +22,7 @@ static const struct {
     [FT_FEAT_PACKET_EGRESS] = {"Packet-level egress", "packet_level_egress"},
     [FT_FEAT_NAMESPACES] = {"Container namespaces", "container_namespaces"},
     [FT_FEAT_DESTINATION_NAMES] = {"Destination names", "destination_names"},
+    [FT_FEAT_PHP_SCRIPTS] = {"PHP request scripts", "php_request_scripts"},
 };
 
 const char *ft_feature_title(enum ft_feature f)
