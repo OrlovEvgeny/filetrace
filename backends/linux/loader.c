@@ -1000,7 +1000,18 @@ static struct ft_backend *backend_open(const struct ft_backend_config *cfg,
             FT_LOG_WARN,
             "[correlation] background_paths and strict_paths name more than %d files; %zu are kept",
             FT_BPF_BACKGROUND_MAX, b->probes.listed_files);
-    if (cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD) {
+    /* Both PHP probes or neither: without its end, a request's script would stay with the
+     * thread. */
+    bool php = cfg->php_scripts && cfg->mode >= FT_MODE_STANDARD;
+    if (php && !ft_linux_returns_allowed(&b->probes, cfg)) {
+        char why[192];
+        ft_log(FT_LOG_WARN,
+               "%s; the PHP probes are not attached, so a PHP worker's transfers name its pool "
+               "instead of the request's script",
+               ft_linux_returns_refusal(&b->probes, why, sizeof(why)));
+        php = false;
+    }
+    if (php) {
         b->php = ft_linux_php_open(obj);
         if (b->php)
             ft_linux_php_scan(b->php);

@@ -314,6 +314,19 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
     }
     ft_diagnosis_add(out, FT_CHECK_OK, false, "BPF programs",
                      "loaded; every kernel field they read was found");
+    if (probes.returns == FT_RETURNS_NO_SYSCALL) {
+        ft_diagnosis_add(out, FT_CHECK_OK, true, "Return probes",
+                         "this architecture returns from them without a system call");
+    } else if (probes.returns == FT_RETURNS_SAFE) {
+        ft_diagnosis_add(out, FT_CHECK_OK, true, "Return probes",
+                         "a process whose seccomp filter refuses the uretprobe system call "
+                         "survived one");
+    } else if (probes.returns != FT_RETURNS_NOT_TESTED) {
+        char why[192];
+        ft_diagnosis_add(out, FT_CHECK_WARN, true, "Return probes",
+                         "%s; the PHP probes are not attached",
+                         ft_linux_returns_refusal(&probes, why, sizeof(why)));
+    }
 
     size_t failed_groups = report_probes(out, &probes);
     if (probes.aging) {
@@ -325,6 +338,8 @@ void ft_linux_diagnose(const struct ft_backend_config *requested, struct ft_diag
                                error_text(probes.aging_error));
         failed_groups++;
     }
+    if (!ft_linux_returns_allowed(&probes, &cfg) && probes.returns != FT_RETURNS_NOT_TESTED)
+        failed_groups++;
     bool have_network = ft_linux_network_attached(&probes);
     bool kprobes = probes.set->kind == FT_PROBES_KPROBE;
 
