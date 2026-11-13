@@ -1,9 +1,40 @@
 #!/bin/sh
 # usage: boot.sh <kernel version prefix> <build directory> <command...>
+#        boot.sh --arch x86_64 <directory with vmlinuz and initramfs.gz>
 # Exits with the command's exit code, or 125 when the kernel never reported one.
 # A rootfs.tar in the build directory, such as the acceptance image's filesystem, is unpacked
 # under the root first, with the acceptance scenarios in /acceptance.
+# An x86_64 guest comes from x86_64/root.sh and runs under KVM when /dev/kvm opens here.
 set -eu
+
+# boot <kernel> <initramfs> <memory in MB> <console> <QEMU and its machine...>
+boot() {
+    kernel=$1
+    initramfs=$2
+    memory=$3
+    console=$4
+    shift 4
+    timeout 1800 "$@" -smp 4 -m "$memory" \
+        -nographic -no-reboot -nic none -kernel "$kernel" -initrd "$initramfs" \
+        -append "console=$console quiet panic=-1 rdinit=/init" </dev/null |
+        tr -d '\r' | tee /tmp/vm.log
+
+    code=$(sed -n 's/^FT_VM_EXIT=\([0-9]*\).*/\1/p' /tmp/vm.log | tail -1)
+    exit "${code:-125}"
+}
+
+if [ "$1" = --arch ] && [ "$2" = x86_64 ]; then
+    # Opening <> would create a missing /dev/kvm as a file.
+    if [ -c /dev/kvm ] && (: <>/dev/kvm) 2>/dev/null; then
+        echo "x86_64 guest under KVM"
+        accel=kvm
+    else
+        echo "x86_64 guest under emulation: no usable /dev/kvm"
+        accel=tcg,thread=multi
+    fi
+    boot "$3/vmlinuz" "$3/initramfs.gz" 2048 ttyS0 \
+        qemu-system-x86_64 -M q35 -cpu max -accel "$accel"
+fi
 
 kernel=$(ls /opt/kernels/vmlinuz-"$1"* | head -1)
 build=$2
@@ -78,9 +109,5 @@ printf '%s\n' "$*" >>"$root/command.sh"
 
 (cd "$root" && find . | cpio -o -H newc --quiet | gzip -1) >/tmp/initramfs.gz
 
-timeout 1800 qemu-system-aarch64 -M virt -cpu cortex-a72 -accel tcg,thread=multi -smp 4 -m "$memory" \
-    -nographic -no-reboot -nic none -kernel "$kernel" -initrd /tmp/initramfs.gz \
-    -append "console=ttyAMA0 quiet panic=-1 rdinit=/init" </dev/null | tr -d '\r' | tee /tmp/vm.log
-
-code=$(sed -n 's/^FT_VM_EXIT=\([0-9]*\).*/\1/p' /tmp/vm.log | tail -1)
-exit "${code:-125}"
+boot "$kernel" /tmp/initramfs.gz "$memory" ttyAMA0 \
+    qemu-system-aarch64 -M virt -cpu cortex-a72 -accel tcg,thread=multi
