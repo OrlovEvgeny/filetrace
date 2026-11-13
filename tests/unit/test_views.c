@@ -160,7 +160,7 @@ static void transfers(void)
         strstr(text,
                ",nginx,/usr/sbin/nginx,,,,\"/data/export/report, \"\"final\"\".csv\","
                "928371,2049,148293012,root,ext4,false,tcp,127,10.0.0.10,443,203.0.113.42,"
-               "52144,,"
+               "52144,,,,,,"
                "sendfile,148293012,,1258291,1248,2026-11-10T21:42:03.010Z,8200,completed,exact,") !=
         nullptr);
     free(text);
@@ -342,8 +342,97 @@ static void interpreters_name_their_scripts(void)
     free(row);
 }
 
+static void add_connection(struct ft_rows *rows, uint64_t sock, uint32_t pid, const char *comm,
+                           struct ft_endpoint remote, const struct ft_remote_names *names)
+{
+    struct ft_row_connection row = {
+        .sock_id = sock,
+        .pid = pid,
+        .proto = FT_PROTO_TCP,
+        .state = FT_SOCK_ESTABLISHED,
+        .local = endpoint(10, 0, 0, 12, 50412),
+        .remote = remote,
+    };
+
+    ft_strlcpy(row.comm, comm, sizeof(row.comm));
+    ft_remote_names_pack(names, &row.names, row.text, sizeof(row.text));
+    CHECK(ft_rows_append(rows, &row, ft_row_connection_size(&row)));
+}
+
+static void remote_ends_have_names(void)
+{
+    struct ft_remote_names settled = {
+        .tls = "files.example.com", .resolved = {"files.example.com"}, .listed = 1, .count = 1};
+    struct ft_remote_names several = {
+        .tls = "", .resolved = {"cdn.example.com", "static.example.com"}, .listed = 2, .count = 2};
+    struct ft_remote_names proxied = {
+        .tls = "s3.example.com", .resolved = {"proxy.corp.example"}, .listed = 1, .count = 1};
+    struct ft_remote_names none = {.tls = ""};
+    struct ft_rows rows;
+
+    ft_rows_init(&rows, FT_MSG_ROW_CONNECTION);
+    add_connection(&rows, 41, 2210, "php-fpm", endpoint(203, 0, 113, 25, 443), &settled);
+    add_connection(&rows, 52, 3312, "curl", endpoint(203, 0, 113, 25, 80), &several);
+    add_connection(&rows, 58, 4120, "python3", endpoint(10, 0, 0, 5, 3128), &proxied);
+    add_connection(&rows, 17, 1840, "nginx", endpoint(198, 51, 100, 4, 51344), &none);
+
+    char *text = render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_JSONL, false);
+    CHECK(strstr(text, "\"remote_port\":443,\"remote_name\":\"files.example.com\","
+                       "\"remote_name_source\":\"lookup+tls\","
+                       "\"resolved_names\":[\"files.example.com\"],"
+                       "\"resolved_name_count\":1,\"state\":") != nullptr);
+    CHECK(strstr(text, "\"remote_port\":80,\"remote_name\":\"cdn.example.com\","
+                       "\"remote_name_source\":\"lookup\","
+                       "\"resolved_names\":[\"cdn.example.com\",\"static.example.com\"],"
+                       "\"resolved_name_count\":2,\"state\":") != nullptr);
+    CHECK(strstr(text, "\"remote_port\":3128,\"remote_name\":\"s3.example.com\","
+                       "\"remote_name_source\":\"tls\","
+                       "\"resolved_names\":[\"proxy.corp.example\"],") != nullptr);
+    /* A remote end nobody named has none of the four members. */
+    CHECK(strstr(text, "\"remote_ip\":\"198.51.100.4\",\"remote_port\":51344,\"state\":") !=
+          nullptr);
+    free(text);
+
+    text = render(FT_VIEW_CONNECTIONS, &rows, FT_FMT_CSV, false);
+    CHECK(strstr(text, ",remote_ip,remote_port,remote_host,remote_name,remote_name_source,"
+                       "resolved_names,resolved_name_count,state,") != nullptr);
+    CHECK(strstr(text, ",203.0.113.25,80,,cdn.example.com,lookup,"
+                       "cdn.example.com;static.example.com,2,established,") != nullptr);
+    CHECK(strstr(text, ",198.51.100.4,51344,,,,,,established,") != nullptr);
+    free(text);
+    ft_rows_free(&rows);
+
+    struct ft_row_transfer *row = calloc(1, sizeof(*row));
+    row->id = 0x1a;
+    row->pid = 2210;
+    row->bytes = 2048;
+    row->proto = FT_PROTO_TCP;
+    row->method = FT_METHOD_READ_SEND;
+    row->confidence = FT_CONF_INFERRED;
+    row->flags = FT_XFER_FILE_KNOWN | FT_XFER_PATH_KNOWN;
+    row->remote = endpoint(203, 0, 113, 25, 443);
+    ft_strlcpy(row->comm, "php-fpm", sizeof(row->comm));
+    ft_strlcpy(row->path, "/data/invoice.pdf", sizeof(row->path));
+    set_process_strings(row, "php-fpm: pool www", "/", "/srv/blog/index.php");
+    size_t at = ft_row_transfer_size(row) - offsetof(struct ft_row_transfer, path);
+    ft_remote_names_pack(&settled, &row->names, row->path + at, sizeof(row->path) - at);
+    ft_rows_init(&rows, FT_MSG_ROW_TRANSFER);
+    CHECK(ft_rows_append(&rows, row, ft_row_transfer_size(row)));
+
+    text = render(FT_VIEW_FILES, &rows, FT_FMT_JSONL, false);
+    CHECK(strstr(text, "\"remote_ip\":\"203.0.113.25\",\"remote_port\":443,"
+                       "\"remote_name\":\"files.example.com\","
+                       "\"remote_name_source\":\"lookup+tls\","
+                       "\"resolved_names\":[\"files.example.com\"],"
+                       "\"resolved_name_count\":1},\"transfer\":{") != nullptr);
+    free(text);
+    ft_rows_free(&rows);
+    free(row);
+}
+
 void test_views(void)
 {
+    remote_ends_have_names();
     transfers();
     processes();
     connections();
