@@ -136,15 +136,15 @@ ok "a name before another network is asked" query neither.txt connections --remo
 ok "the name still holds beside the network" test ! -s neither.txt
 ok "an unknown name lists nothing" query unnamed.txt files --remote none.example.com --format quiet
 ok "nothing is listed for it" test ! -s unnamed.txt
-ok "events are listed by a name" query events.txt events --type socket_connect --remote 'mirror-*' --limit 1
-ok "an event names its remote end" grep -Eq '^  remote_name=mirror-[12]\.internal$' events.txt
+ok "events are listed by a name" query events.txt events --type file_transfer --remote 'ch-replica-*' --limit 1
+ok "an event names its remote end" grep -Eq '^  remote_name=ch-replica-[23]\.internal$' events.txt
 ok "an event says where the name is from" grep -q '^  remote_name_source=lookup$' events.txt
-ok "raw events are listed" query events.raw events --type socket_connect --remote 'mirror-*' --limit 1 --raw
-ok "a raw event names its remote end" grep -Eq ' remote_port=873 remote_name=mirror-[12]\.internal bytes=' events.raw
+ok "raw events are listed" query events.raw events --type file_transfer --remote 'ch-replica-*' --limit 1 --raw
+ok "a raw event names its remote end" grep -Eq ' remote_port=9009 remote_name=ch-replica-[23]\.internal bytes=' events.raw
 ok "raw events without a name are listed" query bare.raw events --type network_send --process nginx --limit 1 --raw
 ok "a raw event without a name keeps the field" grep -Eq ' remote_port=[0-9]+ remote_name=- bytes=' bare.raw
-ok "events are listed as JSON" query events.jsonl events --type socket_connect --remote 'mirror-*' --limit 1 --jsonl
-ok "a JSON event names its remote end" grep -Eq '"remote_port":873,"remote_name":"mirror-[12]\.internal","remote_name_source":"lookup"\}' events.jsonl
+ok "events are listed as JSON" query events.jsonl events --type file_transfer --remote 'ch-replica-*' --limit 1 --jsonl
+ok "a JSON event names its remote end" grep -Eq '"remote_port":9009,"remote_name":"ch-replica-[23]\.internal","remote_name_source":"lookup"\}' events.jsonl
 
 socket=$("$cli" --socket sim.sock connections --remote 'registry.*' --format quiet 2>/dev/null | head -n 1)
 ok "a socket is inspected" query socket.txt inspect socket "$socket"

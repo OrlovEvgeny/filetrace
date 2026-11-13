@@ -784,7 +784,7 @@ static bool transfer_start(struct ft_sim_engine *e, struct slot *s, struct gen_r
 
     if (!(def->keep_socket && s->has_socket))
         open_socket(e, s, g, p, at);
-    if (announce(e, &s->file))
+    if (def->method != FT_METHOD_NONE && announce(e, &s->file))
         ring_file(e, at + 200 * 1000, &s->file, s->size, p->def->uid, f->fs_type, path);
 
     s->proc = (uint32_t)pi;
@@ -864,12 +864,14 @@ static void send_segment(struct ft_sim_engine *e, struct slot *s, const struct g
 
     s->sent += bytes;
     uint64_t ops = (bytes + def->chunk - 1) / def->chunk;
-    if (s->xfer_bytes == 0)
-        s->xfer_first_ns = from_ns;
-    s->xfer_last_ns = ts;
-    s->xfer_bytes += bytes;
-    s->xfer_ops += (uint32_t)ops;
-    if (def->method != FT_METHOD_SENDFILE) {
+    if (def->method != FT_METHOD_NONE) {
+        if (s->xfer_bytes == 0)
+            s->xfer_first_ns = from_ns;
+        s->xfer_last_ns = ts;
+        s->xfer_bytes += bytes;
+        s->xfer_ops += (uint32_t)ops;
+    }
+    if (def->method == FT_METHOD_READ_SEND) {
         uint64_t read_total = s->sent + def->chunk;
         if (read_total > s->size)
             read_total = s->size;

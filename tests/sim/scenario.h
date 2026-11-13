@@ -69,7 +69,8 @@ struct ft_sim_generator {
     const char *name;     /* nullptr ends a table */
     uint32_t parent;      /* sends from any live child of this process */
     const uint32_t *pids; /* or from these, one per slot in turn; 0 ends the list */
-    enum ft_method method;
+    enum ft_method
+        method;    /* FT_METHOD_NONE: what it sends is no file, only a flavor's size and rate */
     bool outbound; /* this host opens the connections */
     bool keep_socket;
     bool flavor_by_slot;
