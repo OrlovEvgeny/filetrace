@@ -2,6 +2,7 @@
 
 #include "filetrace/schema.h"
 #include "filetrace/sysinfo.h"
+#include "filetrace/table.h"
 
 #include <string.h>
 
@@ -32,4 +33,13 @@ void ft_telemetry_collect(const struct ft_telemetry_source *src, uint64_t now_ns
         .cpu_ns = usage.cpu_ns,
     };
     ft_metrics_collect(&in, emit, ctx);
+}
+
+void ft_telemetry_transfer_names(const struct ft_telemetry_source *src,
+                                 const struct ft_row_event *row, struct ft_remote_names *out)
+{
+    const struct ft_state *st = src->state;
+    const struct ft_socket *s = row->sock_id ? ft_table_find(st->sockets, &row->sock_id) : nullptr;
+
+    ft_binding_names(st, s ? ft_state_socket_names(st, s) : nullptr, out);
 }

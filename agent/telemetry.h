@@ -21,6 +21,10 @@ void ft_telemetry_resource(const struct ft_telemetry_source *src,
 void ft_telemetry_collect(const struct ft_telemetry_source *src, uint64_t now_ns,
                           ft_metric_fn *emit, void *ctx);
 
+/* The names of a transfer record's remote end, read while the state hands the record out. */
+void ft_telemetry_transfer_names(const struct ft_telemetry_source *src,
+                                 const struct ft_row_event *row, struct ft_remote_names *out);
+
 /* The page a Prometheus server scrapes. A nullptr scrape is accepted and does nothing. */
 struct ft_scrape;
 

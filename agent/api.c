@@ -51,6 +51,7 @@ struct parts {
     Connection connection;
     Endpoint local;
     Endpoint remote;
+    char *resolved[FT_RESOLVED_NAMES];
     char name[FT_COMM_MAX];
     char local_address[64];
     char remote_address[64];
@@ -68,6 +69,20 @@ static Filetrace__V1__Method method_of(uint8_t method)
     return method == FT_METHOD_SENDFILE    ? FILETRACE__V1__METHOD__METHOD_SENDFILE
            : method == FT_METHOD_READ_SEND ? FILETRACE__V1__METHOD__METHOD_READ_WRITE
                                            : FILETRACE__V1__METHOD__METHOD_UNSPECIFIED;
+}
+
+static Filetrace__V1__NameSource name_source_of(enum ft_name_source source)
+{
+    switch (source) {
+    case FT_NAME_SOURCE_LOOKUP:
+        return FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_LOOKUP;
+    case FT_NAME_SOURCE_TLS:
+        return FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_TLS;
+    case FT_NAME_SOURCE_LOOKUP_TLS:
+        return FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_LOOKUP_AND_TLS;
+    default:
+        return FILETRACE__V1__NAME_SOURCE__NAME_SOURCE_UNSPECIFIED;
+    }
 }
 
 /* The API numbers the levels one above the agent's, leaving zero for "not given". */
@@ -110,6 +125,22 @@ static void fill_connection(struct parts *p, uint64_t sock_id, uint16_t proto,
         fill_endpoint(&p->local, p->local_address, sizeof(p->local_address), local);
     p->connection.remote =
         fill_endpoint(&p->remote, p->remote_address, sizeof(p->remote_address), remote);
+}
+
+/* The strings must outlive the message; a connection without a name keeps its fields empty. */
+static void fill_names(struct parts *p, const char *name, enum ft_name_source source,
+                       const struct ft_remote_names *names)
+{
+    Connection *c = &p->connection;
+
+    if (name[0]) {
+        c->remote_name = (char *)(uintptr_t)name;
+        c->remote_name_source = name_source_of(source);
+    }
+    for (uint32_t i = 0; i < names->listed && i < FT_RESOLVED_NAMES; i++)
+        p->resolved[c->n_resolved_names++] = (char *)(uintptr_t)names->resolved[i];
+    c->resolved_names = p->resolved;
+    c->resolved_name_count = names->count;
 }
 
 static void reply(struct ft_grpc_call *call, const ProtobufCMessage *message)
@@ -235,6 +266,13 @@ static void list_row(void *ctx, uint16_t type, const void *payload, size_t size)
     p->process.working_directory = ft_arena_text(&l->arena, strings.cwd);
     p->process.script = ft_arena_text(&l->arena, strings.script);
     fill_connection(p, row->sock_id, row->proto, &row->local, &row->remote);
+    struct ft_remote_names remote_names;
+    ft_row_transfer_names(row, &remote_names);
+    remote_names.tls = ft_arena_text(&l->arena, remote_names.tls);
+    for (uint32_t i = 0; i < remote_names.listed; i++)
+        remote_names.resolved[i] = ft_arena_text(&l->arena, remote_names.resolved[i]);
+    fill_names(p, ft_remote_name(&remote_names), ft_remote_name_source(&remote_names),
+               &remote_names);
     t->id = row->id;
     t->process = &p->process;
     t->connection = &p->connection;
@@ -346,14 +384,16 @@ void ft_api_record(struct ft_api *a, const struct ft_row_event *row)
     static char cwd[FT_PATH_MAX];
     static char script[FT_PATH_MAX];
     static char none[1];
-    static uint8_t bytes[FT_PATH_MAX + FT_PROCESS_TEXT_MAX + 512];
+    static uint8_t bytes[FT_PATH_MAX + FT_PROCESS_TEXT_MAX + FT_NAMES_TEXT_MAX + 512];
     struct parts parts;
+    struct ft_remote_names names;
     TransferEvent event;
     WatchResponse response;
     bool described = false;
 
-    if (!a || row->type != FT_REC_FILE_TRANSFER)
+    if (!a || row->type != FT_REC_FILE_TRANSFER || a->watcher_count == 0)
         return;
+    ft_telemetry_transfer_names(&a->src, row, &names);
     for (size_t i = 0; i < a->watcher_count; i++) {
         struct watcher *w = &a->watchers[i];
 
@@ -372,6 +412,8 @@ void ft_api_record(struct ft_api *a, const struct ft_row_event *row)
             parts.process.working_directory = cwd;
             parts.process.script = script;
             fill_connection(&parts, row->sock_id, row->proto, &row->local, &row->remote);
+            fill_names(&parts, ft_row_event_name(row), (enum ft_name_source)row->name_source,
+                       &names);
             filetrace__v1__file__init(&parts.file);
             parts.file.path = path;
             parts.file.inode = row->ino;
