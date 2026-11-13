@@ -1814,8 +1814,12 @@ static __always_inline void fill_exec(struct ft_bpf_ev_exec *e, struct task_stru
     e->exe_ino = BPF_CORE_READ(inode, i_ino);
     e->exe_size = (__u64)BPF_CORE_READ(inode, i_size);
     struct mnt_namespace *mnt_ns = BPF_CORE_READ(task, nsproxy, mnt_ns);
-    e->mntns_seq = bpf_core_field_exists(mnt_ns->seq) ? BPF_CORE_READ(mnt_ns, seq)
-                                                      : BPF_CORE_READ(mnt_ns, ns.inum);
+    if (bpf_core_field_exists(mnt_ns->seq))
+        e->mntns_seq = BPF_CORE_READ(mnt_ns, seq);
+    else if (bpf_core_field_exists(mnt_ns->ns.ns_id))
+        e->mntns_seq = BPF_CORE_READ(mnt_ns, ns.ns_id);
+    else
+        e->mntns_seq = BPF_CORE_READ(mnt_ns, ns.inum);
     e->cwd_len = 0;
     e->cwd_depth = 0;
     e->cwd_flags = 0;
