@@ -281,6 +281,26 @@ static void next_match_or_host_names(void)
     rig_close(&r);
 }
 
+static void names_or_addresses(void)
+{
+    struct rig r;
+
+    CHECK(rig_open(&r, FT_TOP_TRANSFERS));
+    fill(&r, 2);
+    deliver(&r);
+
+    /* Names by default; a switches every mode with destination cells, but not Leaders. */
+    CHECK(!r.c->ui.addresses);
+    CHECK(type(&r, "a") & FT_TOP_DO_REDRAW);
+    CHECK(r.c->ui.addresses);
+    type(&r, "3a");
+    CHECK(!r.c->ui.addresses);
+    type(&r, "L");
+    CHECK_U64(type(&r, "a") & FT_TOP_DO_REDRAW, 0);
+    CHECK(!r.c->ui.addresses);
+    rig_close(&r);
+}
+
 static void modes(void)
 {
     struct rig r;
@@ -822,6 +842,7 @@ void test_top_control(void)
     esc_ladder();
     prompt_keeps_keys();
     next_match_or_host_names();
+    names_or_addresses();
     modes();
     selection_and_scroll();
     pause_holds_frames();

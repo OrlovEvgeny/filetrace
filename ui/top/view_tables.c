@@ -344,7 +344,7 @@ static const char *endpoint_text(struct row_draw *rd, const struct ft_top_transf
 {
     const char *full = t->remote_text;
 
-    if (t->names) {
+    if (t->names && !rd->d->ui->addresses) {
         char *name = row_text(rd);
         ft_remote_name_cell(t->names, t->remote.port, name, ROW_TEXT_BYTES);
         return cut_end(rd, name, cols);

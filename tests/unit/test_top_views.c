@@ -342,12 +342,19 @@ static void transfer_names(void)
         "s3.example.com via prox… ",
         "198.51.100.4:51344       ",
     };
+    static const char *const addresses[] = {
+        "198.51.100.7:443         ",
+        "10.0.8.40:3128           ",
+        "198.51.100.4:51344       ",
+    };
     struct fixture f;
     struct ft_top_ui ui = {.mode = FT_TOP_TRANSFERS, .full_paths = true};
 
     named_fixture(&f);
     ft_top_set_mode(f.m, FT_TOP_TRANSFERS);
     destination_cells(&f, &ui, names);
+    ui.addresses = true;
+    destination_cells(&f, &ui, addresses);
     fixture_free(&f);
 }
 
