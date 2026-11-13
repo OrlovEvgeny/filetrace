@@ -46,14 +46,25 @@ than the release when the release passed it.
 
 ## What has been run
 
-Every scenario of `expected.txt` has been run through `guest.sh` inside one privileged
-container on a Linux 7.0 kernel, on both probe sets, and the rows that differed from their
-expectations were run again in a container of their own each. `run.sh` itself (its image
-build and one container per scenario) and `tools/dev/vm/acceptance.sh` (the 6.1 and 6.12
-guests) have not been run on this tree.
+Every scenario of `expected.txt` other than the rows of the findings F035 to F043, U001, AF2
+and SB0 has been run through `guest.sh` inside one privileged container on a Linux 7.0
+kernel, on both probe sets, and the rows that differed from their expectations were run again
+in a container of their own each. The rows of those findings are written and listed; they have
+not run yet. `run.sh` itself (its image build and one container per scenario) and
+`tools/dev/vm/acceptance.sh` (the 6.1 and 6.12 guests) have not been run on this tree.
 
 ## Adding a scenario
 
 Write `cases/<name>.sh`, which sources `lib.sh` and ends with `RESULT: OK` or `RESULT: BUG`, or
 register a function in `scenarios.py` that returns a `Case` naming every file it sent; then
 add its row to `expected.txt`.
+
+A scenario that needs something this machine lacks, such as a JDK, returns a `Case` with `skip`
+set, ends with `RESULT: SKIP` and is reported as skipped. A scenario that could not set itself
+up, such as one that needs a new socket at a closed socket's address and did not get it, sets
+`invalid` and ends with `RESULT: INVALID`, which counts as no verdict.
+
+`script_peer.py` is a peer for one TCP connection that follows a script of receives, sends,
+waits, closes and resets; it can wait for a file before it connects. The scenarios that need a
+socket at the address of one just closed run on one CPU (`pin_to_one_cpu`): a freed socket goes
+back to the freelist of its CPU, and the next one allocated there takes its place.
