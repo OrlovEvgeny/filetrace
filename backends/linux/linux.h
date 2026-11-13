@@ -80,8 +80,14 @@ bool ft_linux_returns_tested(const struct ft_backend_config *cfg);
 /* Tests return probes in a process of its own, before any is attached for real. */
 void ft_linux_returns_test(struct ft_linux_probes *p, const struct ft_backend_config *cfg);
 bool ft_linux_returns_allowed(const struct ft_linux_probes *p, const struct ft_backend_config *cfg);
+/* Whether the test found return probes unsafe, or could not tell. */
+bool ft_linux_returns_refused(const struct ft_linux_probes *p);
 /* Why the probes that need return probes are not attached. */
 const char *ft_linux_returns_refusal(const struct ft_linux_probes *p, char *buf, size_t size);
+/* What it means that they are attached against the test. */
+const char *ft_linux_returns_forced(const struct ft_linux_probes *p, char *buf, size_t size);
+/* What a check of the host says, whatever the agent's settings are. */
+const char *ft_linux_returns_row(const struct ft_linux_probes *p, char *buf, size_t size);
 
 /* Returns 0 once an object is loaded, even if single probes failed (see status); else -errno. */
 int ft_linux_probes_load(const struct ft_backend_config *cfg, struct ft_linux_probes *out);

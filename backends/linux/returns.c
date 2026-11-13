@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -36,6 +37,7 @@
 #define URETPROBE_NR 335 /* x86-64's; unassigned on arm64, where the test only runs on request */
 
 #define TEST_EXIT 42
+#define TEST_KILLED 43
 #define TEST_WAIT_MS 5000
 
 /* Hidden: "unsafe" takes the test as failed, "run" runs it where the architecture needs none. */
@@ -99,10 +101,29 @@ static bool refuse_return_syscall(void)
            prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog, 0, 0) == 0;
 }
 
+static void killed(int)
+{
+    _exit(TEST_KILLED);
+}
+
+/* A killed test process would leave a line in the kernel log and a core at every start. */
+static void die_quietly(void)
+{
+    struct sigaction quiet = {.sa_handler = killed};
+    sigaction(SIGSEGV, &quiet, nullptr);
+    sigaction(SIGBUS, &quiet, nullptr);
+    sigaction(SIGILL, &quiet, nullptr);
+    setrlimit(RLIMIT_CORE, &(struct rlimit){0});
+    prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+}
+
 [[noreturn]] static void test_process(int go)
 {
     char c;
-    if (read(go, &c, 1) != 1 || !refuse_return_syscall())
+    if (read(go, &c, 1) != 1)
+        _exit(1);
+    die_quietly();
+    if (!refuse_return_syscall())
         _exit(1);
     int (*volatile call)(int) = returns_target;
     _exit(call(TEST_EXIT - 1));
@@ -176,7 +197,9 @@ static enum ft_linux_returns run_test(struct bpf_object *obj, int *error)
     uint32_t zero = 0;
     uint64_t returns = 0;
     bpf_map_lookup_elem(bpf_map__fd(checks), &zero, &returns);
-    if (status != -1 && WIFSIGNALED(status))
+    bool died = status != -1 &&
+                (WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) == TEST_KILLED));
+    if (died)
         return FT_RETURNS_UNSAFE;
     if (link && status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == TEST_EXIT && returns)
         return FT_RETURNS_SAFE;
@@ -204,15 +227,51 @@ bool ft_linux_returns_allowed(const struct ft_linux_probes *p, const struct ft_b
            cfg->force_return_probes;
 }
 
-const char *ft_linux_returns_refusal(const struct ft_linux_probes *p, char *buf, size_t size)
+bool ft_linux_returns_refused(const struct ft_linux_probes *p)
+{
+    return p->returns == FT_RETURNS_UNSAFE || p->returns == FT_RETURNS_UNKNOWN;
+}
+
+static const char *finding(const struct ft_linux_probes *p, char *buf, size_t size)
 {
     if (p->returns == FT_RETURNS_UNSAFE)
         return "return probes kill processes under seccomp on this kernel, as on x86-64 6.11 to "
-               "6.12.13 and 6.13 to 6.13.2: update the kernel, or see [process] "
-               "force_return_probes";
-    snprintf(buf, size,
-             "return probes could not be tested against seccomp (%s); [process] "
-             "force_return_probes attaches them anyway",
+               "6.12.13 and 6.13 to 6.13.2";
+    snprintf(buf, size, "return probes could not be tested against seccomp (%s)",
              strerror(p->returns_error));
+    return buf;
+}
+
+const char *ft_linux_returns_refusal(const struct ft_linux_probes *p, char *buf, size_t size)
+{
+    char found[128];
+    snprintf(buf, size, "%s: %s[process] force_return_probes%s", finding(p, found, sizeof(found)),
+             p->returns == FT_RETURNS_UNSAFE ? "update the kernel, or see " : "",
+             p->returns == FT_RETURNS_UNSAFE ? "" : " attaches them anyway");
+    return buf;
+}
+
+const char *ft_linux_returns_forced(const struct ft_linux_probes *p, char *buf, size_t size)
+{
+    char found[128];
+    snprintf(buf, size,
+             "%s; [process] force_return_probes attaches the PHP probes and those of name "
+             "lookups all the same%s",
+             finding(p, found, sizeof(found)),
+             p->returns == FT_RETURNS_UNSAFE
+                 ? ", so a process under a seccomp filter is killed where a lookup or a PHP "
+                   "request ends"
+                 : "");
+    return buf;
+}
+
+const char *ft_linux_returns_row(const struct ft_linux_probes *p, char *buf, size_t size)
+{
+    char found[128];
+    snprintf(buf, size,
+             "%s%s; the agent attaches the PHP probes and those of name lookups here only with "
+             "[process] force_return_probes",
+             finding(p, found, sizeof(found)),
+             p->returns == FT_RETURNS_UNSAFE ? ": update the kernel" : "");
     return buf;
 }
