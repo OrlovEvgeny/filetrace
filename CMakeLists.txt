@@ -139,6 +139,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 ${FT_BPF_DIR}/common.bpf.h
                 ${FT_BPF_DIR}/lookups.bpf.h
                 ${FT_BPF_DIR}/returns.bpf.h
+                ${FT_BPF_DIR}/tls.bpf.h
                 ${FT_BPF_DIR}/abi.h
                 ${FT_BPF_DIR}/kernel_types.h
             COMMENT "Compiling BPF probes: ${name}"
