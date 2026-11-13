@@ -58,6 +58,8 @@ static void fill_capabilities(struct ft_capabilities *caps)
     ft_capability_set(caps, FT_FEAT_PACKET_EGRESS, FT_CAP_UNAVAILABLE, "%s", "not simulated");
     ft_capability_set(caps, FT_FEAT_NAMESPACES, FT_CAP_PARTIAL, "%s",
                       "control group and namespace identifiers are made up per process");
+    ft_capability_set(caps, FT_FEAT_DESTINATION_NAMES, FT_CAP_PARTIAL, "%s",
+                      "looked-up and TLS server names are made up per destination");
 }
 
 static void backend_diagnose(const struct ft_backend_config *cfg, struct ft_diagnosis *out)

@@ -18,6 +18,7 @@ enum ft_feature : uint8_t {
     FT_FEAT_MMAP,
     FT_FEAT_PACKET_EGRESS,
     FT_FEAT_NAMESPACES,
+    FT_FEAT_DESTINATION_NAMES,
     FT_FEAT_COUNT,
 };
 

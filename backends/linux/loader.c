@@ -958,7 +958,9 @@ static void backend_stats(struct ft_backend *b, struct ft_backend_stats *out)
 
 static void backend_capabilities(struct ft_backend *b, struct ft_capabilities *out)
 {
-    ft_linux_capabilities(&b->probes, &b->cfg, out);
+    struct ft_backend_stats libraries = {0};
+    backend_stats(b, &libraries);
+    ft_linux_capabilities(&b->probes, &b->cfg, &libraries, out);
 }
 
 static void backend_close(struct ft_backend *b)
