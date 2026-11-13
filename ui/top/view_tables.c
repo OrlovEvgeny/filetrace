@@ -183,7 +183,7 @@ static const struct table_spec tables[] = {
 };
 
 static const struct table_spec named_destinations = {
-    named_destination_columns,  FT_ARRAY_LEN(named_destination_columns),  COL_NAME, 20, 30,
+    named_destination_columns,  FT_ARRAY_LEN(named_destination_columns),  COL_NAME, 20, 0,
     named_destination_squeezes, FT_ARRAY_LEN(named_destination_squeezes),
 };
 

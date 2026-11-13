@@ -435,6 +435,9 @@ static void destination_columns(void)
         CHECK(shows(c, 29, 0, "NAME"));
         CHECK(has_label(c, 0, "rDNS") == cases[i].rdns);
         CHECK(last && ft_text_columns(last) >= ft_text_columns(cases[i].last));
+        /* NAME takes what the other columns leave, so the last one ends at the right edge. */
+        if (strcmp(cases[i].last, "TREND") == 0)
+            CHECK(shows(c, cases[i].width - 12, 0, "TREND 5m"));
         CHECK(shows(c, 29, 1, "files.example."));
         ft_canvas_destroy(c);
     }
