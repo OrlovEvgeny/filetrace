@@ -258,7 +258,7 @@ ok "top refuses a sort its mode lacks" exits 2 "$cli" --socket sim.sock top --mo
 
 ok "watch prints a frame" watch_frame watch.txt
 ok "watch shows a name in place of an address" grep -Eq '^rclone [0-9]+ +/srv/backups/pg/[^ ]+ +pg-backups\.s3\.example\.com +read-write ' watch.txt
-ok "watch leaves the address of a named end out" exits 1 grep -q '52\.219\.170\.52' watch.txt
+ok "watch leaves the address of a named end out" exits 1 grep -Eq '^rclone [0-9]+ +/srv/backups/pg/[^ ]+ +198\.51\.100\.7 ' watch.txt
 ok "watch shows the address of an end nobody named" grep -Eq '^java [0-9]+ +/var/lib/kafka/[^ ]+ +10\.0\.5\.2[23] +sendfile ' watch.txt
 ok "watch prints a frame by address" watch_frame watch-addresses.txt --addresses
 ok "the frame by address shows the address of a named end" grep -Eq '^rclone [0-9]+ +/srv/backups/pg/[^ ]+ +198\.51\.100\.7 +read-write ' watch-addresses.txt
