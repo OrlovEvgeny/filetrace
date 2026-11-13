@@ -855,7 +855,7 @@ static __always_inline enum carry_end carry_closing(__u64 sk, int oldstate, int 
     return hung && heard <= (fin ? 1 : 0) ? CARRY_HUNG : CARRY_QUIET;
 }
 
-/* A window that a newcomer among its socket's owners ended. */
+/* A window a newcomer among its socket's owners ended, which a send waiting for room holds. */
 static __always_inline bool carry_evicted(const struct carry *c)
 {
     return c->closed == CARRY_NEXT + 1;
@@ -1040,13 +1040,15 @@ int ft_carries_aged(struct bpf_iter__bpf_map_elem *ctx)
     if (!gone && now - c->last_ns <= cfg.corr_window_ns)
         return 0;
     enum carry_end end = CARRY_AGED;
-    if (gone || c->closed) {
+    if (gone || (c->closed && !carry_evicted(c))) {
         if (c->closed)
             end = (enum carry_end)(c->closed - 1);
-    } else if (carry_settle(map, sk, now) || moved) {
+    } else if (carry_settle(map, sk, now) || (moved && !carry_evicted(c))) {
         /* A send the socket took since the last visit, or one waiting for room, keeps it open. */
         c->last_ns = now;
         return 0;
+    } else if (carry_evicted(c)) {
+        end = CARRY_NEXT;
     } else if (c->kind != CARRY_EPISODE && c->wire < CARRY_FLIGHT_MAX) {
         return 0;
     }
