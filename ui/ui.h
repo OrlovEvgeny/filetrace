@@ -32,6 +32,7 @@ struct ft_column_fit {
     uint8_t early_cut;  /* an earlier turn with a milder cut, from 1; 0: none */
     size_t early_least; /* the narrowest that milder cut leaves them */
     bool keep_end;      /* a cut keeps the end of the text, as of a path, rather than its start */
+    bool keep_count;    /* a cut keeps a count the text ends in, as the " (+2)" of names */
     uint8_t leave;      /* turn in which the column is left out whole, from 1; 0: never */
 };
 

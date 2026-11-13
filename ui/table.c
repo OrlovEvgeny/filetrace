@@ -153,8 +153,24 @@ static const char *skip_points(const char *s, size_t n)
     return s;
 }
 
+/* Where a count such as " (+2)" that ends the text starts, or the end of a text without one. */
+static const char *count_start(const char *text)
+{
+    size_t len = strlen(text);
+    size_t at = len ? len - 1 : 0;
+
+    if (len == 0 || text[at] != ')')
+        return text + len;
+    while (at > 0 && text[at - 1] >= '0' && text[at - 1] <= '9')
+        at--;
+    if (at == len - 1 || at < 3 || memcmp(text + at - 3, " (+", 3) != 0)
+        return text + len;
+    return text + at - 3;
+}
+
 /* The text cut to width with "..." where it gives up some; out holds a cut one. */
-static const char *cut_text(const char *text, size_t width, bool keep_end, char *out, size_t size)
+static const char *cut_text(const char *text, size_t width, const struct ft_column_fit *fit,
+                            char *out, size_t size)
 {
     size_t have = ft_text_width(text);
     if (have <= width)
@@ -162,8 +178,12 @@ static const char *cut_text(const char *text, size_t width, bool keep_end, char 
 
     const char *dots = width > 3 ? "..." : "";
     size_t keep = width - strlen(dots);
-    if (keep_end)
+    const char *count = fit && fit->keep_count ? count_start(text) : "";
+    if (fit && fit->keep_end)
         snprintf(out, size, "%s%s", dots, skip_points(text, have - keep));
+    else if (*count && strlen(count) < keep)
+        snprintf(out, size, "%.*s%s%s", (int)(skip_points(text, keep - strlen(count)) - text), text,
+                 dots, count);
     else
         snprintf(out, size, "%.*s%s", (int)(skip_points(text, keep) - text), text, dots);
     return out;
@@ -207,7 +227,7 @@ static void print_layout(FILE *out, const struct layout *l, const struct ft_colu
             if (!col->shown)
                 continue;
             const char *text = cut_text(cell(ctx, r, c, l->cell, CELL_MAX), col->width,
-                                        fit && fit[c].keep_end, l->cut, CELL_MAX);
+                                        fit ? &fit[c] : nullptr, l->cut, CELL_MAX);
             print_cell(out, text, col->width, cols[c].right, c == last);
         }
         fputc('\n', out);

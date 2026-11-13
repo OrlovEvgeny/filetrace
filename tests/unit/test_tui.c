@@ -605,6 +605,11 @@ static const struct ft_remote_names BUCKET = {.tls = "pg-backups.s3.example.com"
                                               .count = 1};
 static const struct ft_remote_names MIRROR = {
     .tls = "", .resolved = {"mirror-2.internal"}, .listed = 1, .count = 1};
+static const struct ft_remote_names REPLICA = {
+    .tls = "",
+    .resolved = {"ch-replica-2.internal", "clickhouse.internal"},
+    .listed = 2,
+    .count = 2};
 static const struct ft_remote_names REGISTRY = {
     .tls = "registry.ml.example.com", .resolved = {"proxy.corp.internal"}, .listed = 1, .count = 1};
 
@@ -620,6 +625,8 @@ static const struct watch_transfer WATCH_TRANSFERS[] = {
      40'400'000},
     {"python3", 24410, "/srv/ml/models/brand-ner-v3.safetensors", "10.0.8.40", &REGISTRY,
      FT_METHOD_READ_SEND, 28'600'000},
+    {"curl", 3312, "/srv/export/customers.csv", "10.0.6.14", &REPLICA, FT_METHOD_READ_SEND,
+     9'100'000},
 };
 
 static void watch_rows(struct ft_rows *rows)
@@ -665,7 +672,7 @@ static void check_watch_files(size_t width, bool names, const char *expected)
     ft_rows_free(&rows);
 }
 
-/* A long name gives way down to 24 columns before any path does. */
+/* A long name gives way down to 24 columns before any path does, and keeps its count. */
 static void test_watch_files_by_name(void)
 {
     check_watch_files(
@@ -681,7 +688,9 @@ static void test_watch_files_by_name(void)
         "rsync 5120     /srv/releases/api-v4.18.2.tar.gz              mirror-2.internal         "
         "read-write  38.5 MB/s  INFERRED\n"
         "python3 24410  /srv/ml/models/brand-ner-v3.safetensors       registry.ml.example.c...  "
-        "read-write  27.3 MB/s  INFERRED\n");
+        "read-write  27.3 MB/s  INFERRED\n"
+        "curl 3312      /srv/export/customers.csv                     ch-replica-2.int... (+1)  "
+        "read-write  8.68 MB/s  INFERRED\n");
     check_watch_files(100, true,
                       "PROCESS        FILE                      DESTINATION               METHOD "
                       "          RATE  CONFIDENCE\n"
@@ -694,14 +703,17 @@ static void test_watch_files_by_name(void)
                       "rsync 5120     ...es/api-v4.18.2.tar.gz  mirror-2.internal         "
                       "read-write  38.5 MB/s  INFERRED\n"
                       "python3 24410  ...nd-ner-v3.safetensors  registry.ml.example.c...  "
-                      "read-write  27.3 MB/s  INFERRED\n");
+                      "read-write  27.3 MB/s  INFERRED\n"
+                      "curl 3312      .../export/customers.csv  ch-replica-2.int... (+1)  "
+                      "read-write  8.68 MB/s  INFERRED\n");
     check_watch_files(57, true,
                       "PROCESS      FILE              DESTINATION           RATE\n"
                       "java 12044   ...191560343.log  10.0.5.22        64.3 MB/s\n"
                       "rclone 4...  ...11-12.tar.zst  pg-backups.s...  55.2 MB/s\n"
                       "nginx 2218   ...h-2026-hd.mp4  203.0.113.61     40.9 MB/s\n"
                       "rsync 5120   ...4.18.2.tar.gz  mirror-2.int...  38.5 MB/s\n"
-                      "python3 ...  ...3.safetensors  registry.ml....  27.3 MB/s\n");
+                      "python3 ...  ...3.safetensors  registry.ml....  27.3 MB/s\n"
+                      "curl 3312    ...customers.csv  ch-repl... (+1)  8.68 MB/s\n");
 }
 
 /* By address the paths give way first: no address is cut before a path is. */
@@ -720,7 +732,9 @@ static void test_watch_files_by_address(void)
         "rsync 5120     /srv/releases/api-v4.18.2.tar.gz            10.0.7.32                   "
         "read-write  38.5 MB/s  INFERRED\n"
         "python3 24410  /srv/ml/models/brand-ner-v3.safetensors     10.0.8.40                   "
-        "read-write  27.3 MB/s  INFERRED\n");
+        "read-write  27.3 MB/s  INFERRED\n"
+        "curl 3312      /srv/export/customers.csv                   10.0.6.14                   "
+        "read-write  8.68 MB/s  INFERRED\n");
     check_watch_files(100, false,
                       "PROCESS        FILE                    DESTINATION                 METHOD   "
                       "        RATE  CONFIDENCE\n"
@@ -733,14 +747,17 @@ static void test_watch_files_by_address(void)
                       "rsync 5120     .../api-v4.18.2.tar.gz  10.0.7.32                   "
                       "read-write  38.5 MB/s  INFERRED\n"
                       "python3 24410  ...-ner-v3.safetensors  10.0.8.40                   "
-                      "read-write  27.3 MB/s  INFERRED\n");
+                      "read-write  27.3 MB/s  INFERRED\n"
+                      "curl 3312      ...xport/customers.csv  10.0.6.14                   "
+                      "read-write  8.68 MB/s  INFERRED\n");
     check_watch_files(57, false,
                       "PROCESS      FILE              DESTINATION           RATE\n"
                       "java 12044   ...191560343.log  10.0.5.22        64.3 MB/s\n"
                       "rclone 4...  ...11-12.tar.zst  2001:db8:8a2...  55.2 MB/s\n"
                       "nginx 2218   ...h-2026-hd.mp4  203.0.113.61     40.9 MB/s\n"
                       "rsync 5120   ...4.18.2.tar.gz  10.0.7.32        38.5 MB/s\n"
-                      "python3 ...  ...3.safetensors  10.0.8.40        27.3 MB/s\n");
+                      "python3 ...  ...3.safetensors  10.0.8.40        27.3 MB/s\n"
+                      "curl 3312    ...customers.csv  10.0.6.14        8.68 MB/s\n");
 }
 
 void test_tui(void)
