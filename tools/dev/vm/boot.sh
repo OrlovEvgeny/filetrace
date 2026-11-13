@@ -81,8 +81,8 @@ done | sort -u | while read -r lib; do
     cp -L "$lib" "$root$lib"
 done
 [ -e "$root/usr/bin/cgi-fcgi" ] && ln -sf /usr/bin/cgi-fcgi "$root/bin/cgi-fcgi"
-# A GnuTLS client, server and cert tool, for the checks of TLS server names.
-for binary in /usr/bin/gnutls-cli /usr/bin/gnutls-serv /usr/bin/certtool; do
+# TLS clients, servers and cert tools, for the checks of TLS server names.
+for binary in /usr/bin/gnutls-cli /usr/bin/gnutls-serv /usr/bin/certtool /usr/bin/openssl; do
     [ -e "$binary" ] || continue
     mkdir -p "$root$(dirname "$binary")"
     cp -L "$binary" "$root$binary"
@@ -92,7 +92,7 @@ done | sort -u | while read -r lib; do
     mkdir -p "$root$(dirname "$lib")"
     cp -L "$lib" "$root$lib"
 done
-for tool in gnutls-cli gnutls-serv certtool; do
+for tool in gnutls-cli gnutls-serv certtool openssl; do
     [ -e "$root/usr/bin/$tool" ] && ln -sf "/usr/bin/$tool" "$root/bin/$tool"
 done
 # The C library dlopens these to look host names up; ldd does not report them.

@@ -6,6 +6,7 @@ RUN apt-get update \
         ca-certificates \
         cpio \
         gnutls-bin \
+        openssl \
         libbpf1 \
         libfcgi-bin \
         libnghttp2-14 \
