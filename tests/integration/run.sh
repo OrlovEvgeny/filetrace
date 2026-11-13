@@ -1298,6 +1298,7 @@ if [ -n "$fpm" ] && command -v cgi-fcgi >/dev/null 2>&1; then
         "$work/php/other.php"
     expect "php: files by request script" \
         "$(ft files --script '*/other.php' --format quiet | grep -c 'php-other\.bin')" 1
+    expect_match "php: capability" "$(ft capabilities | grep '^PHP request scripts')" 'FULL'
     php_fpm_stop
 else
     echo "SKIP: php-fpm or cgi-fcgi is not installed; the PHP request checks did not run"
@@ -1516,6 +1517,8 @@ expect_match "minimal: capability disabled" \
     "$(ft capabilities | grep '^Sendfile attribution')" 'DISABLED'
 expect_match "minimal: names disabled" "$(ft capabilities | grep '^Destination names')" \
     'DISABLED +disabled in minimal mode'
+expect_match "minimal: PHP scripts disabled" "$(ft capabilities | grep '^PHP request scripts')" \
+    'DISABLED +disabled in minimal mode'
 csv=$(ft transfers --port "$(field "$report" port)" --pid "$(field "$report" pid)" --format csv)
 expect "minimal: bytes have no file" \
     "$(printf '%s\n' "$csv" | column transfer.confidence)" unknown
@@ -1692,6 +1695,8 @@ if [ -n "$fpm" ] && command -v cgi-fcgi >/dev/null 2>&1; then
     settle
     expect "php off: the pool" \
         "$(ft files --path "$data/php-unprobed.bin" --format csv | column process.script)" pool:ft
+    expect_match "php off: capability" "$(ft capabilities | grep '^PHP request scripts')" \
+        'DISABLED +turned off in the configuration'
     php_fpm_stop
     stop_agent
     expect "php off agent exit code" "$?" 0
